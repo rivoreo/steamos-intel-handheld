@@ -6,7 +6,7 @@ After=dbus.service systemd-user-sessions.service
 Type=simple
 Environment=PATH=/etc/rivoreo/bin:/usr/local/sbin:/usr/local/bin:/usr/bin
 StateDirectory=steamos-intel-handheld
-ExecStart=/usr/bin/env steamos-intel-handheld-power-control wait-and-serve --user deck --bus system --apply-rapl --min-w 5 --max-w 37 --state-file /var/lib/steamos-intel-handheld/tdp_w
+ExecStart=/usr/bin/env steamos-intel-handheld-power-control wait-and-serve --user deck --bus system --apply-rapl --min-w 8 --max-w 30 --short-limit-max-w 37 --state-file /var/lib/steamos-intel-handheld/tdp_w
 Restart=on-failure
 RestartSec=3
 

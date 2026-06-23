@@ -35,8 +35,40 @@ remote_tdp() {
   busctl --system get-property org.rivoreo.SteamOSManager.PowerControl /org/rivoreo/SteamOSManager/PowerControl com.steampowered.SteamOSManager1.TdpLimit1 TdpLimit | awk '{print $2}'
 }
 
-rapl_pl1_watts() {
-  awk '{print int($1 / 1000000)}' /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw
+expected_pl1_watts() {
+  local watts="$1"
+  if [ "$watts" -lt 8 ]; then
+    watts=8
+  fi
+  if [ "$watts" -gt 30 ]; then
+    watts=30
+  fi
+  echo "$watts"
+}
+
+expected_pl2_watts() {
+  local watts
+  watts="$(expected_pl1_watts "$1")"
+  local pl2=$((watts + 2))
+  if [ "$pl2" -gt 32 ]; then
+    pl2=32
+  fi
+  echo "$pl2"
+}
+
+rapl_constraint_watts() {
+  local constraint_name="$1"
+  local fallback_index="$2"
+  local domain="/sys/class/powercap/intel-rapl:0"
+  local name_file
+  for name_file in "$domain"/constraint_*_name; do
+    [ -e "$name_file" ] || continue
+    if [ "$(cat "$name_file")" = "$constraint_name" ]; then
+      awk '{print int($1 / 1000000)}' "${name_file%_name}_power_limit_uw"
+      return 0
+    fi
+  done
+  awk '{print int($1 / 1000000)}' "$domain/constraint_${fallback_index}_power_limit_uw"
 }
 
 assert_equals() {
@@ -56,15 +88,17 @@ runuser -u deck -- bash -lc "$USER_ENV busctl --user get-property com.steampower
 
 runuser -u deck -- bash -lc "$USER_ENV steamosctl set-tdp-limit $TEST_WATTS"
 sleep 2
-assert_equals central "$TEST_WATTS" "$(central_tdp)"
-assert_equals remote "$TEST_WATTS" "$(remote_tdp)"
-assert_equals rapl-pl1 "$TEST_WATTS" "$(rapl_pl1_watts)"
+assert_equals central "$(expected_pl1_watts "$TEST_WATTS")" "$(central_tdp)"
+assert_equals remote "$(expected_pl1_watts "$TEST_WATTS")" "$(remote_tdp)"
+assert_equals rapl-pl1 "$(expected_pl1_watts "$TEST_WATTS")" "$(rapl_constraint_watts long_term 0)"
+assert_equals rapl-pl2 "$(expected_pl2_watts "$TEST_WATTS")" "$(rapl_constraint_watts short_term 1)"
 
 runuser -u deck -- bash -lc "$USER_ENV steamosctl set-tdp-limit $RESTORE_WATTS"
 sleep 2
-assert_equals central "$RESTORE_WATTS" "$(central_tdp)"
-assert_equals remote "$RESTORE_WATTS" "$(remote_tdp)"
-assert_equals rapl-pl1 "$RESTORE_WATTS" "$(rapl_pl1_watts)"
+assert_equals central "$(expected_pl1_watts "$RESTORE_WATTS")" "$(central_tdp)"
+assert_equals remote "$(expected_pl1_watts "$RESTORE_WATTS")" "$(remote_tdp)"
+assert_equals rapl-pl1 "$(expected_pl1_watts "$RESTORE_WATTS")" "$(rapl_constraint_watts long_term 0)"
+assert_equals rapl-pl2 "$(expected_pl2_watts "$RESTORE_WATTS")" "$(rapl_constraint_watts short_term 1)"
 
 systemctl --failed --no-legend --no-pager | tee /tmp/steamos-intel-handheld-failed-units.txt
 if [ -s /tmp/steamos-intel-handheld-failed-units.txt ]; then

@@ -9,7 +9,8 @@ Initial target for this project.
 - CPU family: Intel Lunar Lake / 258V class
 - SteamOS Manager package observed: `26.2.1-1`
 - Tested RAPL domain: `/sys/class/powercap/intel-rapl:0`
-- Tested TDP range: 5W to 37W
+- SteamOS UI TDP range used by this project: 8W to 30W
+- RAPL short-term hardware ceiling used by this project: 37W
 
 ## Verified behavior
 
@@ -32,15 +33,18 @@ reported:
 - RAPL PL2: initially 21W in the prototype that used a `1.25x` heuristic
 
 The SteamOS UI controls the single SteamOS Manager `TdpLimit`; this project maps
-that to PL1. The formal project defaults PL2 to the profile `max_w` value
-(37W for this processor class) to align with Intel's Maximum Turbo Power model,
-with a `--pl2-w` override available for lower platform-specific burst limits.
+that to PL1 after clamping it to the 258V handheld sustained range. PL2 follows
+the Claw game curve `min(PL1 + 2W, 32W)`: 17W maps to 19W, and 30W maps to 32W.
+The 37W Maximum Turbo Power value is kept as the short-term hardware ceiling,
+not as the default game PL2. A `--pl2-w` override remains available for device
+profiles that need a different burst limit.
 
 ## Boot note
 
 After reboot, the service started and SteamOS Manager rediscovered the remote.
 The service first read the persisted 30W state, then a SteamOS-side client set
-TDP to 37W. The provider obeyed that request. This should be treated as a
+TDP to 37W. The provider now clamps that legacy request to 30W and applies
+30W/32W to long-term/short-term RAPL constraints. This should be treated as a
 SteamOS policy interaction, not as a state persistence failure.
 
 ## Display note

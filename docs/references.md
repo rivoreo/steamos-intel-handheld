@@ -7,8 +7,9 @@
 
 The relevant power model for this project is Intel's Base Power / Maximum Turbo
 Power split. For the MSI Claw 8 AI+ device tested here, the SteamOS UI-selected
-TDP maps to the long-term package limit, while the profile `max_w` maps to the
-short-term turbo limit.
+TDP maps to the long-term package limit after clamping to 8W to 30W. The 37W
+Maximum Turbo Power value is treated as a short-term hardware ceiling, not as
+the default handheld-gaming PL2.
 
 ## Linux powercap and Intel RAPL
 
@@ -32,6 +33,12 @@ MSI Claw 8 AI+ A2VM, Intel Core Ultra 7 258V:
 - RAPL `long_term`: 17W
 - prototype RAPL `short_term`: 21W
 
-The formal project changes the default short-term value to 37W for this profile,
-because that follows Intel's Maximum Turbo Power model. Lower PL2 values should
-be explicit device policy, not a hidden multiplier.
+The formal project changes the default short-term value to the 258V Claw
+handheld game curve:
+
+- 17W long-term maps to 19W short-term
+- 30W long-term maps to 32W short-term
+
+Intermediate values use the same fixed +2W delta and cap at 32W. This is
+deliberately different from the generic notebook-style 1.25x relation and from
+treating Maximum Turbo Power as the game PL2.

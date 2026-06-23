@@ -17,8 +17,12 @@ OBJ_PATH = "/org/rivoreo/SteamOSManager/PowerControl"
 IFACE_REMOTE = "com.steampowered.SteamOSManager1.RemoteInterface1"
 IFACE_TDP = "com.steampowered.SteamOSManager1.TdpLimit1"
 
-DEFAULT_MIN_W = 5
-DEFAULT_MAX_W = 37
+MICROWATTS_PER_WATT = 1_000_000
+DEFAULT_MIN_W = 8
+DEFAULT_MAX_W = 30
+DEFAULT_SHORT_LIMIT_MAX_W = 37
+HANDHELD_PL2_DELTA_W = 2
+HANDHELD_PL2_MAX_W = 32
 DEFAULT_STATE_FILE = "/var/lib/steamos-intel-handheld/tdp_w"
 RAPL_DOMAIN_NAMES = ("intel-rapl:0", "intel-rapl-mmio:0")
 
@@ -33,13 +37,31 @@ class TdpLimits:
     pl2_uw: int
 
 
-def compute_tdp_limits(watts: int, max_w: int, pl2_w: int | None = None) -> TdpLimits:
+@dataclass(frozen=True)
+class RaplConstraint:
+    power_limit_file: Path
+    max_power_file: Path | None = None
+
+
+def compute_tdp_limits(
+    watts: int,
+    short_limit_max_w: int = DEFAULT_SHORT_LIMIT_MAX_W,
+    pl2_w: int | None = None,
+    min_w: int = DEFAULT_MIN_W,
+    max_w: int = DEFAULT_MAX_W,
+) -> TdpLimits:
     """Return PL1/PL2 limits in microwatts for a requested TDP."""
 
-    watts = int(watts)
-    short_term_w = int(max_w if pl2_w is None else pl2_w)
-    short_term_w = min(int(max_w), max(watts, short_term_w))
-    return TdpLimits(pl1_uw=watts * 1_000_000, pl2_uw=short_term_w * 1_000_000)
+    pl1_w = max(int(min_w), min(int(max_w), int(watts)))
+    if pl2_w is None:
+        short_term_w = min(pl1_w + HANDHELD_PL2_DELTA_W, HANDHELD_PL2_MAX_W)
+    else:
+        short_term_w = int(pl2_w)
+    short_term_w = min(int(short_limit_max_w), max(pl1_w, short_term_w))
+    return TdpLimits(
+        pl1_uw=pl1_w * MICROWATTS_PER_WATT,
+        pl2_uw=short_term_w * MICROWATTS_PER_WATT,
+    )
 
 
 class TdpBackend:
@@ -53,15 +75,22 @@ class TdpBackend:
         apply_rapl: bool = True,
         sysfs_root: str | Path = "/sys",
         pl2_w: int | None = None,
+        short_limit_max_w: int = DEFAULT_SHORT_LIMIT_MAX_W,
     ) -> None:
         self.min_w = int(min_w)
         self.max_w = int(max_w)
+        self.short_limit_max_w = int(short_limit_max_w)
         self.state_file = Path(state_file)
         self.apply_rapl = bool(apply_rapl)
         self.sysfs_root = Path(sysfs_root)
         self.pl2_w = int(pl2_w) if pl2_w is not None else None
         if self.min_w <= 0 or self.max_w < self.min_w:
             raise ValueError(f"invalid TDP range {self.min_w}-{self.max_w}W")
+        if self.short_limit_max_w < self.max_w:
+            raise ValueError(
+                f"invalid short-term limit {self.short_limit_max_w}W; "
+                f"expected >= max TDP {self.max_w}W"
+            )
         if self.pl2_w is not None and self.pl2_w <= 0:
             raise ValueError(f"invalid PL2 wattage {self.pl2_w}; expected > 0")
 
@@ -71,41 +100,53 @@ class TdpBackend:
             return state_limit
 
         for domain in self.rapl_domains():
-            pl1_file = domain / "constraint_0_power_limit_uw"
+            long_term = self._constraint_by_name(domain, "long_term", fallback_index=0)
+            if long_term is None:
+                continue
             try:
-                return self._clamp_watts(int(pl1_file.read_text().strip()) // 1_000_000)
+                return self._clamp_watts(
+                    int(long_term.power_limit_file.read_text().strip()) // MICROWATTS_PER_WATT
+                )
             except (OSError, ValueError):
                 continue
 
         return self.max_w
 
-    def write_limit_w(self, watts: int) -> None:
-        watts = int(watts)
-        self._validate_watts(watts)
+    def write_limit_w(self, watts: int) -> int:
+        watts = self._normalize_requested_watts(watts)
         self._write_state_file(watts)
         if self.apply_rapl:
             self.apply_limit_to_rapl(watts)
+        return watts
 
     def restore_state_to_rapl(self) -> int | None:
         watts = self._read_state_file()
         if watts is None:
             return None
+        self._write_state_file(watts)
         self.apply_limit_to_rapl(watts)
         return watts
 
     def apply_limit_to_rapl(self, watts: int) -> None:
-        watts = int(watts)
-        self._validate_watts(watts)
-        limits = compute_tdp_limits(watts, self.max_w, self.pl2_w)
+        watts = self._normalize_requested_watts(watts)
+        limits = compute_tdp_limits(
+            watts,
+            self.short_limit_max_w,
+            self.pl2_w,
+            min_w=self.min_w,
+            max_w=self.max_w,
+        )
 
         for domain in self.rapl_domains():
-            pl1_file = domain / "constraint_0_power_limit_uw"
-            pl2_file = domain / "constraint_1_power_limit_uw"
-            if not pl1_file.exists():
+            long_term = self._constraint_by_name(domain, "long_term", fallback_index=0)
+            if long_term is None:
                 continue
-            pl1_file.write_text(str(limits.pl1_uw))
-            if pl2_file.exists():
-                pl2_file.write_text(str(limits.pl2_uw))
+            short_term = self._constraint_by_name(domain, "short_term", fallback_index=1)
+            pl1_uw = limits.pl1_uw
+            long_term.power_limit_file.write_text(str(pl1_uw))
+            if short_term is not None:
+                pl2_uw = max(pl1_uw, self._limit_for_constraint(limits.pl2_uw, short_term))
+                short_term.power_limit_file.write_text(str(pl2_uw))
 
     def rapl_domains(self) -> Iterable[Path]:
         powercap = self.sysfs_root / "class" / "powercap"
@@ -119,20 +160,79 @@ class TdpBackend:
             watts = int(self.state_file.read_text().strip())
         except (OSError, ValueError):
             return None
-        if self.min_w <= watts <= self.max_w:
-            return watts
-        return None
+        try:
+            return self._normalize_requested_watts(watts)
+        except TdpRangeError:
+            return None
 
     def _write_state_file(self, watts: int) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state_file.write_text(str(watts))
 
-    def _validate_watts(self, watts: int) -> None:
-        if not self.min_w <= watts <= self.max_w:
-            raise TdpRangeError(f"TDP {watts}W outside {self.min_w}-{self.max_w}W")
+    def _normalize_requested_watts(self, watts: int) -> int:
+        watts = int(watts)
+        if watts <= 0 or watts > self.short_limit_max_w:
+            raise TdpRangeError(
+                f"TDP {watts}W outside hardware sanity range 1-{self.short_limit_max_w}W"
+            )
+        return self._clamp_watts(watts)
 
     def _clamp_watts(self, watts: int) -> int:
         return max(self.min_w, min(self.max_w, watts))
+
+    def _constraint_by_name(
+        self,
+        domain: Path,
+        constraint_name: str,
+        fallback_index: int,
+    ) -> RaplConstraint | None:
+        found_named_constraints = False
+        for name_file in sorted(domain.glob("constraint_*_name")):
+            try:
+                name = name_file.read_text().strip()
+            except OSError:
+                continue
+            found_named_constraints = True
+            if name != constraint_name:
+                continue
+            prefix = name_file.name.removesuffix("_name")
+            power_limit_file = domain / f"{prefix}_power_limit_uw"
+            if not power_limit_file.exists():
+                return None
+            max_power_file = domain / f"{prefix}_max_power_uw"
+            return RaplConstraint(
+                power_limit_file=power_limit_file,
+                max_power_file=max_power_file if max_power_file.exists() else None,
+            )
+
+        if found_named_constraints:
+            return None
+
+        power_limit_file = domain / f"constraint_{fallback_index}_power_limit_uw"
+        if not power_limit_file.exists():
+            return None
+        max_power_file = domain / f"constraint_{fallback_index}_max_power_uw"
+        return RaplConstraint(
+            power_limit_file=power_limit_file,
+            max_power_file=max_power_file if max_power_file.exists() else None,
+        )
+
+    def _limit_for_constraint(self, limit_uw: int, constraint: RaplConstraint) -> int:
+        max_power_uw = self._constraint_max_power_uw(constraint)
+        if max_power_uw is None:
+            return limit_uw
+        return min(limit_uw, max_power_uw)
+
+    def _constraint_max_power_uw(self, constraint: RaplConstraint) -> int | None:
+        if constraint.max_power_file is None:
+            return None
+        try:
+            max_power_uw = int(constraint.max_power_file.read_text().strip())
+        except (OSError, ValueError):
+            return None
+        if max_power_uw <= 0:
+            return None
+        return max_power_uw
 
 
 def wait_for_user_steamos_manager(user: str, timeout_s: int, interval_s: float) -> None:
@@ -197,6 +297,7 @@ async def serve(args: argparse.Namespace) -> None:
         apply_rapl=args.apply_rapl,
         sysfs_root=args.sysfs_root,
         pl2_w=args.pl2_w,
+        short_limit_max_w=args.short_limit_max_w,
     )
     if args.restore_on_start and args.apply_rapl:
         restored = backend.restore_state_to_rapl()
@@ -224,9 +325,13 @@ async def serve(args: argparse.Namespace) -> None:
 
         @TdpLimit.setter
         def TdpLimit(self, value: "u") -> None:
-            self.backend.write_limit_w(int(value))
-            print(f"set TdpLimit <- {int(value)}", flush=True, file=sys.stderr)
-            self.emit_properties_changed({"TdpLimit": int(value)})
+            applied_watts = self.backend.write_limit_w(int(value))
+            print(
+                f"set TdpLimit <- {int(value)}; applied {applied_watts}",
+                flush=True,
+                file=sys.stderr,
+            )
+            self.emit_properties_changed({"TdpLimit": applied_watts})
 
         @dbus_property(access=PropertyAccess.READ)
         def TdpLimitMin(self) -> "u":
@@ -256,6 +361,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bus", choices=["system", "session"], default="system")
     parser.add_argument("--min-w", type=int, default=DEFAULT_MIN_W)
     parser.add_argument("--max-w", type=int, default=DEFAULT_MAX_W)
+    parser.add_argument("--short-limit-max-w", type=int, default=DEFAULT_SHORT_LIMIT_MAX_W)
     parser.add_argument("--state-file", default=DEFAULT_STATE_FILE)
     parser.add_argument("--sysfs-root", default="/sys")
     parser.add_argument("--pl2-w", type=int)

@@ -86,14 +86,15 @@ while the user manager is still registering its own services.
 SteamOS exposes one `TdpLimit` value through this interface. This project maps
 that value to RAPL as:
 
-- PL1: the SteamOS `TdpLimit` value.
-- PL2: `max_w` by default, clamped so it is never below PL1.
+- Requested TDP is clamped to the 258V handheld sustained range: 8W to 30W.
+- PL1: the clamped SteamOS `TdpLimit` value.
+- PL2: `min(PL1 + 2W, 32W, short_limit_max_w)`.
 
-For the Core Ultra 7 258V profile, `max_w` is 37W. That means a UI-selected
-17W limit maps to PL1 17W and PL2 37W. This follows Intel's Base Power /
-Maximum Turbo Power model more closely than an arbitrary PL1 multiplier. Future
-device profiles can override PL2 with `--pl2-w` when platform thermals require a
-lower short-term limit.
+For the Core Ultra 7 258V profile, the UI range is 8W to 30W and the short-term
+hardware ceiling remains 37W. Intel-published Claw 8 AI+ game test points use
+17W/19W and 30W/32W, so the default policy follows that fixed +2W curve instead
+of a generic notebook PL2 multiplier. Future device profiles can override PL2
+with `--pl2-w` when platform thermals require a different burst limit.
 
 ## Repository layout
 
