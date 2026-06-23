@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+action="${1:-apply}"
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+env_file="$runtime_dir/gamescope-environment"
+
+wait_for_gamescope_environment() {
+  for _ in $(seq 1 30); do
+    [ -s "$env_file" ] && return 0
+    sleep 0.5
+  done
+
+  echo "gamescope environment file not ready: $env_file" >&2
+  return 1
+}
+
+load_gamescope_environment() {
+  wait_for_gamescope_environment
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$runtime_dir}"
+}
+
+case "$action" in
+  apply)
+    load_gamescope_environment
+    exec /usr/bin/gamescopectl composite_force 1
+    ;;
+  reset)
+    load_gamescope_environment
+    exec /usr/bin/gamescopectl composite_force 0
+    ;;
+  *)
+    echo "Usage: $0 apply|reset" >&2
+    exit 2
+    ;;
+esac

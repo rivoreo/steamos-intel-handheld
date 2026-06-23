@@ -15,6 +15,8 @@ when the interfaces settle.
 - Own the system bus name `org.rivoreo.SteamOSManager.PowerControl`.
 - Apply TDP requests to Intel RAPL PL1 and PL2 limits.
 - Provide install and verification harnesses for real SteamOS devices.
+- Provide an optional gamescope display workaround for color pipeline
+  instability on Intel handhelds.
 - Keep unit tests independent from D-Bus and physical hardware by using a fake
   sysfs powercap tree.
 
@@ -39,6 +41,26 @@ scripts/verify-on-device.sh root@192.168.128.214
 
 The verifier temporarily sets TDP to 28W, confirms SteamOS Manager, the remote
 service, and RAPL agree, then restores 30W by default.
+
+## Optional display workaround
+
+On the MSI Claw 8 AI+ A2VM test device, gamescope can switch the primary DRM
+framebuffer between `XR30` and `XB24` paths when the Steam cursor/overlay
+disappears. That can look like a subtle color or gamma shift in games.
+
+The workaround uses gamescope's runtime control channel after the session starts:
+
+```bash
+scripts/configure-gamescope-display-workaround.sh enable root@192.168.128.214
+scripts/configure-gamescope-display-workaround.sh disable root@192.168.128.214
+```
+
+The enabled user service waits for SteamOS to write
+`/run/user/1000/gamescope-environment`, then runs
+`gamescopectl composite_force 1`. This is intentionally optional because
+forcing gamescope composition can cost some latency or power. It should remain
+a workaround until the Intel/SteamOS display path can keep a consistent color
+pipeline by default.
 
 ## Local verification
 
@@ -76,7 +98,8 @@ lower short-term limit.
 ## Repository layout
 
 - `src/steamos_intel_handheld/` - Python service code.
-- `data/` - systemd, D-Bus, and SteamOS Manager integration files.
+- `data/` - systemd, D-Bus, SteamOS Manager, and optional gamescope integration
+  files.
 - `scripts/` - real-device install, verification, and inventory harness.
 - `tests/` - hardware-free unit tests.
 - `docs/` - design notes, hardware notes, upstreaming plan, and AI harness

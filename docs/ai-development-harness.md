@@ -43,6 +43,7 @@ Use the scripts against a root SSH target:
 scripts/collect-device-info.sh root@192.168.128.214
 scripts/install-on-device.sh root@192.168.128.214
 scripts/verify-on-device.sh root@192.168.128.214
+scripts/configure-gamescope-display-workaround.sh enable root@192.168.128.214
 ```
 
 The verifier checks:
@@ -54,6 +55,13 @@ The verifier checks:
 - Intel RAPL PL1 matches the requested value
 - TDP is restored to the requested restore wattage
 - no systemd failed units remain
+
+Display workaround changes must also capture:
+
+- the user service state for `steamos-intel-handheld-gamescope-display.service`
+- evidence that `gamescopectl composite_force 1` was applied
+- before/after DRM plane samples showing whether the primary plane still
+  switches between `XR30` 1920x1200 and `XB24`
 
 ## Editing rules for agents
 
