@@ -18,6 +18,8 @@ It exposes:
 
 - Keep hardware access behind a testable backend.
 - Keep D-Bus imports out of backend unit tests.
+- Require TDD evidence for production behavior changes through the AI
+  development harness and pull request template.
 - Provide a direct install script for root SSH targets.
 - Provide a verification script that sets a test wattage and restores a safe
   wattage.

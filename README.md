@@ -43,8 +43,7 @@ service, and RAPL agree, then restores 30W by default.
 ## Local verification
 
 ```bash
-PYTHONPATH=src python3 -m pytest
-PYTHONPATH=src python3 -m compileall src
+scripts/check-local.sh
 ```
 
 ## SteamOS Manager integration

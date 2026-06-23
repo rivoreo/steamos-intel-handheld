@@ -7,12 +7,33 @@ This repository is arranged so AI agents can make changes with tight feedback.
 Use hardware-free tests first:
 
 ```bash
-PYTHONPATH=src python3 -m pytest
-PYTHONPATH=src python3 -m compileall src
+scripts/check-local.sh
 ```
 
 The tests build fake RAPL sysfs trees under pytest temporary directories, so no
 root privileges or SteamOS host is needed for backend behavior.
+
+`scripts/check-local.sh` runs:
+
+- `ruff check .`
+- `pytest`
+- `compileall`
+
+## TDD contract
+
+All production behavior changes must follow `docs/tdd-workflow.md`.
+
+The required loop is:
+
+- RED: write or update the focused test first and capture the expected failure.
+- GREEN: make the smallest production change and capture the same test passing.
+- VERIFY: run `scripts/check-local.sh`.
+
+Hardware-facing changes also need device verification with
+`scripts/verify-on-device.sh`.
+
+Pull requests must include RED evidence, GREEN evidence, and Verification
+evidence using `.github/pull_request_template.md`.
 
 ## Device loop
 
@@ -36,7 +57,10 @@ The verifier checks:
 
 ## Editing rules for agents
 
-- Add or update a failing unit test before changing backend behavior.
+- Add or update a failing test before changing production behavior.
+- Do not edit production code until the RED command has been run and failed for
+  the expected reason.
+- Do not report a change as complete until `scripts/check-local.sh` passes.
 - Keep D-Bus names stable unless there is a migration note.
 - Do not add a new hardware profile without a `collect-device-info.sh` capture
   summarized in `docs/hardware/`.

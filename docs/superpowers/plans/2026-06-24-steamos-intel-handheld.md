@@ -58,6 +58,7 @@
 - [x] **Step 1: Document project scope, quickstart, architecture, harness, hardware notes, and upstreaming path.**
 - [x] **Step 2: Add CI for pytest and compile checks.**
 - [x] **Step 3: Add an Arch packaging draft.**
+- [x] **Step 4: Add TDD harness rules, PR evidence template, and single local check command.**
 
 ### Task 5: Publish
 
