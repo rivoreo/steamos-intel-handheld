@@ -1,0 +1,30 @@
+# Maintainer: JohnnySun <bmy001@gmail.com>
+pkgname=steamos-intel-handheld
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="SteamOS support layer for Intel handheld PCs"
+arch=("any")
+url="https://github.com/rivoreo/steamos-intel-handheld"
+license=("MIT")
+depends=("python" "python-dbus-next")
+makedepends=("python-build" "python-installer" "python-wheel")
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=("SKIP")
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+
+  install -Dm0644 data/systemd/steamos-intel-handheld-power-control.service \
+    "$pkgdir/usr/lib/systemd/system/steamos-intel-handheld-power-control.service"
+  install -Dm0644 data/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf \
+    "$pkgdir/etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf"
+  install -Dm0644 data/steamos-manager/remotes.d/99-rivoreo-power-control.toml \
+    "$pkgdir/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+  install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,3 @@
+[TdpLimit1]
+bus_name = "org.rivoreo.SteamOSManager.PowerControl"
+object_path = "/org/rivoreo/SteamOSManager/PowerControl"

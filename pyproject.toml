@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "steamos-intel-handheld"
+version = "0.1.0"
+description = "SteamOS support layer for Intel handheld PCs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "JohnnySun", email = "bmy001@gmail.com" }
+]
+dependencies = [
+  "dbus-next>=0.2.3"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "ruff>=0.6"
+]
+
+[project.scripts]
+steamos-intel-handheld-power-control = "steamos_intel_handheld.power_control:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/steamos_intel_handheld/power_control.py" = [
+  "F722", # dbus-next uses string annotations such as "as" for D-Bus signatures.
+  "F821", # dbus-next uses string annotations such as "u" for D-Bus signatures.
+  "UP037", # quoted D-Bus signature annotations are intentional.
+]
