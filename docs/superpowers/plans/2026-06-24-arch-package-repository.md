@@ -6,7 +6,7 @@
 
 **Architecture:** Keep application packaging, repository publication, and SteamOS bootstrap as separate units. Build packages in a clean Arch environment, publish a static pacman repository with signed package/database artifacts, and use an idempotent SteamOS-aware bootstrap script to import trust, add the repo, install packages, and start services.
 
-**Tech Stack:** Arch `PKGBUILD`, `makepkg`, `repo-add`, `pacman-key`, Bash, GitHub Actions, pytest, SteamOS QEMU build environment for the temporary `mangoapp` binary.
+**Tech Stack:** Arch `PKGBUILD`, `makepkg`, `repo-add`, `pacman-key`, Bash, GitLab CI, GitHub Pages, pytest, SteamOS QEMU build environment for the temporary `mangoapp` binary.
 
 ---
 
@@ -604,78 +604,49 @@ git commit -m "feat(packaging): add SteamOS pacman repo bootstrap"
 ### Task 6: Add Release CI
 
 **Files:**
-- Create: `.github/workflows/arch-package-release.yml`
-- Modify: `.github/workflows/ci.yml`
+- Create: `.gitlab-ci.yml`
+- Modify: `docs/package-repository.md`
+- Create: `tests/test_gitlab_ci_packaging.py`
 
-- [ ] **Step 1: Add CI build check for packaging scripts**
+- [x] **Step 1: Add GitLab CI policy tests**
 
-Modify `.github/workflows/ci.yml` by adding a second job:
+Create `tests/test_gitlab_ci_packaging.py` to assert that GitLab CI:
 
-```yaml
-  arch-package-smoke:
-    runs-on: ubuntu-latest
-    container: archlinux:base-devel
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install build tools
-        run: pacman -Syu --noconfirm git python python-build python-installer python-wheel python-pytest python-dbus-next
-      - name: Run package tests
-        run: python -m pytest tests/test_arch_packaging.py tests/test_arch_repo_packages.py tests/test_repo_scripts.py tests/test_bootstrap_steamos_repo.py
-```
+- runs package builds in `archlinux:base-devel`;
+- uses a non-root `makepkg` builder;
+- builds a current-commit source snapshot;
+- emits `.pkg.tar.zst` artifacts;
+- uses `repo-add` to produce a static pacman repository tree.
 
-- [ ] **Step 2: Add tag-triggered release workflow**
+- [x] **Step 2: Add package and repository artifact jobs**
 
-Create `.github/workflows/arch-package-release.yml`:
+Create `.gitlab-ci.yml`:
 
 ```yaml
-name: Arch Package Release
+arch:package:
+  image: archlinux:base-devel
+  script:
+    - makepkg --cleanbuild --nodeps --noconfirm
+  artifacts:
+    paths:
+      - .cache/arch-packages/*.pkg.tar.zst
 
-on:
-  push:
-    tags:
-      - "v*"
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    container: archlinux:base-devel
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install package tools
-        run: pacman -Syu --noconfirm git gnupg pacman-contrib python python-build python-installer python-wheel python-pytest python-dbus-next
-      - name: Import signing key
-        env:
-          RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
-        run: |
-          install -d -m 700 ~/.gnupg
-          printf '%s' "$RELEASE_GPG_PRIVATE_KEY" | gpg --batch --import
-      - name: Build packages
-        run: scripts/build-arch-packages.sh
-      - name: Publish repository tree
-        run: scripts/publish-pacman-repo.sh
-      - name: Upload repository artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: .cache/pacman-repo/public
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+arch:repository:
+  image: archlinux:base-devel
+  script:
+    - repo-add rivoreo-steamos.db.tar.zst ./*.pkg.tar.zst
+    - rm -f rivoreo-steamos.db rivoreo-steamos.files
+    - cp rivoreo-steamos.db.tar.zst rivoreo-steamos.db
+    - cp rivoreo-steamos.files.tar.zst rivoreo-steamos.files
+  artifacts:
+    paths:
+      - .cache/pacman-repo/public
 ```
 
-- [ ] **Step 3: Run local checks**
+The repository job produces validation artifacts. Public activation still needs
+signing and a promotion step into the GitHub Pages artifact.
+
+- [x] **Step 3: Run local checks**
 
 Run:
 
@@ -685,13 +656,13 @@ env PATH="$PWD/.venv/bin:$PATH" PYTHON="$PWD/.venv/bin/python" scripts/check-loc
 
 Expected: all tests pass.
 
-- [ ] **Step 4: Commit CI**
+- [x] **Step 4: Commit CI**
 
 Run:
 
 ```bash
-git add .github/workflows/ci.yml .github/workflows/arch-package-release.yml
-git commit -m "ci(packaging): publish signed Arch repository on tags"
+git add .gitlab-ci.yml tests/test_gitlab_ci_packaging.py docs/package-repository.md docs/superpowers/plans/2026-06-24-arch-package-repository.md
+git commit -m "ci(packaging): add GitLab package artifact pipeline"
 ```
 
 ### Task 7: Hardware Validation And Goal Closure

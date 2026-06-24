@@ -1,0 +1,66 @@
+stages:
+  - test
+  - package
+  - repository
+
+variables:
+  PACKAGE_OUT: "$CI_PROJECT_DIR/.cache/arch-packages"
+  PACMAN_REPO_OUT: "$CI_PROJECT_DIR/.cache/pacman-repo/public/rivoreo-steamos/os/x86_64"
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+python:test:
+  stage: test
+  image: python:3.13
+  before_script:
+    - python -m pip install --upgrade pip
+    - python -m pip install -e ".[dev]"
+  script:
+    - scripts/check-local.sh
+
+arch:package:
+  stage: package
+  image: archlinux:base-devel
+  before_script:
+    - pacman -Syu --noconfirm
+    - pacman -S --noconfirm git python python-build python-installer python-wheel python-dbus-next python-pytest
+    - useradd -m builder
+    - chown -R builder:builder "$CI_PROJECT_DIR"
+  script:
+    - mkdir -p "$PACKAGE_OUT"
+    - tar --exclude=.git --exclude=.cache --exclude=.venv --exclude=.pytest_cache --exclude=.ruff_cache --exclude=build --exclude=dist --transform "s,^,steamos-intel-handheld-0.1.0/," -czf /tmp/steamos-intel-handheld-0.1.0.tar.gz .
+    - install -Dm0644 /tmp/steamos-intel-handheld-0.1.0.tar.gz packaging/arch/steamos-intel-handheld-0.1.0.tar.gz
+    - chown builder:builder packaging/arch/steamos-intel-handheld-0.1.0.tar.gz
+    - su builder -c "cd '$CI_PROJECT_DIR/packaging/arch' && PKGDEST='$PACKAGE_OUT' makepkg --cleanbuild --nodeps --noconfirm"
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - .cache/arch-packages/*.pkg.tar.zst
+
+arch:repository:
+  stage: repository
+  image: archlinux:base-devel
+  needs:
+    - job: arch:package
+      artifacts: true
+  before_script:
+    - pacman -Syu --noconfirm
+    - pacman -S --noconfirm pacman-contrib
+  script:
+    - mkdir -p "$PACMAN_REPO_OUT"
+    - cp "$PACKAGE_OUT"/*.pkg.tar.zst "$PACMAN_REPO_OUT"/
+    - cd "$PACMAN_REPO_OUT"
+    - repo-add rivoreo-steamos.db.tar.zst ./*.pkg.tar.zst
+    - rm -f rivoreo-steamos.db rivoreo-steamos.files
+    - cp rivoreo-steamos.db.tar.zst rivoreo-steamos.db
+    - cp rivoreo-steamos.files.tar.zst rivoreo-steamos.files
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - .cache/pacman-repo/public
