@@ -1,0 +1,4 @@
+interface:
+  display_name: "Opening Pull Requests"
+  short_description: "Upstream-readable PR guardrails"
+  default_prompt: "Use $opening-pull-requests to prepare this pull request so reviewers can understand it without my local context."
