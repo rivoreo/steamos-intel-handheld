@@ -31,6 +31,7 @@ def test_gitlab_ci_builds_current_commit_source_snapshot() -> None:
     assert "tar --exclude=.git" in ci
     assert "steamos-intel-handheld-0.1.0.tar.gz" in ci
     assert "packaging/arch/steamos-intel-handheld-0.1.0.tar.gz" in ci
+    assert "updpkgsums" in ci
 
 
 def test_gitlab_ci_builds_pacman_repository_artifact() -> None:
@@ -52,6 +53,7 @@ def test_gitlab_ci_replaces_repo_add_symlinks_with_regular_files() -> None:
 def test_package_repository_docs_describe_gitlab_ci_artifacts() -> None:
     docs = PACKAGE_DOCS.read_text()
     assert "GitLab CI" in docs
+    assert "validation artifacts" in docs
     assert "arch:package" in docs
     assert "arch:repository" in docs
     assert ".pkg.tar.zst" in docs

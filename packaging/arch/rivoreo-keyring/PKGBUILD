@@ -1,0 +1,16 @@
+# Maintainer: JohnnySun <bmy001@gmail.com>
+pkgname=rivoreo-keyring
+pkgver=2026.06.25
+pkgrel=1
+pkgdesc="Rivoreo pacman repository keyring"
+arch=("any")
+url="https://holo.libz.so/rivoreo-steamos/"
+license=("MIT")
+source=("rivoreo.gpg" "rivoreo-trusted" "rivoreo-revoked")
+sha256sums=("SKIP" "SKIP" "SKIP")
+
+package() {
+  install -Dm0644 rivoreo.gpg "$pkgdir/usr/share/pacman/keyrings/rivoreo.gpg"
+  install -Dm0644 rivoreo-trusted "$pkgdir/usr/share/pacman/keyrings/rivoreo-trusted"
+  install -Dm0644 rivoreo-revoked "$pkgdir/usr/share/pacman/keyrings/rivoreo-revoked"
+}

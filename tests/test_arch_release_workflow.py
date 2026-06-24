@@ -1,0 +1,114 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+BOOTSTRAP_INSTALL_COMMAND = (
+    "pacman -S --needed rivoreo-keyring rivoreo-steamos-repo steamos-intel-handheld"
+)
+WORKFLOW = ROOT / ".github/workflows/arch-release.yml"
+PAGES_WORKFLOW = ROOT / ".github/workflows/pages.yml"
+BUILD_SCRIPT = ROOT / "scripts/build-arch-release-repo.sh"
+ASSEMBLE_SCRIPT = ROOT / "scripts/assemble-arch-release-pages.sh"
+BOOTSTRAP = ROOT / "site/rivoreo-steamos/bootstrap.sh"
+PACKAGE_DOCS = ROOT / "docs/package-repository.md"
+MAIN_PKGBUILD = ROOT / "packaging/arch/PKGBUILD"
+KEYRING_PKGBUILD = ROOT / "packaging/arch/rivoreo-keyring/PKGBUILD"
+REPO_PKGBUILD = ROOT / "packaging/arch/rivoreo-steamos-repo/PKGBUILD"
+REPO_CONF = ROOT / "packaging/arch/rivoreo-steamos-repo/rivoreo-steamos.conf"
+
+
+def test_arch_release_workflow_is_tag_only_and_uses_recursive_checkout() -> None:
+    workflow = WORKFLOW.read_text()
+
+    assert "tags:" in workflow
+    assert '"v*.*.*"' in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "tag:" in workflow
+    assert "branches:" not in workflow
+    assert "submodules: recursive" in workflow
+    assert "fetch-depth: 0" in workflow
+
+
+def test_arch_release_workflow_uses_protected_signing_secrets_and_pages_deploy() -> None:
+    workflow = WORKFLOW.read_text()
+
+    assert "ARCH_REPO_GPG_PRIVATE_KEY" in workflow
+    assert "ARCH_REPO_GPG_PASSPHRASE" in workflow
+    assert "ARCH_REPO_GPG_KEY_ID" in workflow
+    assert "environment:" in workflow
+    assert "github-pages" in workflow
+    assert "actions/upload-pages-artifact@v4" in workflow
+    assert "actions/deploy-pages@v4" in workflow
+    assert "needs: build-repo" in workflow
+
+
+def test_ordinary_pages_workflow_cannot_overwrite_release_repository() -> None:
+    workflow = PAGES_WORKFLOW.read_text()
+
+    assert "deploy-pages" not in workflow
+    assert "upload-pages-artifact" not in workflow
+    assert "push:" not in workflow
+
+
+def test_release_build_script_signs_packages_and_regularizes_repo_aliases() -> None:
+    script = BUILD_SCRIPT.read_text()
+
+    assert "makepkg --cleanbuild --syncdeps --noconfirm --needed --sign" in script
+    assert "repo-add --sign --verify" in script
+    assert "rivoreo-steamos.db.tar.zst" in script
+    assert 'cp "$repo_db" "$repo_out/rivoreo-steamos.db"' in script
+    assert 'cp "$repo_files" "$repo_out/rivoreo-steamos.files"' in script
+    assert "gpg --batch --export" in script
+    assert "updpkgsums" in script
+
+
+def test_release_pages_assembler_renders_fingerprint_and_checks_artifact_shape() -> None:
+    script = ASSEMBLE_SCRIPT.read_text()
+
+    assert "__RIVOREO_KEY_FINGERPRINT__" in script
+    assert "RIVOREO_KEY_FINGERPRINT" in script
+    assert 'test ! -L "$site_out/rivoreo-steamos/os/x86_64/rivoreo-steamos.db"' in script
+    assert 'test ! -L "$site_out/rivoreo-steamos/os/x86_64/rivoreo-steamos.files"' in script
+    assert "fingerprint.txt" in script
+
+
+def test_release_packages_are_defined_for_keyring_and_repo_config() -> None:
+    keyring = KEYRING_PKGBUILD.read_text()
+    repo_pkg = REPO_PKGBUILD.read_text()
+    repo_conf = REPO_CONF.read_text()
+
+    assert "pkgname=rivoreo-keyring" in keyring
+    assert "rivoreo-trusted" in keyring
+    assert "pkgname=rivoreo-steamos-repo" in repo_pkg
+    assert 'backup=("etc/pacman.d/rivoreo-steamos.conf")' in repo_pkg
+    assert "[rivoreo-steamos]" in repo_conf
+    assert "SigLevel = Required TrustedOnly" in repo_conf
+    assert "Server = https://holo.libz.so/rivoreo-steamos/os/$arch" in repo_conf
+
+
+def test_release_pkgbuilds_do_not_ship_main_package_with_skip_checksum() -> None:
+    pkgbuild = MAIN_PKGBUILD.read_text()
+
+    assert 'sha256sums=("SKIP")' not in pkgbuild
+    assert "sha256sums=(" in pkgbuild
+
+
+def test_active_bootstrap_is_fingerprint_pinned_and_secure() -> None:
+    bootstrap = BOOTSTRAP.read_text()
+
+    assert "__RIVOREO_KEY_FINGERPRINT__" in bootstrap
+    assert "SigLevel = Required TrustedOnly" in bootstrap
+    assert "SigLevel = Never" not in bootstrap
+    assert "pacman-key --add" in bootstrap
+    assert "pacman-key --lsign-key" in bootstrap
+    assert BOOTSTRAP_INSTALL_COMMAND in bootstrap
+    assert "steamos-readonly disable" in bootstrap
+
+
+def test_package_repository_docs_describe_github_actions_release_publisher() -> None:
+    docs = PACKAGE_DOCS.read_text()
+
+    assert "GitHub Actions release publisher" in docs
+    assert "ARCH_REPO_GPG_PRIVATE_KEY" in docs
+    assert "ARCH_REPO_GPG_KEY_ID" in docs
+    assert "vX.Y.Z" in docs
+    assert "ordinary pushes" in docs

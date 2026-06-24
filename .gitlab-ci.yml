@@ -27,7 +27,7 @@ arch:package:
   image: archlinux:base-devel
   before_script:
     - pacman -Syu --noconfirm
-    - pacman -S --noconfirm git python python-build python-installer python-wheel python-dbus-next python-pytest
+    - pacman -S --noconfirm git pacman-contrib python python-build python-installer python-wheel python-dbus-next python-pytest
     - useradd -m builder
     - chown -R builder:builder "$CI_PROJECT_DIR"
   script:
@@ -35,6 +35,8 @@ arch:package:
     - tar --exclude=.git --exclude=.cache --exclude=.venv --exclude=.pytest_cache --exclude=.ruff_cache --exclude=build --exclude=dist --transform "s,^,steamos-intel-handheld-0.1.0/," -czf /tmp/steamos-intel-handheld-0.1.0.tar.gz .
     - install -Dm0644 /tmp/steamos-intel-handheld-0.1.0.tar.gz packaging/arch/steamos-intel-handheld-0.1.0.tar.gz
     - chown builder:builder packaging/arch/steamos-intel-handheld-0.1.0.tar.gz
+    - cd packaging/arch
+    - updpkgsums
     - su builder -c "cd '$CI_PROJECT_DIR/packaging/arch' && PKGDEST='$PACKAGE_OUT' makepkg --cleanbuild --nodeps --noconfirm"
   artifacts:
     when: always

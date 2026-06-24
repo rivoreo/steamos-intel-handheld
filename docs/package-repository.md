@@ -1,16 +1,13 @@
 # Package Repository
 
 This repository uses GitHub Pages as the static hosting endpoint for the
-`rivoreo-steamos` pacman repository scaffold.
+`rivoreo-steamos` pacman repository.
 
 Current custom domain:
 
 ```text
 https://holo.libz.so/
 ```
-
-GitHub Pages serves it from the project site
-`https://rivoreo.github.io/steamos-intel-handheld/`.
 
 Pacman repository URL:
 
@@ -26,25 +23,42 @@ Bootstrap URL:
 curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash
 ```
 
-The package definitions and Pages scaffold are in place. The public pacman
-repository is not activated yet because the signed package database has not been
-published to Pages. Until that database is published, the bootstrap script
-reports repository status and exits without changing the system.
+The public release path is the GitHub Actions release publisher in
+`.github/workflows/arch-release.yml`. It publishes only `vX.Y.Z` tags. Ordinary
+pushes, pull requests, and the static Pages check validate the repository, but
+ordinary pushes cannot sign packages or deploy GitHub Pages.
 
-GitLab CI is the build path for package validation artifacts:
+Required GitHub secrets:
+
+- `ARCH_REPO_GPG_PRIVATE_KEY`: ASCII-armored private key for the Rivoreo package
+  signing key.
+- `ARCH_REPO_GPG_PASSPHRASE`: passphrase for the private key.
+- `ARCH_REPO_GPG_KEY_ID`: full expected fingerprint for the imported key.
+
+Release flow:
+
+1. Push a version tag such as `v0.1.0`.
+2. The `validate` job runs the local harness with recursive submodules.
+3. The `build-repo` job runs in `archlinux:base-devel`, imports the protected
+   signing key, builds packages with `makepkg`, signs package artifacts, and
+   creates signed `rivoreo-steamos` repository metadata with `repo-add`.
+4. The `deploy-pages` job assembles the static site, rendered bootstrap script,
+   public key files, and signed pacman repository into the Pages artifact.
+5. GitHub Pages serves the result from `https://holo.libz.so/`.
+
+GitLab CI remains the build path for validation artifacts:
 
 - `python:test` runs the repository's local harness.
 - `arch:package` runs in `archlinux:base-devel`, builds a source snapshot from
-  the current commit, and produces `.pkg.tar.zst` artifacts with `makepkg`.
+  the current commit, refreshes package checksums with `updpkgsums`, and
+  produces `.pkg.tar.zst` artifacts with `makepkg`.
 - `arch:repository` consumes the package artifact, runs `repo-add`, and outputs
   a static repository tree under
   `.cache/pacman-repo/public/rivoreo-steamos/os/x86_64`.
 
-Those CI artifacts prove that the Arch package and pacman repository metadata
-can be generated for a given commit. They are not the same as activating the
-public repository. Public activation still requires signing the packages and
-database, then promoting the signed repository files into the GitHub Pages
-artifact.
+Those validation artifacts prove that package and repository metadata can be
+generated for a given commit. They are not the public release path and do not
+use signing secrets.
 
 DNS should point the subdomain to GitHub Pages with:
 
@@ -52,6 +66,6 @@ DNS should point the subdomain to GitHub Pages with:
 holo.libz.so.  CNAME  rivoreo.github.io.
 ```
 
-When the signed package publisher is implemented, it should write regular files
-for `rivoreo-steamos.db`, `rivoreo-steamos.files`, and their signatures. Do not
-use symlinks in the Pages artifact.
+The publisher writes regular files for `rivoreo-steamos.db`,
+`rivoreo-steamos.files`, and their signatures. Do not use symlinks in the Pages
+artifact.

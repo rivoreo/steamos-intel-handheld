@@ -5,6 +5,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PAGES_WORKFLOW = ROOT / ".github/workflows/pages.yml"
 SITE_INDEX = ROOT / "site/index.html"
 BOOTSTRAP = ROOT / "site/rivoreo-steamos/bootstrap.sh"
+BOOTSTRAP_INSTALL_COMMAND = (
+    "pacman -S --needed rivoreo-keyring rivoreo-steamos-repo steamos-intel-handheld"
+)
 
 
 def read_site_translations() -> dict[str, dict[str, str]]:
@@ -14,14 +17,14 @@ def read_site_translations() -> dict[str, dict[str, str]]:
     return json.loads(index[start:end])
 
 
-def test_pages_workflow_deploys_static_site_with_actions() -> None:
+def test_pages_workflow_validates_static_site_without_deploying() -> None:
     workflow = PAGES_WORKFLOW.read_text()
-    assert "actions/configure-pages@v5" in workflow
-    assert "actions/upload-pages-artifact@v4" in workflow
-    assert "actions/deploy-pages@v4" in workflow
-    assert "pages: write" in workflow
-    assert "id-token: write" in workflow
-    assert "path: _site" in workflow
+    assert "Static Site Check" in workflow
+    assert "cp -R site/. _site/" in workflow
+    assert "test -f _site/index.html" in workflow
+    assert "actions/upload-pages-artifact" not in workflow
+    assert "actions/deploy-pages" not in workflow
+    assert "pages: write" not in workflow
 
 
 def test_pages_site_documents_project_repo_url() -> None:
@@ -35,21 +38,21 @@ def test_pages_site_documents_project_repo_url() -> None:
     assert "How to install" in index
 
 
-def test_pages_site_explains_capabilities_and_pending_release_state() -> None:
+def test_pages_site_explains_capabilities_and_active_release_state() -> None:
     index = SITE_INDEX.read_text()
     assert "SteamOS Manager TDP remote" in index
     assert "Intel RAPL power path" in index
     assert "MangoHud sensor access" in index
-    assert "Repository not activated" in index
-    assert "Install channel not open" in index
-    assert "package definitions and repository scaffold are in place" in index
-    assert "signed package database has not been published to Pages" in index
+    assert "Repository active" in index
+    assert "Install channel open" in index
+    assert "signed package repository is published through GitHub Actions" in index
+    assert "Repository not activated" not in index
+    assert "Install channel not open" not in index
+    assert "signed package database has not been published to Pages" not in index
     assert "Packages not released" not in index
     assert "Packages pending" not in index
-    assert "Pages live" not in index
-    assert "Website live" not in index
     assert "Safe placeholder" not in index
-    assert "exits without changing the system" in index
+    assert "exits without changing the system" not in index
 
 
 def test_pages_site_has_visible_brand_mark_and_language_switcher() -> None:
@@ -91,11 +94,11 @@ def test_pages_site_uses_taiwan_zh_tw_wording() -> None:
     zh_tw_text = "\n".join(read_site_translations()["zh-TW"].values())
     assert "針對 Intel 掌機的 SteamOS 支援層" in zh_tw_text
     assert "套件庫" in zh_tw_text
-    assert "套件庫尚未啟用" in zh_tw_text
-    assert "尚未開放安裝" in zh_tw_text
-    assert "Arch 打包和套件庫骨架已經準備好" in zh_tw_text
+    assert "套件庫已啟用" in zh_tw_text
+    assert "可以安裝" in zh_tw_text
+    assert "簽名套件庫" in zh_tw_text
     assert "裝置" in zh_tw_text
-    assert "輸出套件狀態" in zh_tw_text
+    assert "輸出套件狀態" not in zh_tw_text
     assert "套件尚未釋出" not in zh_tw_text
     assert "頁面已上線" not in zh_tw_text
     assert "安全佔位" not in zh_tw_text
@@ -118,10 +121,9 @@ def test_pages_site_declares_custom_domain() -> None:
     assert cname.strip() == "holo.libz.so"
 
 
-def test_placeholder_bootstrap_exits_before_packages_exist() -> None:
+def test_active_bootstrap_configures_signed_repo() -> None:
     bootstrap = BOOTSTRAP.read_text()
-    assert "package scaffold is online" in bootstrap
-    assert "signed package database has not been published" in bootstrap
-    assert "exit 1" in bootstrap
-    assert "pacman -S" not in bootstrap
-    assert "steamos-readonly disable" not in bootstrap
+    assert BOOTSTRAP_INSTALL_COMMAND in bootstrap
+    assert "signed package database has not been published" not in bootstrap
+    assert "exit 1" not in bootstrap
+    assert "SigLevel = Required TrustedOnly" in bootstrap

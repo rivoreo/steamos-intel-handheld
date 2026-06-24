@@ -1,0 +1,157 @@
+name: Arch Package Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing vX.Y.Z tag to publish"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arch-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Validate release tag
+        run: |
+          set -euo pipefail
+          case "$RELEASE_TAG" in
+            v*.*.*) ;;
+            *)
+              echo "Release publisher only accepts vX.Y.Z tags, got $RELEASE_TAG" >&2
+              exit 2
+              ;;
+          esac
+          git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run local harness
+        run: scripts/check-local.sh
+
+  build-repo:
+    runs-on: ubuntu-latest
+    needs: validate
+    container:
+      image: archlinux:base-devel
+    env:
+      ARCH_REPO_GPG_PRIVATE_KEY: ${{ secrets.ARCH_REPO_GPG_PRIVATE_KEY }}
+      ARCH_REPO_GPG_PASSPHRASE: ${{ secrets.ARCH_REPO_GPG_PASSPHRASE }}
+      ARCH_REPO_GPG_KEY_ID: ${{ secrets.ARCH_REPO_GPG_KEY_ID }}
+      GNUPGHOME: /home/builder/.gnupg
+      GPGKEY: ${{ secrets.ARCH_REPO_GPG_KEY_ID }}
+      KEY_OUT: ${{ github.workspace }}/.cache/arch-release/public/rivoreo-steamos/key
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Install Arch build dependencies
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm \
+            git gzip gnupg pacman-contrib python python-build python-installer \
+            python-wheel python-dbus-next python-pytest sudo
+          useradd -m builder
+          printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: Import signing key
+        run: |
+          set -euo pipefail
+          test -n "$ARCH_REPO_GPG_PRIVATE_KEY"
+          test -n "$ARCH_REPO_GPG_PASSPHRASE"
+          test -n "$ARCH_REPO_GPG_KEY_ID"
+          install -d -m 0700 -o builder -g builder "$GNUPGHOME"
+          printf 'pinentry-mode loopback\nbatch\n' > "$GNUPGHOME/gpg.conf"
+          printf 'allow-loopback-pinentry\n' > "$GNUPGHOME/gpg-agent.conf"
+          chown builder:builder "$GNUPGHOME/gpg.conf" "$GNUPGHOME/gpg-agent.conf"
+          key_file=/home/builder/release-key.asc
+          passphrase_file=/home/builder/release-key.passphrase
+          printf '%s' "$ARCH_REPO_GPG_PRIVATE_KEY" > "$key_file"
+          printf '%s' "$ARCH_REPO_GPG_PASSPHRASE" > "$passphrase_file"
+          chown builder:builder "$key_file" "$passphrase_file"
+          chmod 0600 "$key_file" "$passphrase_file"
+          su builder -c "gpg --batch --import '$key_file'"
+          imported="$(
+            su builder -c "gpg --batch --with-colons --fingerprint '$ARCH_REPO_GPG_KEY_ID'" \
+              | awk -F: '$1 == "fpr" {print $10; exit}'
+          )"
+          if [ "$imported" != "$ARCH_REPO_GPG_KEY_ID" ]; then
+            echo "Imported signing key fingerprint does not match ARCH_REPO_GPG_KEY_ID" >&2
+            exit 2
+          fi
+          su builder -c "printf release-check | gpg --batch --yes --pinentry-mode loopback --passphrase-file '$passphrase_file' --local-user '$ARCH_REPO_GPG_KEY_ID' --detach-sign --output /tmp/release-check.sig"
+          rm -f "$key_file" "$passphrase_file"
+      - name: Build signed pacman repository
+        run: |
+          set -euo pipefail
+          su builder -c "cd '$GITHUB_WORKSPACE' && RELEASE_TAG='$RELEASE_TAG' ARCH_REPO_GPG_KEY_ID='$ARCH_REPO_GPG_KEY_ID' GPGKEY='$ARCH_REPO_GPG_KEY_ID' KEY_OUT='$KEY_OUT' scripts/build-arch-release-repo.sh"
+      - name: Upload signed repository artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-pacman-repository
+          path: .cache/arch-release/public
+          if-no-files-found: error
+
+  deploy-pages:
+    runs-on: ubuntu-latest
+    needs: build-repo
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Download signed repository artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: signed-pacman-repository
+          path: release-repository
+      - name: Assemble release Pages artifact
+        run: |
+          set -euo pipefail
+          fingerprint="$(cat release-repository/rivoreo-steamos/key/fingerprint.txt)"
+          RIVOREO_KEY_FINGERPRINT="$fingerprint" \
+            REPO_TREE="$GITHUB_WORKSPACE/release-repository/rivoreo-steamos/os/x86_64" \
+            KEY_DIR="$GITHUB_WORKSPACE/release-repository/rivoreo-steamos/key" \
+            SITE_OUT="$GITHUB_WORKSPACE/_site" \
+            scripts/assemble-arch-release-pages.sh
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

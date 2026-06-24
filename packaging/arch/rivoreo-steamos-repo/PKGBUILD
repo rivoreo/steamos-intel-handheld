@@ -1,0 +1,15 @@
+# Maintainer: JohnnySun <bmy001@gmail.com>
+pkgname=rivoreo-steamos-repo
+pkgver=2026.06.25
+pkgrel=1
+pkgdesc="Pacman repository configuration for Rivoreo SteamOS packages"
+arch=("any")
+url="https://holo.libz.so/rivoreo-steamos/"
+license=("MIT")
+backup=("etc/pacman.d/rivoreo-steamos.conf")
+source=("rivoreo-steamos.conf")
+sha256sums=("SKIP")
+
+package() {
+  install -Dm0644 rivoreo-steamos.conf "$pkgdir/etc/pacman.d/rivoreo-steamos.conf"
+}
