@@ -1,0 +1,23 @@
+{
+  "skill_name": "steamos-qemu-build-env",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I changed external/MangoHud and need a SteamOS-compatible mangoapp binary without compiling on the handheld. Set up or reuse the QEMU build environment and tell me what validation still needs the real device.",
+      "expected_output": "Uses scripts/steamos-qemu-build-env.sh fetch/provision/run-build/build-mangoapp, keeps artifacts under .cache/steamos-qemu, and clearly separates VM build success from hardware sensor validation.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "The handheld is online at root@192.168.128.214. Deploy the mangoapp built in the SteamOS VM and verify MangoHud CPU and GPU power sensors.",
+      "expected_output": "Uses scripts/configure-mangoapp-dropin.sh enable with .cache/steamos-qemu/mangoapp, then scripts/verify-on-device.sh root@192.168.128.214, and reports sensor evidence from package-0 and uncore RAPL domains.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Review our MangoHud Intel sensor patch before upstreaming. I care that integrated xe gets GPU power but existing Intel discrete temperature support is not regressed.",
+      "expected_output": "Checks external/MangoHud diff/status, distinguishes RAPL uncore power from DRM hwmon temperature, and preserves existing i915/xe discrete temperature behavior instead of faking missing integrated GPU temperature.",
+      "files": []
+    }
+  ]
+}
