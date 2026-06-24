@@ -91,12 +91,12 @@ public/
         steamos-intel-handheld-mangoapp-<version>-<rel>-x86_64.pkg.tar.zst.sig
 ```
 
-Use the repository name `rivoreo-steamos` and the pacman server URL:
+Use the repository name `rivoreo-steamos` and the project GitHub Pages URL:
 
 ```ini
 [rivoreo-steamos]
 SigLevel = Required TrustedOnly
-Server = https://repo.rivoreo.com/$repo/os/$arch
+Server = https://rivoreo.github.io/steamos-intel-handheld/$repo/os/$arch
 ```
 
 The `any` architecture packages are published inside the `x86_64` repository
@@ -176,8 +176,10 @@ removing `steamos-intel-handheld`.
    repo-add --sign --verify public/rivoreo-steamos/os/x86_64/rivoreo-steamos.db.tar.zst \
      public/rivoreo-steamos/os/x86_64/*.pkg.tar.zst
    ```
-5. Publish the static tree to HTTPS hosting.
-6. Smoke-test from a clean SteamOS VM or device with:
+5. Copy `.db` and `.files` aliases as regular files, not symlinks, because the
+   GitHub Pages artifact uploader rejects symbolic and hard links.
+6. Publish the static tree to this repository's GitHub Pages site.
+7. Smoke-test from a clean SteamOS VM or device with:
    ```bash
    pacman -Sy
    pacman -S --needed rivoreo-keyring rivoreo-steamos-repo steamos-intel-handheld
@@ -192,7 +194,7 @@ environment documented by `.codex/skills/steamos-qemu-build-env` and
 The bootstrap script should be idempotent and safe to rerun after SteamOS OTA:
 
 ```bash
-curl -fsSL https://repo.rivoreo.com/rivoreo-steamos/bootstrap.sh | sudo bash
+curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash
 ```
 
 Flow:

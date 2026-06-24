@@ -251,7 +251,7 @@ def test_repo_config_uses_required_signatures() -> None:
     conf = (ROOT / "packaging/arch/rivoreo-steamos-repo/rivoreo-steamos.conf").read_text()
     assert "[rivoreo-steamos]" in conf
     assert "SigLevel = Required TrustedOnly" in conf
-    assert "Server = https://repo.rivoreo.com/$repo/os/$arch" in conf
+    assert "Server = https://rivoreo.github.io/steamos-intel-handheld/$repo/os/$arch" in conf
 
 
 def test_repo_config_package_marks_config_as_backup() -> None:
@@ -295,7 +295,7 @@ Create `packaging/arch/rivoreo-steamos-repo/rivoreo-steamos.conf`:
 ```ini
 [rivoreo-steamos]
 SigLevel = Required TrustedOnly
-Server = https://repo.rivoreo.com/$repo/os/$arch
+Server = https://rivoreo.github.io/steamos-intel-handheld/$repo/os/$arch
 ```
 
 Create `packaging/arch/rivoreo-steamos-repo/PKGBUILD`:
@@ -372,6 +372,7 @@ def test_publish_script_generates_signed_repo_database() -> None:
     assert "rivoreo-steamos.db.tar.zst" in script
     assert "rivoreo-steamos.db" in script
     assert "rivoreo-steamos.files" in script
+    assert "ln -sf" not in script
 ```
 
 - [ ] **Step 2: Add package build script**
@@ -421,10 +422,10 @@ cp "$pkgsrc"/*.pkg.tar.zst.sig "$out"/
 rm -f "$out"/rivoreo-steamos.db* "$out"/rivoreo-steamos.files*
 repo-add --sign "$db" "$out"/*.pkg.tar.zst
 
-ln -sf rivoreo-steamos.db.tar.zst "$out/rivoreo-steamos.db"
-ln -sf rivoreo-steamos.db.tar.zst.sig "$out/rivoreo-steamos.db.sig"
-ln -sf rivoreo-steamos.files.tar.zst "$out/rivoreo-steamos.files"
-ln -sf rivoreo-steamos.files.tar.zst.sig "$out/rivoreo-steamos.files.sig"
+cp "$out/rivoreo-steamos.db.tar.zst" "$out/rivoreo-steamos.db"
+cp "$out/rivoreo-steamos.db.tar.zst.sig" "$out/rivoreo-steamos.db.sig"
+cp "$out/rivoreo-steamos.files.tar.zst" "$out/rivoreo-steamos.files"
+cp "$out/rivoreo-steamos.files.tar.zst.sig" "$out/rivoreo-steamos.files.sig"
 ```
 
 - [ ] **Step 4: Make scripts executable and run local checks**
@@ -499,7 +500,7 @@ Create `scripts/bootstrap-steamos-repo.sh`:
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://repo.rivoreo.com/rivoreo-steamos}"
+REPO_URL="${REPO_URL:-https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos}"
 EXPECTED_FINGERPRINT="${EXPECTED_FINGERPRINT:?set EXPECTED_FINGERPRINT to the Rivoreo release signing key fingerprint}"
 repo_conf="/etc/pacman.d/rivoreo-steamos.conf"
 include_line="Include = /etc/pacman.d/rivoreo-steamos.conf"
@@ -529,7 +530,7 @@ pacman-key --lsign-key "$EXPECTED_FINGERPRINT"
 cat >"$repo_conf" <<'CONF'
 [rivoreo-steamos]
 SigLevel = Required TrustedOnly
-Server = https://repo.rivoreo.com/$repo/os/$arch
+Server = https://rivoreo.github.io/steamos-intel-handheld/$repo/os/$arch
 CONF
 
 if ! grep -Fxq "$include_line" /etc/pacman.conf; then
@@ -561,7 +562,7 @@ Create `docs/package-repository.md` with:
 Install on SteamOS:
 
 ```bash
-curl -fsSL https://repo.rivoreo.com/rivoreo-steamos/bootstrap.sh | sudo bash
+curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash
 ```
 
 The bootstrap imports the Rivoreo package signing key, configures the
@@ -704,7 +705,7 @@ git commit -m "ci(packaging): publish signed Arch repository on tags"
 Run on the target device:
 
 ```bash
-curl -fsSL https://repo.rivoreo.com/rivoreo-steamos/bootstrap.sh | sudo bash
+curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash
 ```
 
 Expected: pacman installs `rivoreo-keyring`, `rivoreo-steamos-repo`, and
@@ -737,7 +738,7 @@ Expected: same success criteria as Step 2.
 After a SteamOS update, rerun:
 
 ```bash
-curl -fsSL https://repo.rivoreo.com/rivoreo-steamos/bootstrap.sh | sudo bash
+curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash
 scripts/verify-on-device.sh root@<handheld-host>
 ```
 
