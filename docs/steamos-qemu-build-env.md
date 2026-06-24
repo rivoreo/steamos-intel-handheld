@@ -93,7 +93,12 @@ guest and copies the resulting x86_64 binary to:
 `./.cache/steamos-qemu/mangoapp`
 
 Set `STEAMOS_QEMU_SKIP_DEPS=1` after the first successful dependency provision
-to skip the package step on later builds.
+to skip the package step on later builds. `build-mangoapp` reuses the guest
+Meson build directory by default so follow-up MangoHud edits only recompile the
+changed files. Set `STEAMOS_QEMU_CLEAN_BUILD=1` when you need to recreate the
+build directory from scratch. On Apple Silicon or other hosts that must emulate
+x86_64 with TCG, set `STEAMOS_QEMU_MESON_OPTIMIZATION=0` for faster local
+verification builds; omit it for MangoHud's default release optimization.
 
 ## Deploy To The Handheld
 

@@ -32,6 +32,9 @@ Environment:
   STEAMOS_QEMU_EXTRA_ARGS    Extra QEMU arguments appended at the end
   STEAMOS_QEMU_BUILD_JOBS    Ninja jobs for build-mangoapp (default: 3)
   STEAMOS_QEMU_SKIP_DEPS     Skip dependency install during build-mangoapp when set
+  STEAMOS_QEMU_CLEAN_BUILD   Recreate the guest MangoHud build directory when set
+  STEAMOS_QEMU_MESON_OPTIMIZATION
+                            Optional Meson optimization level override for build-mangoapp
   STEAMOS_QEMU_MANGOAPP_ARTIFACT
                             Host output path (default: .cache/steamos-qemu/mangoapp)
 EOF
@@ -241,19 +244,25 @@ run_qemu_disk() {
     extra_args=(${STEAMOS_QEMU_EXTRA_ARGS})
   fi
 
-  exec qemu-system-x86_64 \
-    -machine "q35,accel=$accel" \
-    -cpu max \
-    -smp "$cpus" \
-    -m "$memory" \
-    "${ovmf_args[@]}" \
-    -drive "if=virtio,file=$disk_path,format=$disk_format" \
-    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22" \
-    -device virtio-net-pci,netdev=net0 \
-    -virtfs "local,path=$repo_root,mount_tag=workspace,security_model=none,id=workspace" \
-    -device virtio-vga \
-    -display "$display" \
-    "${extra_args[@]}"
+  qemu_args=(
+    -machine "q35,accel=$accel"
+    -cpu max
+    -smp "$cpus"
+    -m "$memory"
+    "${ovmf_args[@]}"
+    -drive "if=virtio,file=$disk_path,format=$disk_format"
+    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22"
+    -device virtio-net-pci,netdev=net0
+    -virtfs "local,path=$repo_root,mount_tag=workspace,security_model=none,id=workspace"
+    -device virtio-vga
+    -display "$display"
+  )
+
+  if [ "${#extra_args[@]}" -gt 0 ]; then
+    qemu_args+=("${extra_args[@]}")
+  fi
+
+  exec qemu-system-x86_64 "${qemu_args[@]}"
 }
 
 run_vm() {
@@ -442,23 +451,39 @@ build_mangoapp() {
   fi
 
   jobs="${STEAMOS_QEMU_BUILD_JOBS:-3}"
-  ssh_guest "STEAMOS_QEMU_BUILD_JOBS=$jobs bash -s" <<'EOS'
+  remote_env="STEAMOS_QEMU_BUILD_JOBS=$jobs"
+  remote_env="$remote_env STEAMOS_QEMU_CLEAN_BUILD=${STEAMOS_QEMU_CLEAN_BUILD:-}"
+  remote_env="$remote_env STEAMOS_QEMU_MESON_OPTIMIZATION=${STEAMOS_QEMU_MESON_OPTIMIZATION:-}"
+  ssh_guest "$remote_env bash -s" <<'EOS'
 set -eux
 mkdir -p /home/workspace /home/build
 mountpoint -q /home/workspace || \
   mount -t 9p -o trans=virtio,version=9p2000.L workspace /home/workspace
 git config --global --add safe.directory /home/workspace/external/MangoHud || true
-rm -rf /home/build/mangohud
-meson setup /home/build/mangohud /home/workspace/external/MangoHud \
-  --prefix=/usr \
-  -Dmangoapp=true \
-  -Dwith_xnvctrl=disabled \
-  -Dwith_nvml=disabled \
-  -Dinclude_doc=false \
-  -Dtests=disabled \
-  -Dmangoplot=disabled \
-  -Dwith_mangohud_next=false \
+meson_options=(
+  --prefix=/usr
+  -Dmangoapp=true
+  -Dwith_xnvctrl=disabled
+  -Dwith_nvml=disabled
+  -Dinclude_doc=false
+  -Dtests=disabled
+  -Dmangoplot=disabled
+  -Dwith_mangohud_next=false
   -Dwith_server=false
+)
+if [ -n "${STEAMOS_QEMU_MESON_OPTIMIZATION:-}" ]; then
+  meson_options+=("-Doptimization=$STEAMOS_QEMU_MESON_OPTIMIZATION")
+fi
+if [ -n "${STEAMOS_QEMU_CLEAN_BUILD:-}" ]; then
+  rm -rf /home/build/mangohud
+fi
+if [ -e /home/build/mangohud/build.ninja ]; then
+  meson setup --reconfigure /home/build/mangohud /home/workspace/external/MangoHud \
+    "${meson_options[@]}"
+else
+  meson setup /home/build/mangohud /home/workspace/external/MangoHud \
+    "${meson_options[@]}"
+fi
 meson compile -C /home/build/mangohud -j "$STEAMOS_QEMU_BUILD_JOBS" mangoapp
 file /home/build/mangohud/src/mangoapp
 EOS

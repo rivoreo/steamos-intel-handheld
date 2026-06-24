@@ -73,6 +73,16 @@ def test_device_verifier_reports_gpu_temperature_sensor_availability():
     assert "no DRM hwmon temp input is exposed" in script
 
 
+def test_device_verifier_reports_mangohud_gpu_memory_fdinfo():
+    script = (ROOT / "scripts/verify-on-device.sh").read_text()
+
+    assert "report_mangohud_gpu_memory_fdinfo" in script
+    assert "MangoHud GPU memory fdinfo" in script
+    assert "drm-resident-gtt" in script
+    assert "drm-resident-system0" in script
+    assert "drm-resident-vram0" in script
+
+
 def test_gamescope_workaround_harness_can_enable_and_disable():
     script = (ROOT / "scripts/configure-gamescope-display-workaround.sh").read_text()
 
@@ -121,6 +131,51 @@ def test_mangohud_submodule_tracks_fork_branch():
     assert "branch = intel-rapl-gpu-power" in gitmodules
 
 
+def test_mangohud_intel_integrated_gtt_feeds_steam_overlay_vram():
+    fdinfo_header = (ROOT / "external/MangoHud/src/gpu_fdinfo.h").read_text()
+    fdinfo_source = (ROOT / "external/MangoHud/src/gpu_fdinfo.cpp").read_text()
+    gpu_header = (ROOT / "external/MangoHud/src/gpu.h").read_text()
+    hud_source = (ROOT / "external/MangoHud/src/hud_elements.cpp").read_text()
+
+    assert "uses_integrated_memory() const" in fdinfo_header
+    assert "bool uses_integrated_memory()" in gpu_header
+    assert "metrics.gtt_used = memory_used" in fdinfo_source
+    assert "gpu->uses_integrated_memory()" in hud_source
+
+
+def test_mangohud_hides_unavailable_gpu_sensor_values():
+    metrics_header = (ROOT / "external/MangoHud/src/gpu_metrics_util.h").read_text()
+    fdinfo_source = (ROOT / "external/MangoHud/src/gpu_fdinfo.cpp").read_text()
+    hud_source = (ROOT / "external/MangoHud/src/hud_elements.cpp").read_text()
+
+    assert "temp(-1)" in metrics_header
+    assert "junction_temp(-1)" in metrics_header
+    assert "memory_temp(-1)" in metrics_header
+    assert "MemClock(-1)" in metrics_header
+    assert "CoreClock(-1)" in metrics_header
+    assert "powerUsage(-1.0f)" in metrics_header
+    assert "powerLimit(-1.0f)" in metrics_header
+    assert "fan_speed(-1)" in metrics_header
+    assert "voltage(-1)" in metrics_header
+
+    assert 'has_hwmon_sensor("temp")' in fdinfo_source
+    assert 'has_hwmon_sensor("vram_temp")' in fdinfo_source
+    assert 'has_hwmon_sensor("power_limit")' in fdinfo_source
+    assert 'has_hwmon_sensor("fan_speed")' in fdinfo_source
+    assert 'has_hwmon_sensor("voltage")' in fdinfo_source
+    assert "return -1.0f" in fdinfo_source
+    assert "return -1;" in fdinfo_source
+    assert "metrics.temp = -1" in fdinfo_source
+    assert "metrics.memory_temp = -1" in fdinfo_source
+
+    assert "gpu->metrics.temp > -1" in hud_source
+    assert "gpu->metrics.MemClock > 0" in hud_source
+    assert "gpu->metrics.CoreClock > -1" in hud_source
+    assert "gpu->metrics.powerUsage > -1" in hud_source
+    assert "gpu->metrics.fan_speed > -1" in hud_source
+    assert "gpu->metrics.voltage > -1" in hud_source
+
+
 def test_steamos_qemu_build_env_uses_official_recovery_image():
     script = (ROOT / "scripts/steamos-qemu-build-env.sh").read_text()
     docs = (ROOT / "docs/steamos-qemu-build-env.md").read_text()
@@ -135,6 +190,13 @@ def test_steamos_qemu_build_env_uses_official_recovery_image():
     assert "provision)" in script
     assert "run-build)" in script
     assert "build-mangoapp)" in script
+    assert "qemu_args=(" in script
+    assert 'if [ "${#extra_args[@]}" -gt 0 ]; then' in script
+    assert "STEAMOS_QEMU_CLEAN_BUILD" in script
+    assert "STEAMOS_QEMU_MESON_OPTIMIZATION" in script
+    assert "STEAMOS_QEMU_CLEAN_BUILD=${STEAMOS_QEMU_CLEAN_BUILD:-}" in script
+    assert "STEAMOS_QEMU_MESON_OPTIMIZATION=${STEAMOS_QEMU_MESON_OPTIMIZATION:-}" in script
+    assert "meson setup --reconfigure /home/build/mangohud" in script
     assert "python-mako" in script
     assert "libxrandr libxinerama libxcursor libxi libxrender libxfixes" in script
     assert ".cache/steamos-qemu/mangoapp" in docs

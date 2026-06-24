@@ -122,6 +122,45 @@ verify_mangohud_gpu_power_sensor() {
   verify_mangohud_power_sensor "MangoHud GPU power sensor" uncore
 }
 
+report_mangohud_gpu_memory_fdinfo() {
+  local found=0
+  local line
+  while IFS= read -r line; do
+    found=1
+    echo "$line"
+  done < <(
+    for proc in /proc/[0-9]*; do
+      [ -d "$proc" ] || continue
+      local comm
+      comm="$(cat "$proc/comm" 2>/dev/null || true)"
+      for fdinfo in "$proc"/fdinfo/*; do
+        [ -e "$fdinfo" ] || continue
+        awk -v proc="$proc" -v comm="$comm" -v fdinfo="$fdinfo" '
+          /^drm-driver:/ { driver = $2 }
+          /^drm-client-id:/ { client = $2 }
+          /^drm-resident-gtt:/ { gtt = $2 " " $3; if ($2 + 0 > 0) nonzero = 1 }
+          /^drm-resident-system0:/ { system0 = $2 " " $3; if ($2 + 0 > 0) nonzero = 1 }
+          /^drm-resident-vram0:/ { vram0 = $2 " " $3; if ($2 + 0 > 0) nonzero = 1 }
+          END {
+            if ((driver == "i915" || driver == "xe") && nonzero) {
+              print "MangoHud GPU memory fdinfo: comm=" comm \
+                " pid=" substr(proc, 7) \
+                " client=" client \
+                " gtt=" gtt \
+                " system0=" system0 \
+                " vram0=" vram0
+            }
+          }
+        ' "$fdinfo" 2>/dev/null
+      done
+    done | sort -u
+  )
+
+  if [ "$found" -eq 0 ]; then
+    echo "MangoHud GPU memory fdinfo unavailable: no nonzero Intel DRM fdinfo memory was found"
+  fi
+}
+
 report_mangohud_gpu_temperature_sensor() {
   local found=0
   local drm_device
@@ -145,6 +184,7 @@ report_mangohud_gpu_temperature_sensor() {
 wait_for_service steamos-intel-handheld-power-control.service
 verify_mangohud_cpu_power_sensor
 verify_mangohud_gpu_power_sensor
+report_mangohud_gpu_memory_fdinfo
 report_mangohud_gpu_temperature_sensor
 
 runuser -u deck -- bash -lc "$USER_ENV systemctl --user is-active --quiet steamos-manager"

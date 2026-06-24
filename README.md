@@ -114,9 +114,12 @@ MangoHud upstream already recognizes the Intel `xe` driver for fdinfo load, GT
 frequency, and throttling, but on this system the driver does not expose
 `/sys/class/drm/renderD128/device/hwmon`. The MangoHud submodule tracks the
 `JohnnySun/MangoHud:intel-rapl-gpu-power` fork branch, which reads Intel
-`i915`/`xe` GPU power from the RAPL `uncore` energy counter when present. GPU
-temperature is still not faked. It remains 0 until the `xe` kernel driver
-exposes a real DRM hwmon temperature input such as
+`i915`/`xe` GPU power from the RAPL `uncore` energy counter when present. It
+also maps Intel integrated fdinfo shared memory into the SteamOS `vram` overlay
+row, using `drm-resident-system0` on `i915` and `drm-resident-gtt` on `xe` when
+local or VRAM fdinfo memory is absent. This is still current-process memory,
+not a total system VRAM counter. GPU temperature is still not faked or shown
+until the `xe` kernel driver exposes a real DRM hwmon temperature input such as
 `/sys/class/drm/renderD128/device/hwmon/hwmon*/temp*_input`.
 
 ## Repository layout

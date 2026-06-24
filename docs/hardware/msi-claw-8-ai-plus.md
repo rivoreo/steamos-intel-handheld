@@ -73,6 +73,14 @@ MangoHud sensor access. The MangoHud fork
 branch used by this project reads this `uncore` counter for Intel `i915`/`xe`
 GPU power.
 
+GPU memory is available through DRM fdinfo as process-scoped shared memory on
+the tested Lunar Lake integrated GPU. During testing, the Aokana process exposed
+nonzero `drm-resident-gtt` values through `/proc/<pid>/fdinfo`, while the
+SteamOS `mangoapp` preset displayed the `vram` row rather than `proc_vram`. The
+MangoHud fork maps integrated Intel fdinfo shared-memory fallback values into
+that `vram` row so the SteamOS overlay reports a useful value. This is not a
+total system VRAM counter.
+
 GPU temperature is still unavailable on the tested SteamOS build. The Intel GPU
 uses the `xe` driver and exposes fdinfo and GT frequency data, but it does not
 expose `/sys/class/drm/renderD128/device/hwmon`. MangoHud mainline expects that
