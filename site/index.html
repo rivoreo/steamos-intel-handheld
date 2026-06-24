@@ -685,7 +685,7 @@
             <div>
               <div class="card-heading">
                 <h2 id="quick-install-title" data-i18n="preview.title">Install preview</h2>
-                <span class="status waiting"><span class="status-dot warning" aria-hidden="true"></span><span data-i18n="status.packagesNotReleased">Packages not released</span></span>
+                <span class="status waiting"><span class="status-dot warning" aria-hidden="true"></span><span data-i18n="status.repositoryNotActivated">Repository not activated</span></span>
               </div>
               <div class="flow-map" aria-label="System integration path">
                 <div class="flow-row">
@@ -730,7 +730,7 @@
             <h2 id="answers-title" data-i18n="answers.title">What this repository explains.</h2>
             <p data-i18n="answers.lead">
               It is the product surface for Intel SteamOS adaptation: clear scope,
-              tracked delivery, and a safe path from source code to signed packages.
+              tracked delivery, and a safe path from source code to an activated pacman repository.
             </p>
           </div>
           <div class="info-grid">
@@ -748,7 +748,7 @@
             </article>
             <article class="info-card">
               <h3 data-i18n="answers.install.title">How to install</h3>
-              <p data-i18n="answers.install.text">Use the bootstrap endpoint once signed packages are published. Until then it exits safely without changing the system.</p>
+              <p data-i18n="answers.install.text">Use the bootstrap endpoint once the public pacman repository is activated. Until then it only reports repository status and exits safely.</p>
             </article>
           </div>
         </section>
@@ -793,8 +793,8 @@
           <div class="section-heading">
             <h2 id="install-title" data-i18n="install.title">Install path.</h2>
             <p data-i18n="install.lead">
-              The endpoint is live now. The installer stays inert until signed
-              packages and repository databases are published.
+              The package definitions and repository scaffold are in place. The public
+              pacman repository opens after the signed package database is published.
             </p>
           </div>
 
@@ -802,7 +802,7 @@
             <article class="install-panel">
               <div class="card-heading">
                 <h3 data-i18n="install.bootstrap.title">Preview command</h3>
-                <span class="status waiting"><span class="status-dot warning" aria-hidden="true"></span><span data-i18n="status.notInstallable">Not installable yet</span></span>
+                <span class="status waiting"><span class="status-dot warning" aria-hidden="true"></span><span data-i18n="status.installChannelClosed">Install channel not open</span></span>
               </div>
               <div class="code-block">
                 <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.target">SteamOS target</span></div>
@@ -844,8 +844,8 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "meta.title": "SteamOS support for Intel handhelds",
           "meta.description": "steamos-intel-handheld is a SteamOS support layer for Intel handheld PCs, distributed through the future rivoreo-steamos pacman repository.",
           "brand.name": "steamos-intel-handheld",
-          "status.packagesNotReleased": "Packages not released",
-          "status.notInstallable": "Not installable yet",
+          "status.repositoryNotActivated": "Repository not activated",
+          "status.installChannelClosed": "Install channel not open",
           "nav.install": "Install",
           "nav.github": "GitHub",
           "hero.title": "SteamOS support for Intel handhelds",
@@ -868,7 +868,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "code.target": "SteamOS target",
           "code.planned": "planned",
           "answers.title": "What this repository explains.",
-          "answers.lead": "It is the product surface for Intel SteamOS adaptation: clear scope, tracked delivery, and a safe path from source code to signed packages.",
+          "answers.lead": "It is the product surface for Intel SteamOS adaptation: clear scope, tracked delivery, and a safe path from source code to an activated pacman repository.",
           "answers.what.title": "What it is",
           "answers.what.text": "A SteamOS support layer for Intel handheld PCs, owned as source, packaging, service drop-ins, and release documentation.",
           "answers.can.title": "What it can do",
@@ -876,7 +876,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "answers.why.title": "Why it exists",
           "answers.why.text": "SteamOS targets AMD handheld assumptions first. Intel handhelds need a tracked compatibility layer that survives system updates.",
           "answers.install.title": "How to install",
-          "answers.install.text": "Use the bootstrap endpoint once signed packages are published. Until then it exits safely without changing the system.",
+          "answers.install.text": "Use the bootstrap endpoint once the public pacman repository is activated. Until then it only reports repository status and exits safely.",
           "capabilities.title": "What the repository owns.",
           "capabilities.lead": "Each part is kept small enough to review and practical enough to test on the target handheld before it reaches users.",
           "capability.tdp.title": "SteamOS Manager TDP remote",
@@ -892,7 +892,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "capability.verify.title": "Hardware verification harness",
           "capability.verify.text": "Scripts collect device data, verify counters, host pacman repo paths, and record results from real hardware.",
           "install.title": "Install path.",
-          "install.lead": "Packages are not released yet, so this is not an installable repository today. The command below only checks the release status.",
+          "install.lead": "The Arch package definitions and repository scaffold are in place. The public pacman repository is not activated yet because the signed package database has not been published to Pages.",
           "install.bootstrap.title": "Preview command",
           "install.bootstrap.note": "Current behavior: the script prints package status and exits without changing the system.",
           "install.pacman.title": "Future pacman stanza",
@@ -905,8 +905,8 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "meta.title": "面向 Intel 掌机的 SteamOS 支持层",
           "meta.description": "steamos-intel-handheld 是面向 Intel 掌机 PC 的 SteamOS 支持层，将通过未来的 rivoreo-steamos pacman 软件源分发。",
           "brand.name": "steamos-intel-handheld",
-          "status.packagesNotReleased": "软件包尚未发布",
-          "status.notInstallable": "暂时不可安装",
+          "status.repositoryNotActivated": "软件源尚未启用",
+          "status.installChannelClosed": "暂未开放安装",
           "nav.install": "安装",
           "nav.github": "GitHub",
           "hero.title": "面向 Intel 掌机的 SteamOS 支持层",
@@ -929,7 +929,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "code.target": "SteamOS 目标机",
           "code.planned": "计划中",
           "answers.title": "这个仓库说明什么。",
-          "answers.lead": "它是 Intel SteamOS 适配的产品入口：范围清楚、交付可追踪，并提供从源码到签名软件包的安全路径。",
+          "answers.lead": "它是 Intel SteamOS 适配的产品入口：范围清楚、交付可追踪，并提供从源码到已启用 pacman 软件源的安全路径。",
           "answers.what.title": "它是什么？",
           "answers.what.text": "一个面向 Intel 掌机 PC 的 SteamOS 支持层，包含源码、打包、service drop-in 和发布说明。",
           "answers.can.title": "它能做什么？",
@@ -937,7 +937,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "answers.why.title": "为什么需要它？",
           "answers.why.text": "SteamOS 优先覆盖 AMD 掌机假设。Intel 掌机需要一套可追踪、能跨系统升级保留的兼容层。",
           "answers.install.title": "如何安装？",
-          "answers.install.text": "签名软件包发布后，通过 bootstrap 端点安装。在此之前，脚本会安全退出，不会修改系统。",
+          "answers.install.text": "公开 pacman 软件源启用后，通过 bootstrap 端点安装。在此之前，脚本只会报告软件源状态并安全退出。",
           "capabilities.title": "仓库负责哪些内容。",
           "capabilities.lead": "每个部分都保持足够小，便于 review；也足够贴近目标设备，能在交付用户前于掌机上验证。",
           "capability.tdp.title": "SteamOS Manager TDP remote",
@@ -953,7 +953,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "capability.verify.title": "硬件验证脚本",
           "capability.verify.text": "脚本会收集设备数据、验证计数器、检查 pacman 源路径，并记录真实硬件结果。",
           "install.title": "安装路径。",
-          "install.lead": "软件包尚未发布，所以当前还不是可安装的软件源。下面的命令只用于检查发布状态。",
+          "install.lead": "Arch 打包和软件源骨架已经准备好。公开 pacman 软件源尚未启用，因为签名的软件包数据库还没有发布到 Pages。",
           "install.bootstrap.title": "预览命令",
           "install.bootstrap.note": "当前行为：脚本会打印软件包状态并退出，不会修改系统。",
           "install.pacman.title": "未来的 pacman 配置",
@@ -966,8 +966,8 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "meta.title": "針對 Intel 掌機的 SteamOS 支援層",
           "meta.description": "steamos-intel-handheld 是針對 Intel 掌機 PC 的 SteamOS 支援層，將透過未來的 rivoreo-steamos pacman 套件庫提供。",
           "brand.name": "steamos-intel-handheld",
-          "status.packagesNotReleased": "套件尚未釋出",
-          "status.notInstallable": "尚不可安裝",
+          "status.repositoryNotActivated": "套件庫尚未啟用",
+          "status.installChannelClosed": "尚未開放安裝",
           "nav.install": "安裝",
           "nav.github": "GitHub",
           "hero.title": "針對 Intel 掌機的 SteamOS 支援層",
@@ -990,7 +990,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "code.target": "SteamOS 目標機",
           "code.planned": "計畫中",
           "answers.title": "這個儲存庫說明什麼。",
-          "answers.lead": "它是 Intel SteamOS 支援工作的產品入口：範圍清楚、交付可追蹤，並提供從原始碼到簽名套件的安全路徑。",
+          "answers.lead": "它是 Intel SteamOS 支援工作的產品入口：範圍清楚、交付可追蹤，並提供從原始碼到已啟用 pacman 套件庫的安全路徑。",
           "answers.what.title": "它是什麼？",
           "answers.what.text": "一個針對 Intel 掌機 PC 的 SteamOS 支援層，包含原始碼、打包設定、service drop-in 和版本說明。",
           "answers.can.title": "它能做什麼？",
@@ -998,7 +998,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "answers.why.title": "為什麼需要它？",
           "answers.why.text": "SteamOS 優先支援 AMD 掌機情境。Intel 掌機需要一套可追蹤、能在系統升級後保留的相容層。",
           "answers.install.title": "如何安裝？",
-          "answers.install.text": "簽名套件釋出後，透過 bootstrap 端點安裝。在此之前，腳本會安全結束，不會修改系統。",
+          "answers.install.text": "公開 pacman 套件庫啟用後，透過 bootstrap 端點安裝。在此之前，腳本只會回報套件庫狀態並安全結束。",
           "capabilities.title": "儲存庫負責哪些內容。",
           "capabilities.lead": "每個部分都保持足夠小，便於 review；也足夠貼近目標裝置，能在交付使用者前於掌機上驗證。",
           "capability.tdp.title": "SteamOS Manager TDP remote",
@@ -1014,7 +1014,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "capability.verify.title": "硬體驗證腳本",
           "capability.verify.text": "腳本會收集裝置資料、驗證計數器、檢查 pacman 套件庫路徑，並記錄真實硬體結果。",
           "install.title": "安裝路徑。",
-          "install.lead": "套件尚未釋出，所以目前還不是可安裝的套件庫。下方命令只用來檢查釋出狀態。",
+          "install.lead": "Arch 打包和套件庫骨架已經準備好。公開 pacman 套件庫尚未啟用，因為簽名套件資料庫還沒有放到 Pages。",
           "install.bootstrap.title": "預覽命令",
           "install.bootstrap.note": "目前行為：腳本會輸出套件狀態並結束，不會修改系統。",
           "install.pacman.title": "未來的 pacman 設定",

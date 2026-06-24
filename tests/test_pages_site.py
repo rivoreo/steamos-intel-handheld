@@ -40,8 +40,11 @@ def test_pages_site_explains_capabilities_and_pending_release_state() -> None:
     assert "SteamOS Manager TDP remote" in index
     assert "Intel RAPL power path" in index
     assert "MangoHud sensor access" in index
-    assert "Packages not released" in index
-    assert "Not installable yet" in index
+    assert "Repository not activated" in index
+    assert "Install channel not open" in index
+    assert "package definitions and repository scaffold are in place" in index
+    assert "signed package database has not been published to Pages" in index
+    assert "Packages not released" not in index
     assert "Packages pending" not in index
     assert "Pages live" not in index
     assert "Website live" not in index
@@ -88,10 +91,12 @@ def test_pages_site_uses_taiwan_zh_tw_wording() -> None:
     zh_tw_text = "\n".join(read_site_translations()["zh-TW"].values())
     assert "針對 Intel 掌機的 SteamOS 支援層" in zh_tw_text
     assert "套件庫" in zh_tw_text
-    assert "套件尚未釋出" in zh_tw_text
-    assert "尚不可安裝" in zh_tw_text
+    assert "套件庫尚未啟用" in zh_tw_text
+    assert "尚未開放安裝" in zh_tw_text
+    assert "Arch 打包和套件庫骨架已經準備好" in zh_tw_text
     assert "裝置" in zh_tw_text
     assert "輸出套件狀態" in zh_tw_text
+    assert "套件尚未釋出" not in zh_tw_text
     assert "頁面已上線" not in zh_tw_text
     assert "安全佔位" not in zh_tw_text
     assert "面向" not in zh_tw_text
@@ -115,7 +120,8 @@ def test_pages_site_declares_custom_domain() -> None:
 
 def test_placeholder_bootstrap_exits_before_packages_exist() -> None:
     bootstrap = BOOTSTRAP.read_text()
-    assert "signed packages" in bootstrap
+    assert "package scaffold is online" in bootstrap
+    assert "signed package database has not been published" in bootstrap
     assert "exit 1" in bootstrap
     assert "pacman -S" not in bootstrap
     assert "steamos-readonly disable" not in bootstrap

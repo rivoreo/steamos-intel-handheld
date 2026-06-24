@@ -1,7 +1,7 @@
 # Package Repository
 
-This repository uses GitHub Pages as the static hosting endpoint for the future
-`rivoreo-steamos` pacman repository.
+This repository uses GitHub Pages as the static hosting endpoint for the
+`rivoreo-steamos` pacman repository scaffold.
 
 Current custom domain:
 
@@ -26,9 +26,10 @@ Bootstrap URL:
 curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash
 ```
 
-The Pages deployment is live before package publication so the URL can be
-validated early. Until signed packages and repository databases are published,
-the bootstrap script exits without changing the system.
+The package definitions and Pages scaffold are in place. The public pacman
+repository is not activated yet because the signed package database has not been
+published to Pages. Until that database is published, the bootstrap script
+reports repository status and exits without changing the system.
 
 DNS should point the subdomain to GitHub Pages with:
 
