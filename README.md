@@ -106,8 +106,9 @@ with `--pl2-w` when platform thermals require a different burst limit.
 The same root service also prepares MangoHud sensor paths. On the tested
 SteamOS 3.8.11 Claw 8 AI+ system, MangoHud runs as `deck` and needs read access
 to `/sys/class/powercap/*/energy_uj` for the `package-0` CPU domain and the
-`uncore` Intel GPU domain. The service grants read access to those real kernel
-energy counters at startup and leaves unrelated RAPL domains private.
+`uncore` Intel GPU domain. The service enables those domains, grants read access
+to the real kernel energy counters at startup, and leaves unrelated RAPL domains
+private.
 
 MangoHud upstream already recognizes the Intel `xe` driver for fdinfo load, GT
 frequency, and throttling, but on this system the driver does not expose

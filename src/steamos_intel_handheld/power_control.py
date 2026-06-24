@@ -158,6 +158,7 @@ class TdpBackend:
             if not energy_file.exists():
                 continue
             try:
+                self._enable_powercap_domain(domain)
                 current_mode = stat.S_IMODE(energy_file.stat().st_mode)
                 energy_file.chmod(current_mode | read_bits)
             except OSError:
@@ -174,6 +175,11 @@ class TdpBackend:
                 continue
             if self._powercap_domain_name(domain) in MANGOHUD_RAPL_SENSOR_NAMES:
                 yield domain
+
+    def _enable_powercap_domain(self, domain: Path) -> None:
+        enabled_file = domain / "enabled"
+        if enabled_file.exists():
+            enabled_file.write_text("1")
 
     def rapl_domains(self) -> Iterable[Path]:
         powercap = self.sysfs_root / "class" / "powercap"

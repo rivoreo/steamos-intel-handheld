@@ -248,18 +248,24 @@ def test_prepare_mangohud_sensors_makes_package_and_uncore_rapl_energy_readable(
     energy_file = domain / "energy_uj"
     energy_file.write_text("123456")
     energy_file.chmod(0o400)
+    enabled_file = domain / "enabled"
+    enabled_file.write_text("0")
     gpu_domain = sysfs_root / "class" / "powercap" / "intel-rapl:0:1"
     gpu_domain.mkdir()
     (gpu_domain / "name").write_text("uncore")
     gpu_energy_file = gpu_domain / "energy_uj"
     gpu_energy_file.write_text("456789")
     gpu_energy_file.chmod(0o400)
+    gpu_enabled_file = gpu_domain / "enabled"
+    gpu_enabled_file.write_text("0")
 
     backend = TdpBackend(state_file=tmp_path / "state", sysfs_root=sysfs_root)
 
     assert backend.prepare_mangohud_sensors() == [energy_file, gpu_energy_file]
     assert S_IMODE(energy_file.stat().st_mode) == 0o444
     assert S_IMODE(gpu_energy_file.stat().st_mode) == 0o444
+    assert enabled_file.read_text() == "1"
+    assert gpu_enabled_file.read_text() == "1"
     assert energy_file.read_text() == "123456"
     assert gpu_energy_file.read_text() == "456789"
 
@@ -272,8 +278,11 @@ def test_prepare_mangohud_sensors_keeps_unrelated_rapl_domains_private(tmp_path)
     core_energy_file = core_domain / "energy_uj"
     core_energy_file.write_text("123")
     core_energy_file.chmod(0o400)
+    core_enabled_file = core_domain / "enabled"
+    core_enabled_file.write_text("0")
 
     backend = TdpBackend(state_file=tmp_path / "state", sysfs_root=sysfs_root)
 
     assert backend.prepare_mangohud_sensors() == []
     assert S_IMODE(core_energy_file.stat().st_mode) == 0o400
+    assert core_enabled_file.read_text() == "0"

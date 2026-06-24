@@ -59,7 +59,7 @@ exposed both package counters as root-only:
 
 Temporarily granting read access let the `deck` user sample deltas from both
 files, proving this path is sufficient for MangoHud CPU power. The service now
-prepares those package RAPL energy counters at startup.
+enables and prepares those package RAPL energy counters at startup.
 
 GPU power uses a separate real counter on this platform. The kernel exposes
 Intel GPU energy as the RAPL `uncore` domain:
@@ -68,7 +68,8 @@ Intel GPU energy as the RAPL `uncore` domain:
 - `/sys/class/powercap/intel-rapl:0:1/energy_uj`
 
 That counter matches `perf stat -a -e power/energy-gpu/` and is readable by
-`deck` after the service prepares MangoHud sensor access. The MangoHud fork
+`deck` after the service enables the `uncore` powercap domain and prepares
+MangoHud sensor access. The MangoHud fork
 branch used by this project reads this `uncore` counter for Intel `i915`/`xe`
 GPU power.
 
