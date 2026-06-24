@@ -26,7 +26,8 @@ the newest public image and keep the final smoke test on real hardware.
 - `curl`
 - `bzip2`
 - 20GB+ free disk space for the raw image, qcow2 base, and overlay
-- Optional: an OVMF firmware path exported as `STEAMOS_QEMU_OVMF_CODE`
+- Optional: OVMF firmware paths exported as `STEAMOS_QEMU_OVMF_CODE` and
+  `STEAMOS_QEMU_OVMF_VARS`; Homebrew QEMU is auto-detected.
 
 On Apple Silicon, `qemu-system-x86_64` runs through emulation and will be slower.
 On Linux x86_64, use KVM with `STEAMOS_QEMU_ACCEL=kvm`.
@@ -55,8 +56,14 @@ Enable SSH if you want to drive builds from the host:
 sudo systemctl enable --now sshd
 ```
 
-The QEMU user network forwards host port `2222` to guest port `22` by default.
+The QEMU user network forwards `127.0.0.1:2222` to guest port `22` by default.
 Override with `STEAMOS_QEMU_SSH_PORT`.
+
+For a headless smoke boot:
+
+```bash
+STEAMOS_QEMU_DISPLAY=none scripts/steamos-qemu-build-env.sh run
+```
 
 ## Build MangoHud Mangoapp
 
@@ -85,6 +92,7 @@ scripts/verify-on-device.sh root@192.168.128.214
 ## Notes
 
 - Keep the qcow2 base immutable; throw away and recreate only the overlay.
+- The writable OVMF vars file is stored at `.cache/steamos-qemu/ovmf-vars.fd`.
 - Use the real handheld as the final verification source for sensors and
   gamescope/systemd behavior.
 - If Valve publishes a newer recovery image, rerun `fetch`; the helper resolves

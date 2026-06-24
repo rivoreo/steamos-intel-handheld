@@ -19,7 +19,10 @@ Environment:
   STEAMOS_QEMU_MEMORY        VM memory (default: 8G)
   STEAMOS_QEMU_ACCEL         QEMU accelerator (default: tcg)
   STEAMOS_QEMU_SSH_PORT      Host SSH forward port (default: 2222)
+  STEAMOS_QEMU_DISPLAY       QEMU display backend (default: default)
   STEAMOS_QEMU_OVMF_CODE     Optional OVMF_CODE firmware path
+  STEAMOS_QEMU_OVMF_VARS     Optional OVMF vars template path
+  STEAMOS_QEMU_EXTRA_ARGS    Extra QEMU arguments appended at the end
 EOF
 }
 
@@ -29,6 +32,7 @@ image_bz2="$cache_dir/steamos.img.bz2"
 raw_image="$cache_dir/steamos.img"
 base_qcow2="$cache_dir/steamos-base.qcow2"
 overlay_qcow2="$cache_dir/steamos-overlay.qcow2"
+ovmf_vars="$cache_dir/ovmf-vars.fd"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -109,6 +113,43 @@ fetch_image() {
   fi
 }
 
+first_existing_path() {
+  for path in "$@"; do
+    if [ -e "$path" ]; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+  done
+  return 1
+}
+
+detect_ovmf_code() {
+  if [ -n "${STEAMOS_QEMU_OVMF_CODE:-}" ]; then
+    printf '%s\n' "$STEAMOS_QEMU_OVMF_CODE"
+    return
+  fi
+
+  first_existing_path \
+    /opt/homebrew/share/qemu/edk2-x86_64-code.fd \
+    /opt/homebrew/Cellar/qemu/*/share/qemu/edk2-x86_64-code.fd \
+    /usr/share/OVMF/OVMF_CODE.fd \
+    /usr/share/edk2/x64/OVMF_CODE.fd \
+    /usr/share/qemu/OVMF.fd || true
+}
+
+detect_ovmf_vars_template() {
+  if [ -n "${STEAMOS_QEMU_OVMF_VARS:-}" ]; then
+    printf '%s\n' "$STEAMOS_QEMU_OVMF_VARS"
+    return
+  fi
+
+  first_existing_path \
+    /opt/homebrew/share/qemu/edk2-i386-vars.fd \
+    /opt/homebrew/Cellar/qemu/*/share/qemu/edk2-i386-vars.fd \
+    /usr/share/OVMF/OVMF_VARS.fd \
+    /usr/share/edk2/x64/OVMF_VARS.fd || true
+}
+
 run_vm() {
   require_command qemu-img
   require_command qemu-system-x86_64
@@ -126,10 +167,26 @@ run_vm() {
   memory="${STEAMOS_QEMU_MEMORY:-8G}"
   accel="${STEAMOS_QEMU_ACCEL:-tcg}"
   ssh_port="${STEAMOS_QEMU_SSH_PORT:-2222}"
+  display="${STEAMOS_QEMU_DISPLAY:-default}"
 
   ovmf_args=()
-  if [ -n "${STEAMOS_QEMU_OVMF_CODE:-}" ]; then
-    ovmf_args=(-drive "if=pflash,format=raw,readonly=on,file=$STEAMOS_QEMU_OVMF_CODE")
+  ovmf_code="$(detect_ovmf_code)"
+  ovmf_vars_template="$(detect_ovmf_vars_template)"
+  if [ -n "$ovmf_code" ]; then
+    ovmf_args=(-drive "if=pflash,format=raw,readonly=on,file=$ovmf_code")
+    if [ -n "$ovmf_vars_template" ]; then
+      if [ ! -e "$ovmf_vars" ]; then
+        cp "$ovmf_vars_template" "$ovmf_vars"
+      fi
+      ovmf_args+=(-drive "if=pflash,format=raw,file=$ovmf_vars")
+    fi
+  fi
+
+  extra_args=()
+  if [ -n "${STEAMOS_QEMU_EXTRA_ARGS:-}" ]; then
+    # Intentionally split like a shell command-line for local developer overrides.
+    # shellcheck disable=SC2206
+    extra_args=(${STEAMOS_QEMU_EXTRA_ARGS})
   fi
 
   exec qemu-system-x86_64 \
@@ -139,11 +196,12 @@ run_vm() {
     -m "$memory" \
     "${ovmf_args[@]}" \
     -drive "if=virtio,file=$overlay_qcow2,format=qcow2" \
-    -netdev "user,id=net0,hostfwd=tcp::$ssh_port-:22" \
+    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22" \
     -device virtio-net-pci,netdev=net0 \
     -virtfs "local,path=$repo_root,mount_tag=workspace,security_model=none,id=workspace" \
     -device virtio-vga \
-    -display default
+    -display "$display" \
+    "${extra_args[@]}"
 }
 
 action="${1:-}"
