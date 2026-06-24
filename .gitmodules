@@ -1,0 +1,4 @@
+[submodule "external/MangoHud"]
+	path = external/MangoHud
+	url = https://github.com/JohnnySun/MangoHud.git
+	branch = intel-rapl-gpu-power

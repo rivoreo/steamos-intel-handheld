@@ -10,7 +10,7 @@ action="$1"
 target="$2"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 remote_tmp="/tmp/steamos-intel-handheld-gamescope.$$"
-remote_helper="/etc/rivoreo/bin/steamos-intel-handheld-gamescope-display"
+remote_helper="/opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display"
 remote_service="/etc/systemd/user/steamos-intel-handheld-gamescope-display.service"
 legacy_dropin="/etc/systemd/user/gamescope-session.service.d/10-force-composition.conf"
 export COPYFILE_DISABLE=1
@@ -28,11 +28,12 @@ if [ "$action" = "enable" ]; then
 
   ssh "$target" "
     set -euo pipefail
-    install -d -m 0755 /etc/rivoreo/bin /etc/systemd/user
+    install -d -m 0755 /opt/steamos-intel-handheld/bin /etc/systemd/user
     install -m 0755 '$remote_tmp/data/bin/steamos-intel-handheld-gamescope-display' '$remote_helper'
     install -m 0644 '$remote_tmp/data/systemd/user/steamos-intel-handheld-gamescope-display.service' '$remote_service'
 
-    rm -f /etc/rivoreo/bin/gamescope /etc/rivoreo/bin/gamescope-force-composition-wrapper '$legacy_dropin'
+    rm -f /opt/rivoreo/bin/steamos-intel-handheld-gamescope-display
+    rm -f /etc/rivoreo/bin/gamescope /etc/rivoreo/bin/gamescope-force-composition-wrapper /etc/rivoreo/bin/steamos-intel-handheld-gamescope-display '$legacy_dropin'
     rmdir --ignore-fail-on-non-empty /etc/systemd/user/gamescope-session.service.d 2>/dev/null || true
     rm -rf '$remote_tmp'
 
@@ -56,7 +57,8 @@ else
     fi
 
     rm -f '$remote_service' '$remote_helper'
-    rm -f /etc/rivoreo/bin/gamescope /etc/rivoreo/bin/gamescope-force-composition-wrapper '$legacy_dropin'
+    rm -f /opt/rivoreo/bin/steamos-intel-handheld-gamescope-display
+    rm -f /etc/rivoreo/bin/gamescope /etc/rivoreo/bin/gamescope-force-composition-wrapper /etc/rivoreo/bin/steamos-intel-handheld-gamescope-display '$legacy_dropin'
     rmdir --ignore-fail-on-non-empty /etc/systemd/user/gamescope-session.service.d 2>/dev/null || true
 
     if [ -S /run/user/1000/bus ]; then

@@ -6,7 +6,7 @@ ConditionPathExists=/usr/bin/gamescopectl
 
 [Service]
 Type=oneshot
-ExecStart=/etc/rivoreo/bin/steamos-intel-handheld-gamescope-display apply
+ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display apply
 RemainAfterExit=yes
 TimeoutStartSec=20
 

@@ -39,6 +39,45 @@ The 37W Maximum Turbo Power value is kept as the short-term hardware ceiling,
 not as the default game PL2. A `--pl2-w` override remains available for device
 profiles that need a different burst limit.
 
+## MangoHud sensor note
+
+On SteamOS 3.8.11 build `20260620.1` with kernel
+`6.16.12-valve24-1-neptune-616-gc748040e4712`, the SteamOS session runs
+`mangoapp` as the `deck` user.
+
+CPU temperature is already available to MangoHud through the native `coretemp`
+path. During testing, `mangoapp` held an fd for
+`/sys/devices/platform/coretemp.0/hwmon/hwmon5/temp1_input`, whose label was
+`Package id 0`.
+
+CPU power needed a permissions fix. MangoHud's Linux RAPL backend reads
+`energy_uj` from the `package-0` powercap domain, but the tested SteamOS build
+exposed both package counters as root-only:
+
+- `/sys/class/powercap/intel-rapl:0/energy_uj`
+- `/sys/class/powercap/intel-rapl-mmio:0/energy_uj`
+
+Temporarily granting read access let the `deck` user sample deltas from both
+files, proving this path is sufficient for MangoHud CPU power. The service now
+prepares those package RAPL energy counters at startup.
+
+GPU power uses a separate real counter on this platform. The kernel exposes
+Intel GPU energy as the RAPL `uncore` domain:
+
+- `/sys/class/powercap/intel-rapl:0:1/name`: `uncore`
+- `/sys/class/powercap/intel-rapl:0:1/energy_uj`
+
+That counter matches `perf stat -a -e power/energy-gpu/` and is readable by
+`deck` after the service prepares MangoHud sensor access. The MangoHud fork
+branch used by this project reads this `uncore` counter for Intel `i915`/`xe`
+GPU power.
+
+GPU temperature is still unavailable on the tested SteamOS build. The Intel GPU
+uses the `xe` driver and exposes fdinfo and GT frequency data, but it does not
+expose `/sys/class/drm/renderD128/device/hwmon`. MangoHud mainline expects that
+DRM hwmon directory for Intel GPU temperature, so this project does not fake a
+temperature value from unrelated sensors.
+
 ## Boot note
 
 After reboot, the service started and SteamOS Manager rediscovered the remote.

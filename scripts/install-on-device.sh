@@ -19,17 +19,22 @@ tar -C "$repo_root" -czf - src data pyproject.toml README.md | ssh "$target" "
 
 ssh "$target" "
   set -euo pipefail
-  install -d -m 0755 /etc/rivoreo/bin /etc/rivoreo/steamos-intel-handheld
-  rm -rf /etc/rivoreo/steamos-intel-handheld/src
-  cp -R '$remote_tmp/src' /etc/rivoreo/steamos-intel-handheld/src
+  install -d -m 0755 /opt/steamos-intel-handheld/bin
+  rm -rf /opt/steamos-intel-handheld/src
+  cp -R '$remote_tmp/src' /opt/steamos-intel-handheld/src
 
-  cat >/etc/rivoreo/bin/steamos-intel-handheld-power-control <<'WRAPPER'
+  cat >/opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
-export PYTHONPATH=/etc/rivoreo/steamos-intel-handheld/src
+export PYTHONPATH=/opt/steamos-intel-handheld/src
 exec /usr/bin/python3 -m steamos_intel_handheld.power_control \"\$@\"
 WRAPPER
-  chmod 0755 /etc/rivoreo/bin/steamos-intel-handheld-power-control
+  chmod 0755 /opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control
+  rm -f /opt/rivoreo/bin/steamos-intel-handheld-power-control
+  rm -rf /opt/rivoreo/steamos-intel-handheld
+  rmdir --ignore-fail-on-non-empty /opt/rivoreo/bin /opt/rivoreo 2>/dev/null || true
+  rm -f /etc/rivoreo/bin/steamos-intel-handheld-power-control
+  rm -rf /etc/rivoreo/steamos-intel-handheld
 
   install -d -m 0755 /etc/dbus-1/system.d /etc/steamos-manager/remotes.d /etc/systemd/system
   install -m 0644 '$remote_tmp/data/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf' /etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf

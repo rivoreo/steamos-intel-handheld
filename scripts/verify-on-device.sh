@@ -81,7 +81,50 @@ assert_equals() {
   fi
 }
 
+verify_mangohud_power_sensor() {
+  local sensor_label="$1"
+  local domain_name="$2"
+  local found=0
+  local domain
+  for domain in /sys/class/powercap/intel-rapl*; do
+    [ -d "$domain" ] || continue
+    [ "$(cat "$domain/name" 2>/dev/null || true)" = "$domain_name" ] || continue
+    local energy_file="$domain/energy_uj"
+    [ -e "$energy_file" ] || continue
+    found=1
+
+    local before after delta_uj
+    before="$(runuser -u deck -- bash -lc "cat '$energy_file'" 2>/dev/null || true)"
+    sleep 1
+    after="$(runuser -u deck -- bash -lc "cat '$energy_file'" 2>/dev/null || true)"
+    case "$before:$after" in
+      *[!0-9:]* | :* | *:) continue ;;
+    esac
+
+    delta_uj=$((after - before))
+    echo "$sensor_label readable: $energy_file delta=${delta_uj}uj"
+    return 0
+  done
+
+  if [ "$found" -eq 0 ]; then
+    echo "$sensor_label expected $domain_name energy_uj but none was found" >&2
+  else
+    echo "$sensor_label energy_uj exists but is not readable by deck" >&2
+  fi
+  return 1
+}
+
+verify_mangohud_cpu_power_sensor() {
+  verify_mangohud_power_sensor "MangoHud CPU power sensor" package-0
+}
+
+verify_mangohud_gpu_power_sensor() {
+  verify_mangohud_power_sensor "MangoHud GPU power sensor" uncore
+}
+
 wait_for_service steamos-intel-handheld-power-control.service
+verify_mangohud_cpu_power_sensor
+verify_mangohud_gpu_power_sensor
 
 runuser -u deck -- bash -lc "$USER_ENV systemctl --user is-active --quiet steamos-manager"
 runuser -u deck -- bash -lc "$USER_ENV busctl --user get-property com.steampowered.SteamOSManager1 /com/steampowered/SteamOSManager1 com.steampowered.SteamOSManager1.RemoteInterface1 RemoteInterfaces" | grep -F "com.steampowered.SteamOSManager1.TdpLimit1"

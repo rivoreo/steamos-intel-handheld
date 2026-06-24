@@ -14,6 +14,8 @@ when the interfaces settle.
   Manager remote interface mechanism.
 - Own the system bus name `org.rivoreo.SteamOSManager.PowerControl`.
 - Apply TDP requests to Intel RAPL PL1 and PL2 limits.
+- Prepare package and uncore RAPL `energy_uj` access so MangoHud can report
+  CPU power and Intel integrated GPU power from real kernel counters.
 - Provide install and verification harnesses for real SteamOS devices.
 - Provide an optional gamescope display workaround for color pipeline
   instability on Intel handhelds.
@@ -41,6 +43,11 @@ scripts/verify-on-device.sh root@192.168.128.214
 
 The verifier temporarily sets TDP to 28W, confirms SteamOS Manager, the remote
 service, and RAPL agree, then restores 30W by default.
+
+The installer keeps this project's executable payload under
+`/opt/steamos-intel-handheld`. System configuration remains in the conventional
+locations under `/etc`, including systemd units, D-Bus policy, and SteamOS
+Manager remote definitions.
 
 ## Optional display workaround
 
@@ -96,11 +103,27 @@ hardware ceiling remains 37W. Intel-published Claw 8 AI+ game test points use
 of a generic notebook PL2 multiplier. Future device profiles can override PL2
 with `--pl2-w` when platform thermals require a different burst limit.
 
+The same root service also prepares MangoHud sensor paths. On the tested
+SteamOS 3.8.11 Claw 8 AI+ system, MangoHud runs as `deck` and needs read access
+to `/sys/class/powercap/*/energy_uj` for the `package-0` CPU domain and the
+`uncore` Intel GPU domain. The service grants read access to those real kernel
+energy counters at startup and leaves unrelated RAPL domains private.
+
+MangoHud upstream already recognizes the Intel `xe` driver for fdinfo load, GT
+frequency, and throttling, but on this system the driver does not expose
+`/sys/class/drm/renderD128/device/hwmon`. The MangoHud submodule tracks the
+`JohnnySun/MangoHud:intel-rapl-gpu-power` fork branch, which reads Intel
+`i915`/`xe` GPU power from the RAPL `uncore` energy counter when present. GPU
+temperature is still not faked; it remains 0 until the kernel exposes a real
+Intel GPU temperature sensor.
+
 ## Repository layout
 
 - `src/steamos_intel_handheld/` - Python service code.
 - `data/` - systemd, D-Bus, SteamOS Manager, and optional gamescope integration
   files.
+- `external/MangoHud/` - MangoHud fork branch used for the Intel RAPL GPU
+  power patch; keep `upstream` pointed at flightlessmango for mainline merges.
 - `scripts/` - real-device install, verification, and inventory harness.
 - `tests/` - hardware-free unit tests.
 - `docs/` - design notes, hardware notes, upstreaming plan, and AI harness

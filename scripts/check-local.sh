@@ -8,9 +8,9 @@ python_bin="${PYTHON:-python3}"
 export PYTHONPATH="${PYTHONPATH:-src}"
 
 if command -v ruff >/dev/null 2>&1; then
-  ruff check .
+  ruff check src tests scripts
 else
-  "$python_bin" -m ruff check .
+  "$python_bin" -m ruff check src tests scripts
 fi
 
 "$python_bin" -m pytest

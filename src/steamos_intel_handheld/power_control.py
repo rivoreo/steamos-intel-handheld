@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import stat
 import subprocess
 import sys
 import time
@@ -25,6 +26,7 @@ HANDHELD_PL2_DELTA_W = 2
 HANDHELD_PL2_MAX_W = 32
 DEFAULT_STATE_FILE = "/var/lib/steamos-intel-handheld/tdp_w"
 RAPL_DOMAIN_NAMES = ("intel-rapl:0", "intel-rapl-mmio:0")
+MANGOHUD_RAPL_SENSOR_NAMES = ("package-0", "uncore")
 
 
 class TdpRangeError(ValueError):
@@ -148,6 +150,31 @@ class TdpBackend:
                 pl2_uw = max(pl1_uw, self._limit_for_constraint(limits.pl2_uw, short_term))
                 short_term.power_limit_file.write_text(str(pl2_uw))
 
+    def prepare_mangohud_sensors(self) -> list[Path]:
+        prepared: list[Path] = []
+        read_bits = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
+        for domain in self.mangohud_rapl_sensor_domains():
+            energy_file = domain / "energy_uj"
+            if not energy_file.exists():
+                continue
+            try:
+                current_mode = stat.S_IMODE(energy_file.stat().st_mode)
+                energy_file.chmod(current_mode | read_bits)
+            except OSError:
+                continue
+            prepared.append(energy_file)
+        return prepared
+
+    def mangohud_rapl_sensor_domains(self) -> Iterable[Path]:
+        powercap = self.sysfs_root / "class" / "powercap"
+        if not powercap.exists():
+            return
+        for domain in sorted(powercap.glob("intel-rapl*")):
+            if not domain.is_dir():
+                continue
+            if self._powercap_domain_name(domain) in MANGOHUD_RAPL_SENSOR_NAMES:
+                yield domain
+
     def rapl_domains(self) -> Iterable[Path]:
         powercap = self.sysfs_root / "class" / "powercap"
         for domain_name in RAPL_DOMAIN_NAMES:
@@ -216,6 +243,12 @@ class TdpBackend:
             power_limit_file=power_limit_file,
             max_power_file=max_power_file if max_power_file.exists() else None,
         )
+
+    def _powercap_domain_name(self, domain: Path) -> str | None:
+        try:
+            return (domain / "name").read_text().strip()
+        except OSError:
+            return None
 
     def _limit_for_constraint(self, limit_uw: int, constraint: RaplConstraint) -> int:
         max_power_uw = self._constraint_max_power_uw(constraint)
@@ -290,15 +323,7 @@ async def serve(args: argparse.Namespace) -> None:
     from dbus_next.constants import BusType, PropertyAccess
     from dbus_next.service import ServiceInterface, dbus_property
 
-    backend = TdpBackend(
-        min_w=args.min_w,
-        max_w=args.max_w,
-        state_file=args.state_file,
-        apply_rapl=args.apply_rapl,
-        sysfs_root=args.sysfs_root,
-        pl2_w=args.pl2_w,
-        short_limit_max_w=args.short_limit_max_w,
-    )
+    backend = build_backend(args)
     if args.restore_on_start and args.apply_rapl:
         restored = backend.restore_state_to_rapl()
         if restored is not None:
@@ -349,6 +374,28 @@ async def serve(args: argparse.Namespace) -> None:
     await asyncio.Future()
 
 
+def build_backend(args: argparse.Namespace) -> TdpBackend:
+    return TdpBackend(
+        min_w=args.min_w,
+        max_w=args.max_w,
+        state_file=args.state_file,
+        apply_rapl=args.apply_rapl,
+        sysfs_root=args.sysfs_root,
+        pl2_w=args.pl2_w,
+        short_limit_max_w=args.short_limit_max_w,
+    )
+
+
+def prepare_mangohud_sensors_from_args(args: argparse.Namespace) -> list[Path]:
+    prepared = build_backend(args).prepare_mangohud_sensors()
+    if prepared:
+        paths = ", ".join(str(path) for path in prepared)
+        print(f"prepared MangoHud sensor access for {paths}", flush=True, file=sys.stderr)
+    else:
+        print("no MangoHud RAPL energy sensors prepared", flush=True, file=sys.stderr)
+    return prepared
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -366,6 +413,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sysfs-root", default="/sys")
     parser.add_argument("--pl2-w", type=int)
     parser.add_argument("--apply-rapl", action="store_true")
+    parser.add_argument("--prepare-mangohud-sensors", action="store_true")
     parser.add_argument("--restore-on-start", action="store_true")
     parser.add_argument("--user", default="deck")
     parser.add_argument("--wait-timeout-s", type=int, default=600)
@@ -375,6 +423,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if args.prepare_mangohud_sensors:
+        prepare_mangohud_sensors_from_args(args)
     if args.command == "wait-and-serve":
         wait_for_user_steamos_manager(args.user, args.wait_timeout_s, args.wait_interval_s)
     asyncio.run(serve(args))
