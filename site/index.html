@@ -23,7 +23,6 @@
         --primary-strong: #2563eb;
         --success: #22c55e;
         --warning: #f59e0b;
-        --info: #38bdf8;
         --shadow: rgba(2, 6, 23, 0.36);
         font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         line-height: 1.5;
@@ -133,7 +132,6 @@
       }
 
       .nav a,
-      .pill,
       .language-switcher {
         display: inline-flex;
         align-items: center;
@@ -147,8 +145,7 @@
         text-decoration: none;
       }
 
-      .nav a,
-      .pill {
+      .nav a {
         gap: 8px;
         padding: 8px 12px;
       }
@@ -209,11 +206,6 @@
       .status-dot.warning {
         background: var(--warning);
         box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.13);
-      }
-
-      .status-dot.safe {
-        background: var(--info);
-        box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.13);
       }
 
       .hero {
@@ -346,19 +338,9 @@
         white-space: nowrap;
       }
 
-      .status.live {
-        border: 1px solid rgba(34, 197, 94, 0.38);
-        color: #bbf7d0;
-      }
-
       .status.waiting {
         border: 1px solid rgba(245, 158, 11, 0.35);
         color: #fde68a;
-      }
-
-      .status.safe {
-        border: 1px solid rgba(56, 189, 248, 0.35);
-        color: #bae6fd;
       }
 
       .code-block {
@@ -587,8 +569,7 @@
         }
 
         .language-switcher,
-        .nav a,
-        .pill {
+        .nav a {
           flex: 1 1 auto;
           justify-content: center;
         }
@@ -666,11 +647,10 @@
     <div class="shell">
       <header class="topbar" aria-label="Site header">
         <div class="brand">
-          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 5h14"></path><path d="M7 5v9a5 5 0 0 0 10 0V5"></path><path d="M9 19h6"></path><path d="M12 10v9"></path><path d="M9.5 10h5"></path></svg></span>
+          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect class="handheld-body" x="3.5" y="6.5" width="17" height="11" rx="4"></rect><rect class="chip-core" x="9" y="8.75" width="6" height="6.5" rx="1.4"></rect><path d="M10.5 5v1.5"></path><path d="M13.5 5v1.5"></path><path d="M10.5 17.5V19"></path><path d="M13.5 17.5V19"></path><path d="M7 10.5v3"></path><path d="M17 10.5v3"></path><path d="M5.5 12h3"></path><path d="M15.5 12h3"></path></svg></span>
           <span data-i18n="brand.name">steamos-intel-handheld</span>
         </div>
         <nav class="nav" aria-label="Primary navigation">
-          <span class="pill"><span class="status-dot" aria-hidden="true"></span><span data-i18n="status.pagesLive">Pages live</span></span>
           <div class="language-switcher" aria-label="Language">
             <svg class="language-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h9"></path><path d="M9 3v2"></path><path d="M6 12c2.4-1.6 4-4 4.7-7"></path><path d="M12 12c-1.7-.8-3.2-2.1-4.4-3.8"></path><path d="M15 19l3-8 3 8"></path><path d="M16.1 16h3.8"></path></svg>
             <div class="language-options" role="group" aria-label="Language options">
@@ -704,8 +684,8 @@
           <aside class="install-card" aria-labelledby="quick-install-title">
             <div>
               <div class="card-heading">
-                <h2 id="quick-install-title" data-i18n="preview.title">Bootstrap preview</h2>
-                <span class="status waiting"><span class="status-dot warning" aria-hidden="true"></span><span data-i18n="status.packagesNotPublished">Packages not published</span></span>
+                <h2 id="quick-install-title" data-i18n="preview.title">Install preview</h2>
+                <span class="status waiting"><span class="status-dot warning" aria-hidden="true"></span><span data-i18n="status.packagesNotReleased">Packages not released</span></span>
               </div>
               <div class="flow-map" aria-label="System integration path">
                 <div class="flow-row">
@@ -739,7 +719,7 @@
               </div>
             </div>
             <div class="code-block">
-              <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.preview">safe preview</span></div>
+              <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.preview">release status check</span></div>
               <pre><code>curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
             </div>
           </aside>
@@ -821,8 +801,8 @@
           <div class="install-layout">
             <article class="install-panel">
               <div class="card-heading">
-                <h3 data-i18n="install.bootstrap.title">Bootstrap command</h3>
-                <span class="status safe"><span class="status-dot safe" aria-hidden="true"></span><span data-i18n="status.safePlaceholder">Safe placeholder</span></span>
+                <h3 data-i18n="install.bootstrap.title">Preview command</h3>
+                <span class="status waiting"><span class="status-dot warning" aria-hidden="true"></span><span data-i18n="status.notInstallable">Not installable yet</span></span>
               </div>
               <div class="code-block">
                 <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.target">SteamOS target</span></div>
@@ -853,7 +833,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
       </main>
 
       <footer>
-        <span data-i18n="footer.status">Website live. Packages not published yet.</span>
+        <span data-i18n="footer.status">holo.libz.so / rivoreo-steamos</span>
         <a href="https://github.com/rivoreo/steamos-intel-handheld">github.com/rivoreo/steamos-intel-handheld</a>
       </footer>
     </div>
@@ -864,16 +844,15 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "meta.title": "SteamOS support for Intel handhelds",
           "meta.description": "steamos-intel-handheld is a SteamOS support layer for Intel handheld PCs, distributed through the future rivoreo-steamos pacman repository.",
           "brand.name": "steamos-intel-handheld",
-          "status.pagesLive": "Pages live",
-          "status.packagesNotPublished": "Packages not published",
-          "status.safePlaceholder": "Safe placeholder",
+          "status.packagesNotReleased": "Packages not released",
+          "status.notInstallable": "Not installable yet",
           "nav.install": "Install",
           "nav.github": "GitHub",
           "hero.title": "SteamOS support for Intel handhelds",
           "hero.lead": "A small support layer for Intel handheld PCs running SteamOS. It keeps TDP control, MangoHud sensor access, package delivery, and hardware verification in one auditable repository instead of patching SteamOS Manager in place.",
           "hero.primaryCta": "View install path",
           "hero.secondaryCta": "Read the source",
-          "preview.title": "Bootstrap preview",
+          "preview.title": "Install preview",
           "flow.ui.title": "SteamOS UI",
           "flow.ui.text": "TDP request",
           "flow.manager.title": "SteamOS Manager",
@@ -885,7 +864,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "flow.hud.title": "MangoHud",
           "flow.hud.text": "sensor visibility",
           "code.shell": "Shell",
-          "code.preview": "safe preview",
+          "code.preview": "release status check",
           "code.target": "SteamOS target",
           "code.planned": "planned",
           "answers.title": "What this repository explains.",
@@ -913,29 +892,28 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "capability.verify.title": "Hardware verification harness",
           "capability.verify.text": "Scripts collect device data, verify counters, host pacman repo paths, and record results from real hardware.",
           "install.title": "Install path.",
-          "install.lead": "The endpoint is live now. The installer stays inert until signed packages and repository databases are published.",
-          "install.bootstrap.title": "Bootstrap command",
+          "install.lead": "Packages are not released yet, so this is not an installable repository today. The command below only checks the release status.",
+          "install.bootstrap.title": "Preview command",
           "install.bootstrap.note": "Current behavior: the script prints package status and exits without changing the system.",
           "install.pacman.title": "Future pacman stanza",
           "install.pacman.item1": "Packages will be signed before this repo becomes active.",
           "install.pacman.item2": "GitHub Pages serves this site from rivoreo/steamos-intel-handheld.",
           "install.pacman.item3": "DNS target: holo.libz.so CNAME rivoreo.github.io.",
-          "footer.status": "Website live. Packages not published yet."
+          "footer.status": "holo.libz.so / rivoreo-steamos"
         },
         "zh-CN": {
           "meta.title": "面向 Intel 掌机的 SteamOS 支持层",
           "meta.description": "steamos-intel-handheld 是面向 Intel 掌机 PC 的 SteamOS 支持层，将通过未来的 rivoreo-steamos pacman 软件源分发。",
           "brand.name": "steamos-intel-handheld",
-          "status.pagesLive": "页面已上线",
-          "status.packagesNotPublished": "软件包尚未发布",
-          "status.safePlaceholder": "安全占位",
+          "status.packagesNotReleased": "软件包尚未发布",
+          "status.notInstallable": "暂时不可安装",
           "nav.install": "安装",
           "nav.github": "GitHub",
           "hero.title": "面向 Intel 掌机的 SteamOS 支持层",
           "hero.lead": "这是一个给运行 SteamOS 的 Intel 掌机 PC 使用的小型支持层。它把 TDP 控制、MangoHud 传感器访问、软件包分发和硬件验证放在一个可审计的仓库里，而不是直接修改系统里的 SteamOS Manager。",
           "hero.primaryCta": "查看安装路径",
           "hero.secondaryCta": "阅读源码",
-          "preview.title": "引导脚本预览",
+          "preview.title": "安装预览",
           "flow.ui.title": "SteamOS 界面",
           "flow.ui.text": "TDP 请求",
           "flow.manager.title": "SteamOS Manager",
@@ -947,7 +925,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "flow.hud.title": "MangoHud",
           "flow.hud.text": "传感器可见性",
           "code.shell": "Shell",
-          "code.preview": "安全预览",
+          "code.preview": "发布状态检查",
           "code.target": "SteamOS 目标机",
           "code.planned": "计划中",
           "answers.title": "这个仓库说明什么。",
@@ -975,29 +953,28 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "capability.verify.title": "硬件验证脚本",
           "capability.verify.text": "脚本会收集设备数据、验证计数器、检查 pacman 源路径，并记录真实硬件结果。",
           "install.title": "安装路径。",
-          "install.lead": "端点现在已经上线。安装器会保持惰性，直到签名软件包和软件源数据库发布。",
-          "install.bootstrap.title": "Bootstrap 命令",
+          "install.lead": "软件包尚未发布，所以当前还不是可安装的软件源。下面的命令只用于检查发布状态。",
+          "install.bootstrap.title": "预览命令",
           "install.bootstrap.note": "当前行为：脚本会打印软件包状态并退出，不会修改系统。",
           "install.pacman.title": "未来的 pacman 配置",
           "install.pacman.item1": "软件包会在该源启用前完成签名。",
           "install.pacman.item2": "GitHub Pages 从 rivoreo/steamos-intel-handheld 提供此站点。",
           "install.pacman.item3": "DNS 目标：holo.libz.so CNAME rivoreo.github.io。",
-          "footer.status": "网站已上线。软件包尚未发布。"
+          "footer.status": "holo.libz.so / rivoreo-steamos"
         },
         "zh-TW": {
           "meta.title": "針對 Intel 掌機的 SteamOS 支援層",
           "meta.description": "steamos-intel-handheld 是針對 Intel 掌機 PC 的 SteamOS 支援層，將透過未來的 rivoreo-steamos pacman 套件庫提供。",
           "brand.name": "steamos-intel-handheld",
-          "status.pagesLive": "頁面已上線",
-          "status.packagesNotPublished": "套件尚未釋出",
-          "status.safePlaceholder": "安全佔位",
+          "status.packagesNotReleased": "套件尚未釋出",
+          "status.notInstallable": "尚不可安裝",
           "nav.install": "安裝",
           "nav.github": "GitHub",
           "hero.title": "針對 Intel 掌機的 SteamOS 支援層",
           "hero.lead": "這是一個針對執行 SteamOS 的 Intel 掌機 PC 的小型支援層。它把 TDP 控制、MangoHud 感測器存取、套件分發與硬體驗證集中在一個可稽核的儲存庫中，而不是直接修改系統中的 SteamOS Manager。",
           "hero.primaryCta": "查看安裝路徑",
           "hero.secondaryCta": "閱讀原始碼",
-          "preview.title": "引導腳本預覽",
+          "preview.title": "安裝預覽",
           "flow.ui.title": "SteamOS 介面",
           "flow.ui.text": "TDP 請求",
           "flow.manager.title": "SteamOS Manager",
@@ -1009,7 +986,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "flow.hud.title": "MangoHud",
           "flow.hud.text": "感測器可見性",
           "code.shell": "Shell",
-          "code.preview": "安全預覽",
+          "code.preview": "釋出狀態檢查",
           "code.target": "SteamOS 目標機",
           "code.planned": "計畫中",
           "answers.title": "這個儲存庫說明什麼。",
@@ -1037,14 +1014,14 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "capability.verify.title": "硬體驗證腳本",
           "capability.verify.text": "腳本會收集裝置資料、驗證計數器、檢查 pacman 套件庫路徑，並記錄真實硬體結果。",
           "install.title": "安裝路徑。",
-          "install.lead": "端點現在已經上線。安裝程式會保持待命，直到簽名套件和套件庫資料庫釋出。",
-          "install.bootstrap.title": "Bootstrap 命令",
+          "install.lead": "套件尚未釋出，所以目前還不是可安裝的套件庫。下方命令只用來檢查釋出狀態。",
+          "install.bootstrap.title": "預覽命令",
           "install.bootstrap.note": "目前行為：腳本會輸出套件狀態並結束，不會修改系統。",
           "install.pacman.title": "未來的 pacman 設定",
           "install.pacman.item1": "套件會在此套件庫啟用前完成簽名。",
           "install.pacman.item2": "GitHub Pages 從 rivoreo/steamos-intel-handheld 提供此網站。",
           "install.pacman.item3": "DNS 目標：holo.libz.so CNAME rivoreo.github.io。",
-          "footer.status": "網站已上線。套件尚未釋出。"
+          "footer.status": "holo.libz.so / rivoreo-steamos"
         }
       };
 

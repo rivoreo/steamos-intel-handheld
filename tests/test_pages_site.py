@@ -40,9 +40,12 @@ def test_pages_site_explains_capabilities_and_pending_release_state() -> None:
     assert "SteamOS Manager TDP remote" in index
     assert "Intel RAPL power path" in index
     assert "MangoHud sensor access" in index
-    assert "Pages live" in index
-    assert "Packages not published" in index
+    assert "Packages not released" in index
+    assert "Not installable yet" in index
     assert "Packages pending" not in index
+    assert "Pages live" not in index
+    assert "Website live" not in index
+    assert "Safe placeholder" not in index
     assert "exits without changing the system" in index
 
 
@@ -52,6 +55,8 @@ def test_pages_site_has_visible_brand_mark_and_language_switcher() -> None:
     brand_end = index.index("</span>", brand_start)
     brand_markup = index[brand_start:brand_end]
     assert "<svg" in brand_markup
+    assert 'class="handheld-body"' in brand_markup
+    assert 'class="chip-core"' in brand_markup
     assert "aria-hidden=\"true\"" in brand_markup
     assert 'class="language-switcher"' in index
     assert 'data-language-option="en"' in index
@@ -84,9 +89,11 @@ def test_pages_site_uses_taiwan_zh_tw_wording() -> None:
     assert "針對 Intel 掌機的 SteamOS 支援層" in zh_tw_text
     assert "套件庫" in zh_tw_text
     assert "套件尚未釋出" in zh_tw_text
-    assert "安全佔位" in zh_tw_text
+    assert "尚不可安裝" in zh_tw_text
     assert "裝置" in zh_tw_text
     assert "輸出套件狀態" in zh_tw_text
+    assert "頁面已上線" not in zh_tw_text
+    assert "安全佔位" not in zh_tw_text
     assert "面向" not in zh_tw_text
     assert "軟體源" not in zh_tw_text
     assert "發布" not in zh_tw_text
