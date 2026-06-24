@@ -79,6 +79,13 @@ expose `/sys/class/drm/renderD128/device/hwmon`. MangoHud mainline expects that
 DRM hwmon directory for Intel GPU temperature, so this project does not fake a
 temperature value from unrelated sensors.
 
+On the tested Lunar Lake integrated GPU, `/sys/class/drm/renderD128/device` and
+`/sys/class/drm/card0/device` contain no `hwmon` temperature inputs. The current
+`xe_hwmon` temperature path only becomes useful when the kernel registers a DRM
+hwmon `temp*_input` for the GPU device. Generic system sensors such as
+`coretemp`, `acpitz`, NVMe, or Wi-Fi thermal zones are deliberately not used as
+GPU temperature substitutes.
+
 ## Boot note
 
 After reboot, the service started and SteamOS Manager rediscovered the remote.

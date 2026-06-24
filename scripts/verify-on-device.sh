@@ -122,9 +122,30 @@ verify_mangohud_gpu_power_sensor() {
   verify_mangohud_power_sensor "MangoHud GPU power sensor" uncore
 }
 
+report_mangohud_gpu_temperature_sensor() {
+  local found=0
+  local drm_device
+  for drm_device in /sys/class/drm/renderD*/device /sys/class/drm/card*/device; do
+    [ -d "$drm_device" ] || continue
+    local temp_file
+    while IFS= read -r temp_file; do
+      found=1
+      local label_file="${temp_file%_input}_label"
+      local label
+      label="$(cat "$label_file" 2>/dev/null || true)"
+      echo "MangoHud GPU temperature sensor: $temp_file${label:+ label=$label}"
+    done < <(find "$drm_device" -maxdepth 4 -path "*/hwmon*/*" -name "temp*_input" -print 2>/dev/null | sort)
+  done
+
+  if [ "$found" -eq 0 ]; then
+    echo "MangoHud GPU temperature sensor unavailable: no DRM hwmon temp input is exposed"
+  fi
+}
+
 wait_for_service steamos-intel-handheld-power-control.service
 verify_mangohud_cpu_power_sensor
 verify_mangohud_gpu_power_sensor
+report_mangohud_gpu_temperature_sensor
 
 runuser -u deck -- bash -lc "$USER_ENV systemctl --user is-active --quiet steamos-manager"
 runuser -u deck -- bash -lc "$USER_ENV busctl --user get-property com.steampowered.SteamOSManager1 /com/steampowered/SteamOSManager1 com.steampowered.SteamOSManager1.RemoteInterface1 RemoteInterfaces" | grep -F "com.steampowered.SteamOSManager1.TdpLimit1"

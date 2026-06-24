@@ -115,8 +115,9 @@ frequency, and throttling, but on this system the driver does not expose
 `/sys/class/drm/renderD128/device/hwmon`. The MangoHud submodule tracks the
 `JohnnySun/MangoHud:intel-rapl-gpu-power` fork branch, which reads Intel
 `i915`/`xe` GPU power from the RAPL `uncore` energy counter when present. GPU
-temperature is still not faked; it remains 0 until the kernel exposes a real
-Intel GPU temperature sensor.
+temperature is still not faked. It remains 0 until the `xe` kernel driver
+exposes a real DRM hwmon temperature input such as
+`/sys/class/drm/renderD128/device/hwmon/hwmon*/temp*_input`.
 
 ## Repository layout
 

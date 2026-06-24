@@ -63,6 +63,16 @@ def test_device_verifier_checks_mangohud_gpu_power_sensor_access():
     assert "energy_uj" in script
 
 
+def test_device_verifier_reports_gpu_temperature_sensor_availability():
+    script = (ROOT / "scripts/verify-on-device.sh").read_text()
+
+    assert "report_mangohud_gpu_temperature_sensor" in script
+    assert "MangoHud GPU temperature sensor" in script
+    assert "/sys/class/drm/renderD*" in script
+    assert "temp*_input" in script
+    assert "no DRM hwmon temp input is exposed" in script
+
+
 def test_gamescope_workaround_harness_can_enable_and_disable():
     script = (ROOT / "scripts/configure-gamescope-display-workaround.sh").read_text()
 
