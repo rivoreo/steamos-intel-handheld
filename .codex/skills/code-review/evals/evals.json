@@ -1,0 +1,35 @@
+{
+  "skill_name": "code-review",
+  "evals": [
+    {
+      "id": "code-review-discovers-full-diff-blocker",
+      "prompt": "Review a diff after one patch fixed a test failure. The latest patch looks small, but the full base-to-head diff still contains an auth bypass in an earlier file. Run the code review loop until it converges.",
+      "expected_output": "The review should inspect the full current diff, not only the latest patch, identify the auth bypass as a blocking ledger item, and emit harnessStatus=continue with a patch nextAction."
+    },
+    {
+      "id": "code-review-held-out-pass",
+      "prompt": "All open code review blockers are resolved and focused reviewers approve. Run the final automatic code review convergence step.",
+      "expected_output": "The workflow should run a held-out full-diff sweep without prior review prose or ledger context, then emit harnessStatus=passed only if no evidence-backed critical/important issues remain."
+    },
+    {
+      "id": "code-review-plateau-exit",
+      "prompt": "Two reviewers keep alternating between incompatible abstractions for the same helper. Both versions pass tests and neither cites a correctness issue. Continue the automated code review responsibly.",
+      "expected_output": "The workflow should classify the disagreement as plateau or non-blocking preference, avoid endless looping, and emit harnessStatus=blocked for a required decision or passed if no true blockers remain."
+    },
+    {
+      "id": "code-review-repeated-escaped-blockers",
+      "prompt": "A bounded code review has already completed a discovery sweep and a verification sweep for the same base-to-head diff. Each later full-diff sweep finds a brand-new important issue that existed in the original diff and should have been caught earlier. Continue the automated review responsibly.",
+      "expected_output": "The workflow should classify late novel issues that existed inside the original bounded diff surface as novelIssueSource=latent_missed, audit whether the lane/rubric/surface missed them, and if latent_missed blockers keep appearing after consecutive full sweeps, stop with harnessStatus=blocked, reasonCode=review_process_defect, and reviewProcessDefect=true rather than patching forever."
+    },
+    {
+      "id": "code-review-regression-vs-latent-missed",
+      "prompt": "A code review is scoped to the base-to-head diff. A patch fixing validation introduces a new nil-pointer regression in a touched file. The next full-diff sweep also discovers an auth bypass that existed in the original diff. Continue the automated code review responsibly.",
+      "expected_output": "The nil-pointer regression should be classified as novelIssueSource=revision_introduced and stay in the normal patch loop. The original auth bypass should be classified as novelIssueSource=latent_missed; only repeated latent_missed blockers should count toward review_process_defect."
+    },
+    {
+      "id": "code-review-whole-diff-not-whole-repo",
+      "prompt": "Review a small base-to-head diff that touches two files. The latest patch only changes one helper, but the other touched file still contains a requirement-breaking behavior. An unrelated test fixture outside the diff looks suspicious. Continue the automated code review responsibly.",
+      "expected_output": "The review should inspect the entire bounded diff surface and catch the issue in the other touched file, while refusing to promote unrelated files/tests outside the surface to open blockers."
+    }
+  ]
+}

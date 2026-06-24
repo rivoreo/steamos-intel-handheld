@@ -1,0 +1,35 @@
+{
+  "skill_name": "plan-review",
+  "evals": [
+    {
+      "id": "plan-review-discovers-missed-blockers",
+      "prompt": "Review a technical design for a new authenticated API. The first pass found an i18n gap, then the author fixed it, but the plan still omits ownership checks and retry behavior. Run the plan review loop until it converges.",
+      "expected_output": "The review should keep using fresh full sweeps after revisions, discover the remaining ownership/retry blockers, track them in an Issue Ledger, and return harnessStatus=continue until blockers are resolved."
+    },
+    {
+      "id": "plan-review-held-out-pass",
+      "prompt": "A plan has passed all normal reviewers after two revisions. Run the final convergence step without giving the new reviewer the previous Issue Ledger.",
+      "expected_output": "The workflow should run a held-out sweep over the full final plan, pass only if it finds no evidence-backed critical/major blockers, and emit harnessStatus=passed with heldOutSweepComplete=true."
+    },
+    {
+      "id": "plan-review-plateau-exit",
+      "prompt": "A reviewer keeps reopening the same product-priority objection after multiple revisions, but the plan cannot decide pricing tier without product input. Continue the automated plan review responsibly.",
+      "expected_output": "The workflow should detect plateau or needs_decision, stop the automatic loop with harnessStatus=blocked, and include the unresolved ledger item and required decision instead of running indefinitely."
+    },
+    {
+      "id": "plan-review-repeated-escaped-blockers",
+      "prompt": "A bounded plan review has already completed a discovery sweep and a verification sweep. Each subsequent fresh full sweep finds a brand-new critical blocker that existed from the start and should have been caught earlier. Continue the automated review responsibly.",
+      "expected_output": "The workflow should classify late novel blockers that existed inside the original bounded surface as novelIssueSource=latent_missed, audit whether the review surface/rubric missed them, and if latent_missed blockers keep appearing after consecutive full sweeps, stop with harnessStatus=blocked, reasonCode=review_process_defect, and reviewProcessDefect=true rather than continuing forever."
+    },
+    {
+      "id": "plan-review-revision-introduced-vs-latent-missed",
+      "prompt": "A plan review is scoped to one technical design document. Iteration 2 fixes auth but introduces a new migration rollback gap in the same document. Iteration 3 finds a different critical API ownership gap that was already present in the original document. Continue the automated plan review responsibly.",
+      "expected_output": "The new rollback gap should be classified as novelIssueSource=revision_introduced and remain in the normal revise loop. The original ownership gap should be classified as novelIssueSource=latent_missed; only repeated latent_missed blockers should count toward review_process_defect."
+    },
+    {
+      "id": "plan-review-whole-document-not-whole-repo",
+      "prompt": "Review only docs/td/new-feature.md. The changed section is small, but an older section in the same document contradicts the acceptance criteria. Another unrelated YAML workflow file has a possible typo. Continue the automated plan review responsibly.",
+      "expected_output": "The review should inspect the entire bounded document and catch the contradiction in older content, while refusing to promote the unrelated YAML workflow issue to an open blocker because it is outside the bounded review surface."
+    }
+  ]
+}
