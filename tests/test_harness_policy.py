@@ -30,3 +30,10 @@ def test_harness_has_a_single_local_verification_command():
     assert "ruff check" in harness
     assert "pytest" in harness
     assert "compileall" in harness
+
+
+def test_github_ci_checks_out_mangohud_submodule():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+
+    assert "uses: actions/checkout@v4" in workflow
+    assert "submodules: recursive" in workflow
