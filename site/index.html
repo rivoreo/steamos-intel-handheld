@@ -23,6 +23,7 @@
         --primary-strong: #2563eb;
         --success: #22c55e;
         --warning: #f59e0b;
+        --info: #38bdf8;
         --shadow: rgba(2, 6, 23, 0.36);
         font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         line-height: 1.5;
@@ -101,12 +102,26 @@
       }
 
       .brand-mark {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
         width: 30px;
         height: 30px;
         border: 1px solid rgba(59, 130, 246, 0.85);
         border-radius: 8px;
         background: linear-gradient(135deg, rgba(59, 130, 246, 0.24), rgba(34, 197, 94, 0.1));
         box-shadow: 0 10px 30px var(--shadow);
+      }
+
+      .brand-mark svg {
+        width: 20px;
+        height: 20px;
+        fill: none;
+        stroke: #dbeafe;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
       }
 
       .nav {
@@ -118,12 +133,11 @@
       }
 
       .nav a,
-      .pill {
+      .pill,
+      .language-switcher {
         display: inline-flex;
         align-items: center;
-        gap: 8px;
         min-height: 36px;
-        padding: 8px 12px;
         border: 1px solid rgba(148, 163, 184, 0.24);
         border-radius: 8px;
         background: rgba(15, 23, 42, 0.56);
@@ -133,11 +147,73 @@
         text-decoration: none;
       }
 
+      .nav a,
+      .pill {
+        gap: 8px;
+        padding: 8px 12px;
+      }
+
+      .language-switcher {
+        gap: 6px;
+        padding: 5px 6px 5px 9px;
+      }
+
+      .language-icon {
+        width: 17px;
+        height: 17px;
+        fill: none;
+        stroke: var(--muted);
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .language-options {
+        display: inline-flex;
+        gap: 2px;
+      }
+
+      .language-option {
+        min-width: 34px;
+        min-height: 26px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--subtle);
+        cursor: pointer;
+        font: inherit;
+        font-size: 0.75rem;
+        font-weight: 800;
+        letter-spacing: 0;
+        transition: color 180ms ease, background-color 180ms ease;
+      }
+
+      .language-option:hover {
+        background: rgba(59, 130, 246, 0.16);
+        color: #dbeafe;
+      }
+
+      .language-option[aria-pressed="true"] {
+        background: rgba(59, 130, 246, 0.28);
+        color: #eff6ff;
+      }
+
       .status-dot {
         width: 8px;
         height: 8px;
         border-radius: 999px;
+        background: var(--success);
+        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
+      }
+
+      .status-dot.warning {
         background: var(--warning);
+        box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.13);
+      }
+
+      .status-dot.safe {
+        background: var(--info);
+        box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.13);
       }
 
       .hero {
@@ -153,22 +229,27 @@
       .info-card,
       .capability,
       .install-panel {
-        border: 1px solid rgba(148, 163, 184, 0.2);
-        border-radius: 8px;
-        background: rgba(17, 24, 39, 0.74);
-        box-shadow: 0 24px 70px var(--shadow);
+        min-width: 0;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        background: linear-gradient(180deg, rgba(30, 41, 59, 0.72), rgba(15, 23, 42, 0.82));
+        box-shadow: 0 24px 80px var(--shadow);
       }
 
       .hero-copy {
-        padding: clamp(24px, 4vw, 42px);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-height: 430px;
+        padding: clamp(26px, 5vw, 54px);
+        border-radius: 8px;
       }
 
       .eyebrow {
         margin: 0 0 16px;
-        color: #93c5fd;
-        font-size: 0.8rem;
+        color: #bfdbfe;
+        font-size: 0.82rem;
         font-weight: 800;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.14em;
         text-transform: uppercase;
       }
 
@@ -176,29 +257,30 @@
       h2,
       h3,
       p {
-        margin-top: 0;
+        overflow-wrap: anywhere;
       }
 
       h1 {
-        max-width: 760px;
-        margin-bottom: 18px;
-        font-size: clamp(2.45rem, 8vw, 5rem);
-        line-height: 0.98;
+        max-width: 780px;
+        margin: 0;
+        color: var(--text);
+        font-size: 5rem;
+        line-height: 0.96;
         letter-spacing: 0;
       }
 
       .lead {
-        max-width: 720px;
-        margin-bottom: 26px;
+        max-width: 700px;
+        margin: 24px 0 0;
         color: var(--muted);
-        font-size: clamp(1.05rem, 2vw, 1.28rem);
+        font-size: 1.2rem;
       }
 
       .hero-actions {
         display: flex;
-        flex-wrap: wrap;
         gap: 12px;
-        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 32px;
       }
 
       .button {
@@ -207,31 +289,41 @@
         justify-content: center;
         min-height: 44px;
         padding: 10px 16px;
-        border: 1px solid rgba(59, 130, 246, 0.8);
+        border: 1px solid rgba(96, 165, 250, 0.7);
         border-radius: 8px;
-        background: var(--primary-strong);
+        background: var(--primary);
         color: #eff6ff;
         font-weight: 800;
+        line-height: 1.25;
         text-decoration: none;
+        text-align: center;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        transition: transform 180ms ease, background-color 180ms ease, border-color 180ms ease;
+      }
+
+      .button:hover {
+        background: var(--primary-strong);
+        color: #eff6ff;
       }
 
       .button.secondary {
-        border-color: rgba(148, 163, 184, 0.34);
-        background: rgba(15, 23, 42, 0.64);
-        color: var(--muted);
+        background: rgba(15, 23, 42, 0.56);
+        color: #dbeafe;
       }
 
       .install-card {
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        min-height: 100%;
-        padding: 22px;
+        min-height: 430px;
+        padding: 24px;
+        border-radius: 8px;
       }
 
       .card-heading {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
         gap: 14px;
         margin-bottom: 18px;
@@ -248,12 +340,25 @@
         align-items: center;
         gap: 8px;
         padding: 5px 9px;
-        border: 1px solid rgba(245, 158, 11, 0.35);
         border-radius: 999px;
-        color: #fde68a;
         font-size: 0.75rem;
         font-weight: 800;
         white-space: nowrap;
+      }
+
+      .status.live {
+        border: 1px solid rgba(34, 197, 94, 0.38);
+        color: #bbf7d0;
+      }
+
+      .status.waiting {
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        color: #fde68a;
+      }
+
+      .status.safe {
+        border: 1px solid rgba(56, 189, 248, 0.35);
+        color: #bae6fd;
       }
 
       .code-block {
@@ -270,17 +375,21 @@
 
       .flow-row {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+        grid-template-columns: 1fr auto 1fr;
         gap: 8px;
         align-items: center;
       }
 
+      .flow-row.single {
+        grid-template-columns: 1fr;
+      }
+
       .flow-node {
-        min-height: 50px;
-        padding: 10px;
-        border: 1px solid rgba(59, 130, 246, 0.28);
+        min-height: 72px;
+        padding: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
         border-radius: 8px;
-        background: rgba(2, 6, 23, 0.55);
+        background: rgba(15, 23, 42, 0.72);
       }
 
       .flow-node strong,
@@ -289,41 +398,42 @@
       }
 
       .flow-node strong {
-        font-size: 0.88rem;
+        color: #f8fafc;
+        font-size: 0.92rem;
       }
 
       .flow-node span {
+        margin-top: 4px;
         color: var(--subtle);
-        font-size: 0.76rem;
+        font-size: 0.78rem;
       }
 
       .flow-arrow {
         color: #93c5fd;
-        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-weight: 800;
+        font-weight: 900;
       }
 
       .code-label {
         display: flex;
+        align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 10px 14px;
-        border-bottom: 1px solid rgba(51, 65, 85, 0.82);
+        padding: 9px 12px;
+        border-bottom: 1px solid rgba(51, 65, 85, 0.94);
         color: var(--subtle);
         font-size: 0.75rem;
-        font-weight: 800;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
+        font-weight: 700;
       }
 
-      .code-block pre {
-        padding: 14px;
+      pre code {
+        display: block;
+        padding: 14px 12px;
         color: #dbeafe;
         font-size: 0.86rem;
       }
 
       .note {
-        margin: 16px 0 0;
+        margin: 14px 0 0;
         color: var(--subtle);
         font-size: 0.92rem;
       }
@@ -334,136 +444,125 @@
 
       .section-heading {
         display: grid;
-        grid-template-columns: minmax(0, 0.65fr) minmax(280px, 0.35fr);
-        gap: 22px;
+        grid-template-columns: minmax(0, 0.85fr) minmax(280px, 0.75fr);
+        gap: 28px;
         align-items: end;
         margin-bottom: 18px;
       }
 
       .section-heading h2 {
-        margin-bottom: 0;
-        font-size: clamp(1.7rem, 4vw, 3rem);
-        line-height: 1.06;
+        margin: 0;
+        font-size: 3.25rem;
+        line-height: 1;
+        letter-spacing: 0;
       }
 
       .section-heading p {
-        margin-bottom: 0;
+        margin: 0;
         color: var(--muted);
       }
 
-      .answers {
+      .info-grid,
+      .capability-grid {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 14px;
+      }
+
+      .info-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
       }
 
       .info-card,
       .capability,
       .install-panel {
+        border-radius: 8px;
         padding: 20px;
       }
 
       .info-card h3,
-      .capability h3 {
-        margin-bottom: 10px;
+      .capability h3,
+      .install-panel h3 {
+        margin: 0;
         font-size: 1rem;
       }
 
       .info-card p,
-      .capability p {
-        margin-bottom: 0;
+      .capability p,
+      .install-panel p,
+      .list {
         color: var(--muted);
-        font-size: 0.96rem;
       }
 
-      .label {
-        display: inline-flex;
-        margin-bottom: 12px;
-        color: #93c5fd;
-        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: 0.72rem;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
+      .info-card p,
+      .capability p,
+      .install-panel p {
+        margin: 10px 0 0;
       }
 
-      .capabilities {
-        display: grid;
+      .capability-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 14px;
       }
 
       .capability {
-        background: rgba(15, 23, 42, 0.58);
-        box-shadow: none;
+        min-height: 176px;
       }
 
       .install-layout {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(280px, 0.78fr);
-        gap: 16px;
-      }
-
-      .install-panel {
-        background: rgba(17, 24, 39, 0.9);
-      }
-
-      .install-panel + .install-panel {
-        background: rgba(15, 23, 42, 0.66);
-      }
-
-      .install-panel h3 {
-        margin-bottom: 12px;
-      }
-
-      .install-panel p {
-        color: var(--muted);
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 14px;
       }
 
       .list {
-        display: grid;
-        gap: 10px;
-        margin: 16px 0 0;
-        padding: 0;
-        list-style: none;
+        margin: 14px 0 0;
+        padding-left: 20px;
       }
 
-      .list li {
-        display: grid;
-        grid-template-columns: 10px minmax(0, 1fr);
-        gap: 10px;
-        color: var(--muted);
+      .list li + li {
+        margin-top: 7px;
       }
 
-      .list li::before {
-        content: "";
-        width: 6px;
-        height: 6px;
-        margin-top: 9px;
-        border-radius: 999px;
-        background: var(--success);
-      }
-
-      .footer {
+      footer {
         display: flex;
         justify-content: space-between;
-        gap: 18px;
+        gap: 16px;
         flex-wrap: wrap;
-        padding: 32px 0 0;
-        border-top: 1px solid rgba(148, 163, 184, 0.18);
+        padding-top: 36px;
         color: var(--subtle);
-        font-size: 0.92rem;
+        font-size: 0.88rem;
       }
 
-      @media (max-width: 960px) {
+      @media (max-width: 920px) {
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .nav {
+          justify-content: flex-start;
+        }
+
         .hero,
         .section-heading,
         .install-layout {
           grid-template-columns: 1fr;
         }
 
-        .answers,
-        .capabilities {
+        h1 {
+          font-size: 3.35rem;
+          line-height: 1;
+        }
+
+        .lead {
+          font-size: 1.12rem;
+        }
+
+        .section-heading h2 {
+          font-size: 2.65rem;
+        }
+
+        .info-grid,
+        .capability-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
@@ -473,18 +572,29 @@
           padding: 18px 14px 42px;
         }
 
-        .topbar {
-          align-items: flex-start;
-          flex-direction: column;
-          padding-bottom: 20px;
+        .brand {
+          max-width: 100%;
+        }
+
+        .brand span:last-child {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .nav {
-          justify-content: flex-start;
+          width: 100%;
         }
 
-        .hero {
-          padding-top: 10px;
+        .language-switcher,
+        .nav a,
+        .pill {
+          flex: 1 1 auto;
+          justify-content: center;
+        }
+
+        .language-switcher {
+          justify-content: space-between;
         }
 
         .hero-copy,
@@ -492,11 +602,34 @@
         .info-card,
         .capability,
         .install-panel {
-          padding: 16px;
+          padding: 18px;
         }
 
-        .answers,
-        .capabilities {
+        .hero-copy,
+        .install-card {
+          min-height: auto;
+        }
+
+        .hero {
+          padding-top: 8px;
+        }
+
+        h1 {
+          font-size: 2.2rem;
+          line-height: 1.08;
+        }
+
+        .lead {
+          font-size: 1rem;
+        }
+
+        .section-heading h2 {
+          font-size: 2rem;
+          line-height: 1.08;
+        }
+
+        .info-grid,
+        .capability-grid {
           grid-template-columns: 1fr;
         }
 
@@ -506,16 +639,25 @@
 
         .flow-arrow {
           transform: rotate(90deg);
-          justify-self: center;
+          text-align: center;
         }
 
-        .hero-actions {
-          align-items: stretch;
+        .card-heading {
+          align-items: flex-start;
           flex-direction: column;
         }
 
         .button {
           width: 100%;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 1ms !important;
         }
       }
     </style>
@@ -524,13 +666,21 @@
     <div class="shell">
       <header class="topbar" aria-label="Site header">
         <div class="brand">
-          <span class="brand-mark" aria-hidden="true"></span>
-          <span>steamos-intel-handheld</span>
+          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 5h14"></path><path d="M7 5v9a5 5 0 0 0 10 0V5"></path><path d="M9 19h6"></path><path d="M12 10v9"></path><path d="M9.5 10h5"></path></svg></span>
+          <span data-i18n="brand.name">steamos-intel-handheld</span>
         </div>
         <nav class="nav" aria-label="Primary navigation">
-          <span class="pill"><span class="status-dot" aria-hidden="true"></span>Packages pending</span>
-          <a href="#install">Install</a>
-          <a href="https://github.com/rivoreo/steamos-intel-handheld">GitHub</a>
+          <span class="pill"><span class="status-dot" aria-hidden="true"></span><span data-i18n="status.pagesLive">Pages live</span></span>
+          <div class="language-switcher" aria-label="Language">
+            <svg class="language-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h9"></path><path d="M9 3v2"></path><path d="M6 12c2.4-1.6 4-4 4.7-7"></path><path d="M12 12c-1.7-.8-3.2-2.1-4.4-3.8"></path><path d="M15 19l3-8 3 8"></path><path d="M16.1 16h3.8"></path></svg>
+            <div class="language-options" role="group" aria-label="Language options">
+              <button class="language-option" type="button" data-language-option="en" lang="en" aria-pressed="true">EN</button>
+              <button class="language-option" type="button" data-language-option="zh-CN" lang="zh-CN" aria-pressed="false">简</button>
+              <button class="language-option" type="button" data-language-option="zh-TW" lang="zh-TW" aria-pressed="false">繁</button>
+            </div>
+          </div>
+          <a href="#install" data-i18n="nav.install">Install</a>
+          <a href="https://github.com/rivoreo/steamos-intel-handheld" data-i18n="nav.github">GitHub</a>
         </nav>
       </header>
 
@@ -538,153 +688,131 @@
         <section class="hero" aria-labelledby="hero-title">
           <div class="hero-copy">
             <p class="eyebrow">holo.libz.so / rivoreo-steamos</p>
-            <h1 id="hero-title">SteamOS support for Intel handhelds</h1>
-            <p class="lead">
+            <h1 id="hero-title" data-i18n="hero.title">SteamOS support for Intel handhelds</h1>
+            <p class="lead" data-i18n="hero.lead">
               A small support layer for Intel handheld PCs running SteamOS. It keeps
               TDP control, MangoHud sensor access, package delivery, and hardware
               verification in one auditable repository instead of patching SteamOS
               Manager in place.
             </p>
             <div class="hero-actions">
-              <a class="button" href="#install">View install path</a>
-              <a class="button secondary" href="https://github.com/rivoreo/steamos-intel-handheld">Read the source</a>
+              <a class="button" href="#install" data-i18n="hero.primaryCta">View install path</a>
+              <a class="button secondary" href="https://github.com/rivoreo/steamos-intel-handheld" data-i18n="hero.secondaryCta">Read the source</a>
             </div>
           </div>
 
           <aside class="install-card" aria-labelledby="quick-install-title">
             <div>
               <div class="card-heading">
-                <h2 id="quick-install-title">Bootstrap preview</h2>
-                <span class="status"><span class="status-dot" aria-hidden="true"></span>Packages pending</span>
+                <h2 id="quick-install-title" data-i18n="preview.title">Bootstrap preview</h2>
+                <span class="status waiting"><span class="status-dot warning" aria-hidden="true"></span><span data-i18n="status.packagesNotPublished">Packages not published</span></span>
               </div>
               <div class="flow-map" aria-label="System integration path">
                 <div class="flow-row">
                   <div class="flow-node">
-                    <strong>SteamOS UI</strong>
-                    <span>TDP request</span>
+                    <strong data-i18n="flow.ui.title">SteamOS UI</strong>
+                    <span data-i18n="flow.ui.text">TDP request</span>
                   </div>
-                  <span class="flow-arrow" aria-hidden="true">-&gt;</span>
+                  <div class="flow-arrow" aria-hidden="true">-></div>
                   <div class="flow-node">
-                    <strong>SteamOS Manager</strong>
-                    <span>remote interface</span>
+                    <strong data-i18n="flow.manager.title">SteamOS Manager</strong>
+                    <span data-i18n="flow.manager.text">remote endpoint</span>
+                  </div>
+                </div>
+                <div class="flow-row single">
+                  <div class="flow-node">
+                    <strong data-i18n="flow.remote.title">Rivoreo remote</strong>
+                    <span data-i18n="flow.remote.text">Intel handheld policy and validation</span>
                   </div>
                 </div>
                 <div class="flow-row">
                   <div class="flow-node">
-                    <strong>Rivoreo remote</strong>
-                    <span>policy bridge</span>
+                    <strong data-i18n="flow.power.title">Intel RAPL</strong>
+                    <span data-i18n="flow.power.text">CPU package power</span>
                   </div>
-                  <span class="flow-arrow" aria-hidden="true">-&gt;</span>
+                  <div class="flow-arrow" aria-hidden="true">+</div>
                   <div class="flow-node">
-                    <strong>Intel RAPL</strong>
-                    <span>MangoHud power path</span>
+                    <strong data-i18n="flow.hud.title">MangoHud</strong>
+                    <span data-i18n="flow.hud.text">sensor visibility</span>
                   </div>
                 </div>
               </div>
-              <div class="code-block">
-                <div class="code-label"><span>SteamOS</span><span>safe placeholder</span></div>
-                <pre><code>curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
-              </div>
             </div>
-            <p class="note">
-              Until signed packages are published, this bootstrap script exits without changing the system.
-            </p>
+            <div class="code-block">
+              <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.preview">safe preview</span></div>
+              <pre><code>curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
+            </div>
           </aside>
         </section>
 
         <section class="section" aria-labelledby="answers-title">
           <div class="section-heading">
-            <h2 id="answers-title">A SteamOS package path with hardware context.</h2>
-            <p>
-              SteamOS is Arch-based, but Intel handheld support needs more than a
-              package file. It needs the right system integration, the right sensor
-              permissions, and a verifier that proves the device actually works.
+            <h2 id="answers-title" data-i18n="answers.title">What this repository explains.</h2>
+            <p data-i18n="answers.lead">
+              It is the product surface for Intel SteamOS adaptation: clear scope,
+              tracked delivery, and a safe path from source code to signed packages.
             </p>
           </div>
-
-          <div class="answers">
+          <div class="info-grid">
             <article class="info-card">
-              <span class="label">01</span>
-              <h3>What it is</h3>
-              <p>
-                A SteamOS support layer for Intel handheld PCs, starting with
-                SteamOS Manager TDP control and MangoHud power sensor access.
-              </p>
+              <h3 data-i18n="answers.what.title">What it is</h3>
+              <p data-i18n="answers.what.text">A SteamOS support layer for Intel handheld PCs, owned as source, packaging, service drop-ins, and release documentation.</p>
             </article>
-
             <article class="info-card">
-              <span class="label">02</span>
-              <h3>What it can do</h3>
-              <p>
-                Install a remote TDP provider, prepare readable RAPL power
-                counters, host pacman repo paths, and verify the result on real
-                hardware.
-              </p>
+              <h3 data-i18n="answers.can.title">What it can do</h3>
+              <p data-i18n="answers.can.text">Route TDP requests, expose sensor paths MangoHud can read, package the result, and verify behavior on real hardware.</p>
             </article>
-
             <article class="info-card">
-              <span class="label">03</span>
-              <h3>Why it exists</h3>
-              <p>
-                Intel handhelds need SteamOS integration that survives normal use
-                without replacing SteamOS Manager or inventing a parallel telemetry
-                stack.
-              </p>
+              <h3 data-i18n="answers.why.title">Why it exists</h3>
+              <p data-i18n="answers.why.text">SteamOS targets AMD handheld assumptions first. Intel handhelds need a tracked compatibility layer that survives system updates.</p>
             </article>
-
             <article class="info-card">
-              <span class="label">04</span>
-              <h3>How to install</h3>
-              <p>
-                Add the future `rivoreo-steamos` pacman repository or run the
-                bootstrap command once signed packages are published.
-              </p>
+              <h3 data-i18n="answers.install.title">How to install</h3>
+              <p data-i18n="answers.install.text">Use the bootstrap endpoint once signed packages are published. Until then it exits safely without changing the system.</p>
             </article>
           </div>
         </section>
 
         <section class="section" aria-labelledby="capabilities-title">
           <div class="section-heading">
-            <h2 id="capabilities-title">What the repository owns.</h2>
-            <p>
-              The project keeps device support narrow and inspectable: system
-              service assets, install paths, packaging, and verification live
-              together.
+            <h2 id="capabilities-title" data-i18n="capabilities.title">What the repository owns.</h2>
+            <p data-i18n="capabilities.lead">
+              Each part is kept small enough to review and practical enough to test on
+              the target handheld before it reaches users.
             </p>
           </div>
-
-          <div class="capabilities">
+          <div class="capability-grid">
             <article class="capability">
-              <h3>SteamOS Manager TDP remote</h3>
-              <p>Exports the SteamOS Manager `TdpLimit1` remote interface through a system service.</p>
+              <h3 data-i18n="capability.tdp.title">SteamOS Manager TDP remote</h3>
+              <p data-i18n="capability.tdp.text">Adds a remote endpoint so existing SteamOS controls can request Intel-specific power behavior.</p>
             </article>
             <article class="capability">
-              <h3>Intel RAPL power path</h3>
-              <p>Maps SteamOS TDP requests to Intel RAPL limits and exposes package power counters.</p>
+              <h3 data-i18n="capability.rapl.title">Intel RAPL power path</h3>
+              <p data-i18n="capability.rapl.text">Uses the Intel RAPL interface for CPU package power instead of inventing a separate telemetry stack.</p>
             </article>
             <article class="capability">
-              <h3>MangoHud sensor access</h3>
-              <p>Prepares CPU and GPU power sensors so MangoHud can read existing Linux counters.</p>
+              <h3 data-i18n="capability.mangohud.title">MangoHud sensor access</h3>
+              <p data-i18n="capability.mangohud.text">Keeps the goal focused on making MangoHud see real sensors, not replacing MangoHud with a custom overlay.</p>
             </article>
             <article class="capability">
-              <h3>Pacman repository hosting</h3>
-              <p>Reserves a signed Arch-style package repository at `holo.libz.so` for SteamOS installs.</p>
+              <h3 data-i18n="capability.repo.title">Pacman repository hosting</h3>
+              <p data-i18n="capability.repo.text">Reserves a signed Arch-style package repository at holo.libz.so for SteamOS installs.</p>
             </article>
             <article class="capability">
-              <h3>QEMU build environment</h3>
-              <p>Builds SteamOS-compatible `mangoapp` artifacts against Valve's recovery image userland.</p>
+              <h3 data-i18n="capability.qemu.title">QEMU build environment</h3>
+              <p data-i18n="capability.qemu.text">Documents a SteamOS image based build path so artifacts match the target system instead of the host machine.</p>
             </article>
             <article class="capability">
-              <h3>Hardware verification harness</h3>
-              <p>Checks TDP state, RAPL limits, sensor readability, SteamOS Manager discovery, and failed units.</p>
+              <h3 data-i18n="capability.verify.title">Hardware verification harness</h3>
+              <p data-i18n="capability.verify.text">Scripts collect device data, verify counters, host pacman repo paths, and record results from real hardware.</p>
             </article>
           </div>
         </section>
 
         <section class="section" id="install" aria-labelledby="install-title">
           <div class="section-heading">
-            <h2 id="install-title">Install path.</h2>
-            <p>
+            <h2 id="install-title" data-i18n="install.title">Install path.</h2>
+            <p data-i18n="install.lead">
               The endpoint is live now. The installer stays inert until signed
               packages and repository databases are published.
             </p>
@@ -693,42 +821,325 @@
           <div class="install-layout">
             <article class="install-panel">
               <div class="card-heading">
-                <h3>Bootstrap command</h3>
-                <span class="status"><span class="status-dot" aria-hidden="true"></span>Safe placeholder</span>
+                <h3 data-i18n="install.bootstrap.title">Bootstrap command</h3>
+                <span class="status safe"><span class="status-dot safe" aria-hidden="true"></span><span data-i18n="status.safePlaceholder">Safe placeholder</span></span>
               </div>
               <div class="code-block">
-                <div class="code-label"><span>Shell</span><span>SteamOS target</span></div>
+                <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.target">SteamOS target</span></div>
                 <pre><code>curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
               </div>
-              <p class="note">
+              <p class="note" data-i18n="install.bootstrap.note">
                 Current behavior: the script prints package status and exits
                 without changing the system.
               </p>
             </article>
 
             <article class="install-panel">
-              <h3>Future pacman stanza</h3>
+              <h3 data-i18n="install.pacman.title">Future pacman stanza</h3>
               <div class="code-block">
-                <div class="code-label"><span>pacman.conf</span><span>planned</span></div>
+                <div class="code-label"><span>pacman.conf</span><span data-i18n="code.planned">planned</span></div>
                 <pre><code>[rivoreo-steamos]
 SigLevel = Required TrustedOnly
 Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
               </div>
               <ul class="list">
-                <li>Packages will be signed before this repo becomes active.</li>
-                <li>GitHub Pages serves this site from `rivoreo/steamos-intel-handheld`.</li>
-                <li>DNS target: `holo.libz.so CNAME rivoreo.github.io`.</li>
+                <li data-i18n="install.pacman.item1">Packages will be signed before this repo becomes active.</li>
+                <li data-i18n="install.pacman.item2">GitHub Pages serves this site from rivoreo/steamos-intel-handheld.</li>
+                <li data-i18n="install.pacman.item3">DNS target: holo.libz.so CNAME rivoreo.github.io.</li>
               </ul>
             </article>
           </div>
         </section>
       </main>
 
-      <footer class="footer">
-        <span>Custom domain: holo.libz.so</span>
-        <span>GitHub Pages source: rivoreo.github.io/steamos-intel-handheld</span>
+      <footer>
+        <span data-i18n="footer.status">Website live. Packages not published yet.</span>
         <a href="https://github.com/rivoreo/steamos-intel-handheld">github.com/rivoreo/steamos-intel-handheld</a>
       </footer>
     </div>
+
+    <script>
+      const TRANSLATIONS = {
+        "en": {
+          "meta.title": "SteamOS support for Intel handhelds",
+          "meta.description": "steamos-intel-handheld is a SteamOS support layer for Intel handheld PCs, distributed through the future rivoreo-steamos pacman repository.",
+          "brand.name": "steamos-intel-handheld",
+          "status.pagesLive": "Pages live",
+          "status.packagesNotPublished": "Packages not published",
+          "status.safePlaceholder": "Safe placeholder",
+          "nav.install": "Install",
+          "nav.github": "GitHub",
+          "hero.title": "SteamOS support for Intel handhelds",
+          "hero.lead": "A small support layer for Intel handheld PCs running SteamOS. It keeps TDP control, MangoHud sensor access, package delivery, and hardware verification in one auditable repository instead of patching SteamOS Manager in place.",
+          "hero.primaryCta": "View install path",
+          "hero.secondaryCta": "Read the source",
+          "preview.title": "Bootstrap preview",
+          "flow.ui.title": "SteamOS UI",
+          "flow.ui.text": "TDP request",
+          "flow.manager.title": "SteamOS Manager",
+          "flow.manager.text": "remote endpoint",
+          "flow.remote.title": "Rivoreo remote",
+          "flow.remote.text": "Intel handheld policy and validation",
+          "flow.power.title": "Intel RAPL",
+          "flow.power.text": "CPU package power",
+          "flow.hud.title": "MangoHud",
+          "flow.hud.text": "sensor visibility",
+          "code.shell": "Shell",
+          "code.preview": "safe preview",
+          "code.target": "SteamOS target",
+          "code.planned": "planned",
+          "answers.title": "What this repository explains.",
+          "answers.lead": "It is the product surface for Intel SteamOS adaptation: clear scope, tracked delivery, and a safe path from source code to signed packages.",
+          "answers.what.title": "What it is",
+          "answers.what.text": "A SteamOS support layer for Intel handheld PCs, owned as source, packaging, service drop-ins, and release documentation.",
+          "answers.can.title": "What it can do",
+          "answers.can.text": "Route TDP requests, expose sensor paths MangoHud can read, package the result, and verify behavior on real hardware.",
+          "answers.why.title": "Why it exists",
+          "answers.why.text": "SteamOS targets AMD handheld assumptions first. Intel handhelds need a tracked compatibility layer that survives system updates.",
+          "answers.install.title": "How to install",
+          "answers.install.text": "Use the bootstrap endpoint once signed packages are published. Until then it exits safely without changing the system.",
+          "capabilities.title": "What the repository owns.",
+          "capabilities.lead": "Each part is kept small enough to review and practical enough to test on the target handheld before it reaches users.",
+          "capability.tdp.title": "SteamOS Manager TDP remote",
+          "capability.tdp.text": "Adds a remote endpoint so existing SteamOS controls can request Intel-specific power behavior.",
+          "capability.rapl.title": "Intel RAPL power path",
+          "capability.rapl.text": "Uses the Intel RAPL interface for CPU package power instead of inventing a separate telemetry stack.",
+          "capability.mangohud.title": "MangoHud sensor access",
+          "capability.mangohud.text": "Keeps the goal focused on making MangoHud see real sensors, not replacing MangoHud with a custom overlay.",
+          "capability.repo.title": "Pacman repository hosting",
+          "capability.repo.text": "Reserves a signed Arch-style package repository at holo.libz.so for SteamOS installs.",
+          "capability.qemu.title": "QEMU build environment",
+          "capability.qemu.text": "Documents a SteamOS image based build path so artifacts match the target system instead of the host machine.",
+          "capability.verify.title": "Hardware verification harness",
+          "capability.verify.text": "Scripts collect device data, verify counters, host pacman repo paths, and record results from real hardware.",
+          "install.title": "Install path.",
+          "install.lead": "The endpoint is live now. The installer stays inert until signed packages and repository databases are published.",
+          "install.bootstrap.title": "Bootstrap command",
+          "install.bootstrap.note": "Current behavior: the script prints package status and exits without changing the system.",
+          "install.pacman.title": "Future pacman stanza",
+          "install.pacman.item1": "Packages will be signed before this repo becomes active.",
+          "install.pacman.item2": "GitHub Pages serves this site from rivoreo/steamos-intel-handheld.",
+          "install.pacman.item3": "DNS target: holo.libz.so CNAME rivoreo.github.io.",
+          "footer.status": "Website live. Packages not published yet."
+        },
+        "zh-CN": {
+          "meta.title": "面向 Intel 掌机的 SteamOS 支持层",
+          "meta.description": "steamos-intel-handheld 是面向 Intel 掌机 PC 的 SteamOS 支持层，将通过未来的 rivoreo-steamos pacman 软件源分发。",
+          "brand.name": "steamos-intel-handheld",
+          "status.pagesLive": "页面已上线",
+          "status.packagesNotPublished": "软件包尚未发布",
+          "status.safePlaceholder": "安全占位",
+          "nav.install": "安装",
+          "nav.github": "GitHub",
+          "hero.title": "面向 Intel 掌机的 SteamOS 支持层",
+          "hero.lead": "这是一个给运行 SteamOS 的 Intel 掌机 PC 使用的小型支持层。它把 TDP 控制、MangoHud 传感器访问、软件包分发和硬件验证放在一个可审计的仓库里，而不是直接修改系统里的 SteamOS Manager。",
+          "hero.primaryCta": "查看安装路径",
+          "hero.secondaryCta": "阅读源码",
+          "preview.title": "引导脚本预览",
+          "flow.ui.title": "SteamOS 界面",
+          "flow.ui.text": "TDP 请求",
+          "flow.manager.title": "SteamOS Manager",
+          "flow.manager.text": "远程端点",
+          "flow.remote.title": "Rivoreo remote",
+          "flow.remote.text": "Intel 掌机策略与验证",
+          "flow.power.title": "Intel RAPL",
+          "flow.power.text": "CPU 封装功耗",
+          "flow.hud.title": "MangoHud",
+          "flow.hud.text": "传感器可见性",
+          "code.shell": "Shell",
+          "code.preview": "安全预览",
+          "code.target": "SteamOS 目标机",
+          "code.planned": "计划中",
+          "answers.title": "这个仓库说明什么。",
+          "answers.lead": "它是 Intel SteamOS 适配的产品入口：范围清楚、交付可追踪，并提供从源码到签名软件包的安全路径。",
+          "answers.what.title": "它是什么？",
+          "answers.what.text": "一个面向 Intel 掌机 PC 的 SteamOS 支持层，包含源码、打包、service drop-in 和发布说明。",
+          "answers.can.title": "它能做什么？",
+          "answers.can.text": "转发 TDP 请求，暴露 MangoHud 能读取的传感器路径，打包交付结果，并在真实硬件上验证行为。",
+          "answers.why.title": "为什么需要它？",
+          "answers.why.text": "SteamOS 优先覆盖 AMD 掌机假设。Intel 掌机需要一套可追踪、能跨系统升级保留的兼容层。",
+          "answers.install.title": "如何安装？",
+          "answers.install.text": "签名软件包发布后，通过 bootstrap 端点安装。在此之前，脚本会安全退出，不会修改系统。",
+          "capabilities.title": "仓库负责哪些内容。",
+          "capabilities.lead": "每个部分都保持足够小，便于 review；也足够贴近目标设备，能在交付用户前于掌机上验证。",
+          "capability.tdp.title": "SteamOS Manager TDP remote",
+          "capability.tdp.text": "增加远程端点，让现有 SteamOS 控制界面可以请求 Intel 专用的功耗行为。",
+          "capability.rapl.title": "Intel RAPL 功耗路径",
+          "capability.rapl.text": "使用 Intel RAPL 接口读取 CPU 封装功耗，而不是另做一套遥测系统。",
+          "capability.mangohud.title": "MangoHud 传感器访问",
+          "capability.mangohud.text": "目标是让 MangoHud 看见真实传感器，而不是用自定义 overlay 替代 MangoHud。",
+          "capability.repo.title": "Pacman 软件源托管",
+          "capability.repo.text": "在 holo.libz.so 预留签名的 Arch 风格软件源，供 SteamOS 安装使用。",
+          "capability.qemu.title": "QEMU 构建环境",
+          "capability.qemu.text": "记录基于 SteamOS 镜像的构建路径，让产物匹配目标系统，而不是宿主机。",
+          "capability.verify.title": "硬件验证脚本",
+          "capability.verify.text": "脚本会收集设备数据、验证计数器、检查 pacman 源路径，并记录真实硬件结果。",
+          "install.title": "安装路径。",
+          "install.lead": "端点现在已经上线。安装器会保持惰性，直到签名软件包和软件源数据库发布。",
+          "install.bootstrap.title": "Bootstrap 命令",
+          "install.bootstrap.note": "当前行为：脚本会打印软件包状态并退出，不会修改系统。",
+          "install.pacman.title": "未来的 pacman 配置",
+          "install.pacman.item1": "软件包会在该源启用前完成签名。",
+          "install.pacman.item2": "GitHub Pages 从 rivoreo/steamos-intel-handheld 提供此站点。",
+          "install.pacman.item3": "DNS 目标：holo.libz.so CNAME rivoreo.github.io。",
+          "footer.status": "网站已上线。软件包尚未发布。"
+        },
+        "zh-TW": {
+          "meta.title": "面向 Intel 掌機的 SteamOS 支援層",
+          "meta.description": "steamos-intel-handheld 是面向 Intel 掌機 PC 的 SteamOS 支援層，將透過未來的 rivoreo-steamos pacman 軟體源分發。",
+          "brand.name": "steamos-intel-handheld",
+          "status.pagesLive": "頁面已上線",
+          "status.packagesNotPublished": "套件尚未發布",
+          "status.safePlaceholder": "安全占位",
+          "nav.install": "安裝",
+          "nav.github": "GitHub",
+          "hero.title": "面向 Intel 掌機的 SteamOS 支援層",
+          "hero.lead": "這是一個給執行 SteamOS 的 Intel 掌機 PC 使用的小型支援層。它把 TDP 控制、MangoHud 感測器存取、套件分發和硬體驗證放在一個可稽核的倉庫裡，而不是直接修改系統裡的 SteamOS Manager。",
+          "hero.primaryCta": "查看安裝路徑",
+          "hero.secondaryCta": "閱讀原始碼",
+          "preview.title": "引導腳本預覽",
+          "flow.ui.title": "SteamOS 介面",
+          "flow.ui.text": "TDP 請求",
+          "flow.manager.title": "SteamOS Manager",
+          "flow.manager.text": "遠端端點",
+          "flow.remote.title": "Rivoreo remote",
+          "flow.remote.text": "Intel 掌機策略與驗證",
+          "flow.power.title": "Intel RAPL",
+          "flow.power.text": "CPU 封裝功耗",
+          "flow.hud.title": "MangoHud",
+          "flow.hud.text": "感測器可見性",
+          "code.shell": "Shell",
+          "code.preview": "安全預覽",
+          "code.target": "SteamOS 目標機",
+          "code.planned": "計畫中",
+          "answers.title": "這個倉庫說明什麼。",
+          "answers.lead": "它是 Intel SteamOS 適配的產品入口：範圍清楚、交付可追蹤，並提供從原始碼到簽名套件的安全路徑。",
+          "answers.what.title": "它是什麼？",
+          "answers.what.text": "一個面向 Intel 掌機 PC 的 SteamOS 支援層，包含原始碼、打包、service drop-in 和發布說明。",
+          "answers.can.title": "它能做什麼？",
+          "answers.can.text": "轉發 TDP 請求，暴露 MangoHud 能讀取的感測器路徑，打包交付結果，並在真實硬體上驗證行為。",
+          "answers.why.title": "為什麼需要它？",
+          "answers.why.text": "SteamOS 優先覆蓋 AMD 掌機假設。Intel 掌機需要一套可追蹤、能跨系統升級保留的相容層。",
+          "answers.install.title": "如何安裝？",
+          "answers.install.text": "簽名套件發布後，透過 bootstrap 端點安裝。在此之前，腳本會安全退出，不會修改系統。",
+          "capabilities.title": "倉庫負責哪些內容。",
+          "capabilities.lead": "每個部分都保持足夠小，便於 review；也足夠貼近目標設備，能在交付使用者前於掌機上驗證。",
+          "capability.tdp.title": "SteamOS Manager TDP remote",
+          "capability.tdp.text": "增加遠端端點，讓現有 SteamOS 控制介面可以請求 Intel 專用的功耗行為。",
+          "capability.rapl.title": "Intel RAPL 功耗路徑",
+          "capability.rapl.text": "使用 Intel RAPL 介面讀取 CPU 封裝功耗，而不是另做一套遙測系統。",
+          "capability.mangohud.title": "MangoHud 感測器存取",
+          "capability.mangohud.text": "目標是讓 MangoHud 看見真實感測器，而不是用自訂 overlay 取代 MangoHud。",
+          "capability.repo.title": "Pacman 軟體源託管",
+          "capability.repo.text": "在 holo.libz.so 預留簽名的 Arch 風格軟體源，供 SteamOS 安裝使用。",
+          "capability.qemu.title": "QEMU 建置環境",
+          "capability.qemu.text": "記錄基於 SteamOS 映像的建置路徑，讓產物匹配目標系統，而不是宿主機。",
+          "capability.verify.title": "硬體驗證腳本",
+          "capability.verify.text": "腳本會收集設備資料、驗證計數器、檢查 pacman 源路徑，並記錄真實硬體結果。",
+          "install.title": "安裝路徑。",
+          "install.lead": "端點現在已經上線。安裝器會保持惰性，直到簽名套件和軟體源資料庫發布。",
+          "install.bootstrap.title": "Bootstrap 命令",
+          "install.bootstrap.note": "目前行為：腳本會列印套件狀態並退出，不會修改系統。",
+          "install.pacman.title": "未來的 pacman 設定",
+          "install.pacman.item1": "套件會在該源啟用前完成簽名。",
+          "install.pacman.item2": "GitHub Pages 從 rivoreo/steamos-intel-handheld 提供此站點。",
+          "install.pacman.item3": "DNS 目標：holo.libz.so CNAME rivoreo.github.io。",
+          "footer.status": "網站已上線。套件尚未發布。"
+        }
+      };
+
+      const STORAGE_KEY = "steamos-intel-handheld-language";
+      const SUPPORTED_LOCALES = Object.keys(TRANSLATIONS);
+
+      function resolveLocale(candidates) {
+        for (const candidate of candidates) {
+          const locale = String(candidate || "").toLowerCase();
+          if (!locale) {
+            continue;
+          }
+
+          if (locale === "zh-tw" || locale === "zh-hk" || locale === "zh-mo" || locale === "zh-hant" || locale.startsWith("zh-hant-")) {
+            return "zh-TW";
+          }
+
+          if (locale === "zh-cn" || locale === "zh-sg" || locale === "zh-my" || locale === "zh-hans" || locale.startsWith("zh-hans-")) {
+            return "zh-CN";
+          }
+
+          if (locale === "zh") {
+            return "zh-CN";
+          }
+
+          if (locale.startsWith("en")) {
+            return "en";
+          }
+        }
+
+        return "en";
+      }
+
+      function storedLocale() {
+        try {
+          const value = window.localStorage.getItem(STORAGE_KEY);
+          return SUPPORTED_LOCALES.includes(value) ? value : null;
+        } catch (_error) {
+          return null;
+        }
+      }
+
+      function preferredLocale() {
+        const saved = storedLocale();
+        if (saved) {
+          return saved;
+        }
+
+        return resolveLocale(navigator.languages || [navigator.language]);
+      }
+
+      function applyLocale(locale) {
+        const activeLocale = SUPPORTED_LOCALES.includes(locale) ? locale : "en";
+        const messages = TRANSLATIONS[activeLocale];
+        document.documentElement.lang = activeLocale;
+        document.title = messages["meta.title"];
+
+        const metaDescription = document.querySelector('meta[name="description"]');
+        if (metaDescription) {
+          metaDescription.setAttribute("content", messages["meta.description"]);
+        }
+
+        document.querySelectorAll("[data-i18n]").forEach((node) => {
+          const key = node.getAttribute("data-i18n");
+          if (Object.prototype.hasOwnProperty.call(messages, key)) {
+            node.textContent = messages[key];
+          }
+        });
+
+        document.querySelectorAll("[data-language-option]").forEach((button) => {
+          const isActive = button.getAttribute("data-language-option") === activeLocale;
+          button.setAttribute("aria-pressed", String(isActive));
+        });
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        applyLocale(preferredLocale());
+
+        document.querySelectorAll("[data-language-option]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const locale = button.getAttribute("data-language-option");
+            if (!SUPPORTED_LOCALES.includes(locale)) {
+              return;
+            }
+
+            try {
+              window.localStorage.setItem(STORAGE_KEY, locale);
+            } catch (_error) {
+              // Local storage is optional; the language switch still works for this page view.
+            }
+
+            applyLocale(locale);
+          });
+        });
+      });
+    </script>
   </body>
 </html>
