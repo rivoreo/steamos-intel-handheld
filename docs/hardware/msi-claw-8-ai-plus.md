@@ -119,7 +119,13 @@ the session on the `XR30` 1920x1200 path during testing.
 The repository keeps this as an optional workaround in
 `scripts/configure-gamescope-display-workaround.sh enable root@host`. The
 script installs a user service that waits for gamescope's environment file and
-runs `gamescopectl composite_force 1` after each gamescope session start. It
-does not use `drm_single_plane_optimizations`; disabling that runtime setting
-also stabilized the format during one experiment, but it produced a UI freeze
-and is not safe enough for the harness.
+runs `gamescopectl composite_force 1` after each gamescope session service
+start. The unit is bound to `gamescope-session.service` so gamescope service
+restarts re-apply the convar instead of leaving an already-active oneshot behind.
+The helper re-sends the convar during the early startup window because the Steam
+client and gamescope WSI can create the game swapchain after the user service
+first starts; a single early send was observed to leave the active DRM state on
+an `XB24` plane after reboot, while a later send returned it to a single `XR30`
+plane. It does not use `drm_single_plane_optimizations`; disabling that runtime
+setting also stabilized the format during one experiment, but it produced a UI
+freeze and is not safe enough for the harness.

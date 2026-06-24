@@ -1,14 +1,15 @@
 [Unit]
 Description=SteamOS Intel handheld gamescope display workaround
 After=gamescope-session.service
-PartOf=gamescope-session.target
+BindsTo=gamescope-session.service
+PartOf=gamescope-session.service
 ConditionPathExists=/usr/bin/gamescopectl
 
 [Service]
 Type=oneshot
 ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display apply
 RemainAfterExit=yes
-TimeoutStartSec=20
+TimeoutStartSec=360
 
 [Install]
-WantedBy=gamescope-session.target
+WantedBy=gamescope-session.service

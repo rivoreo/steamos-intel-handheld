@@ -26,8 +26,12 @@ def test_systemd_unit_waits_for_steamos_manager_before_serving():
 def test_gamescope_display_helper_sets_runtime_composite_force():
     helper = (ROOT / "data/bin/steamos-intel-handheld-gamescope-display").read_text()
 
-    assert "gamescopectl composite_force 1" in helper
-    assert "gamescopectl composite_force 0" in helper
+    assert "GAMESCOPECTL" in helper
+    assert "GAMESCOPE_DISPLAY_APPLY_ATTEMPTS" in helper
+    assert "GAMESCOPE_DISPLAY_APPLY_INTERVAL_SEC" in helper
+    assert '"$gamescopectl" composite_force 1' in helper
+    assert '"$gamescopectl" composite_force 0' in helper
+    assert 'for attempt in $(seq 1 "$apply_attempts")' in helper
     assert "gamescope-environment" in helper
     assert "drm_single_plane_optimizations" not in helper
 
@@ -38,12 +42,16 @@ def test_gamescope_display_user_service_runs_after_gamescope_session():
     ).read_text()
 
     assert "After=gamescope-session.service" in service
-    assert "PartOf=gamescope-session.target" in service
+    assert "BindsTo=gamescope-session.service" in service
+    assert "PartOf=gamescope-session.service" in service
+    assert "PartOf=gamescope-session.target" not in service
     assert (
         "ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display apply"
         in service
     )
-    assert "WantedBy=gamescope-session.target" in service
+    assert "TimeoutStartSec=360" in service
+    assert "WantedBy=gamescope-session.service" in service
+    assert "WantedBy=gamescope-session.target" not in service
 
 
 def test_device_verifier_checks_mangohud_cpu_power_sensor_access():
@@ -85,6 +93,9 @@ def test_device_verifier_reports_mangohud_gpu_memory_fdinfo():
 
 def test_gamescope_workaround_harness_can_enable_and_disable():
     script = (ROOT / "scripts/configure-gamescope-display-workaround.sh").read_text()
+    enable_block = script.split('if [ "$action" = "enable" ]; then', 1)[1].split(
+        "else", 1
+    )[0]
 
     assert "enable|disable" in script
     assert "COPYFILE_DISABLE=1" in script
@@ -96,7 +107,20 @@ def test_gamescope_workaround_harness_can_enable_and_disable():
     assert "gamescope-session.service.d/10-force-composition.conf" in script
     assert "systemctl --user daemon-reload" in script
     assert (
+        "systemctl --user disable --now steamos-intel-handheld-gamescope-display.service"
+        in enable_block
+    )
+    assert "systemctl --user enable steamos-intel-handheld-gamescope-display.service" in script
+    assert (
+        "systemctl --user restart --no-block steamos-intel-handheld-gamescope-display.service"
+        in script
+    )
+    assert (
         "systemctl --user enable --now steamos-intel-handheld-gamescope-display.service"
+        not in enable_block
+    )
+    assert (
+        "systemctl --user disable --now steamos-intel-handheld-gamescope-display.service"
         in script
     )
 

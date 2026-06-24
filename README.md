@@ -64,10 +64,14 @@ scripts/configure-gamescope-display-workaround.sh disable root@192.168.128.214
 
 The enabled user service waits for SteamOS to write
 `/run/user/1000/gamescope-environment`, then runs
-`gamescopectl composite_force 1`. This is intentionally optional because
-forcing gamescope composition can cost some latency or power. It should remain
-a workaround until the Intel/SteamOS display path can keep a consistent color
-pipeline by default.
+`gamescopectl composite_force 1`. The service is bound to
+`gamescope-session.service`, so a gamescope session restart stops and re-runs
+the workaround instead of leaving the previous oneshot active. It sends the
+runtime convar repeatedly for a short startup window because Steam and
+gamescope WSI can rebuild the game surface after the user service first starts.
+This is intentionally optional because forcing gamescope composition can cost
+some latency or power. It should remain a workaround until the Intel/SteamOS
+display path can keep a consistent color pipeline by default.
 
 ## Local verification
 

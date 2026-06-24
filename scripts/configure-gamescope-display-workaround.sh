@@ -40,7 +40,9 @@ if [ "$action" = "enable" ]; then
     if [ -S /run/user/1000/bus ]; then
       env_common='XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus'
       runuser -u deck -- env \$env_common systemctl --user daemon-reload
-      runuser -u deck -- env \$env_common systemctl --user enable --now steamos-intel-handheld-gamescope-display.service
+      runuser -u deck -- env \$env_common systemctl --user disable --now steamos-intel-handheld-gamescope-display.service || true
+      runuser -u deck -- env \$env_common systemctl --user enable steamos-intel-handheld-gamescope-display.service
+      runuser -u deck -- env \$env_common systemctl --user restart --no-block steamos-intel-handheld-gamescope-display.service
     else
       echo 'deck user bus is not active; reboot or restart the gamescope session later' >&2
     fi
