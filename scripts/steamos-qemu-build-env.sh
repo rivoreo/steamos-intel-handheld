@@ -10,7 +10,14 @@ Usage: scripts/steamos-qemu-build-env.sh <action>
 Actions:
   latest-url  Print the newest SteamOS recovery image URL
   fetch       Download and convert the SteamOS image to a qcow2 base
+  provision   Create a raw build image and enable SSH via a one-time serial boot
   run         Boot a writable qcow2 overlay with this repo mounted as 9p
+  run-build   Boot the provisioned raw build image with this repo mounted as 9p
+  ssh         Open an SSH session to a running provisioned build VM
+  install-deps
+              Install SteamOS build dependencies in a running build VM
+  build-mangoapp
+              Build MangoHud mangoapp in a running build VM and copy it to cache
 
 Environment:
   STEAMOS_IMAGE_URL          Override the discovered recovery image URL
@@ -23,6 +30,10 @@ Environment:
   STEAMOS_QEMU_OVMF_CODE     Optional OVMF_CODE firmware path
   STEAMOS_QEMU_OVMF_VARS     Optional OVMF vars template path
   STEAMOS_QEMU_EXTRA_ARGS    Extra QEMU arguments appended at the end
+  STEAMOS_QEMU_BUILD_JOBS    Ninja jobs for build-mangoapp (default: 3)
+  STEAMOS_QEMU_SKIP_DEPS     Skip dependency install during build-mangoapp when set
+  STEAMOS_QEMU_MANGOAPP_ARTIFACT
+                            Host output path (default: .cache/steamos-qemu/mangoapp)
 EOF
 }
 
@@ -33,6 +44,11 @@ raw_image="$cache_dir/steamos.img"
 base_qcow2="$cache_dir/steamos-base.qcow2"
 overlay_qcow2="$cache_dir/steamos-overlay.qcow2"
 ovmf_vars="$cache_dir/ovmf-vars.fd"
+build_raw="$cache_dir/steamos-build.raw"
+build_ovmf_vars="$cache_dir/ovmf-vars-build.fd"
+ssh_key="$cache_dir/id_ed25519"
+ssh_known_hosts="$cache_dir/known_hosts"
+mangoapp_artifact="${STEAMOS_QEMU_MANGOAPP_ARTIFACT:-$cache_dir/mangoapp}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -113,6 +129,46 @@ fetch_image() {
   fi
 }
 
+copy_reflink_or_plain() {
+  src="$1"
+  dst="$2"
+
+  if cp -c "$src" "$dst" >/dev/null 2>&1; then
+    return
+  fi
+
+  cp "$src" "$dst"
+}
+
+ensure_build_raw() {
+  if [ ! -e "$raw_image" ]; then
+    echo "Raw image is missing; run fetch first." >&2
+    exit 1
+  fi
+
+  mkdir -p "$cache_dir"
+  if [ ! -e "$build_raw" ]; then
+    echo "Creating build image $build_raw"
+    copy_reflink_or_plain "$raw_image" "$build_raw"
+  fi
+}
+
+ensure_ssh_key() {
+  require_command ssh-keygen
+
+  mkdir -p "$cache_dir"
+  if [ ! -e "$ssh_key" ]; then
+    ssh-keygen -t ed25519 -f "$ssh_key" -N '' -C steamos-qemu-build
+  fi
+}
+
+ensure_build_ovmf_vars() {
+  ovmf_vars_template="$(detect_ovmf_vars_template)"
+  if [ -n "$ovmf_vars_template" ] && [ ! -e "$build_ovmf_vars" ]; then
+    cp "$ovmf_vars_template" "$build_ovmf_vars"
+  fi
+}
+
 first_existing_path() {
   for path in "$@"; do
     if [ -e "$path" ]; then
@@ -150,24 +206,20 @@ detect_ovmf_vars_template() {
     /usr/share/edk2/x64/OVMF_VARS.fd || true
 }
 
-run_vm() {
+run_qemu_disk() {
+  disk_path="$1"
+  disk_format="$2"
+  vars_path="$3"
+  default_display="$4"
+
   require_command qemu-img
   require_command qemu-system-x86_64
-
-  if [ ! -e "$base_qcow2" ]; then
-    echo "Base qcow2 is missing; run fetch first." >&2
-    exit 1
-  fi
-
-  if [ ! -e "$overlay_qcow2" ]; then
-    qemu-img create -f qcow2 -F qcow2 -b "$base_qcow2" "$overlay_qcow2"
-  fi
 
   cpus="${STEAMOS_QEMU_CPUS:-4}"
   memory="${STEAMOS_QEMU_MEMORY:-8G}"
   accel="${STEAMOS_QEMU_ACCEL:-tcg}"
   ssh_port="${STEAMOS_QEMU_SSH_PORT:-2222}"
-  display="${STEAMOS_QEMU_DISPLAY:-default}"
+  display="${STEAMOS_QEMU_DISPLAY:-$default_display}"
 
   ovmf_args=()
   ovmf_code="$(detect_ovmf_code)"
@@ -175,10 +227,10 @@ run_vm() {
   if [ -n "$ovmf_code" ]; then
     ovmf_args=(-drive "if=pflash,format=raw,readonly=on,file=$ovmf_code")
     if [ -n "$ovmf_vars_template" ]; then
-      if [ ! -e "$ovmf_vars" ]; then
-        cp "$ovmf_vars_template" "$ovmf_vars"
+      if [ ! -e "$vars_path" ]; then
+        cp "$ovmf_vars_template" "$vars_path"
       fi
-      ovmf_args+=(-drive "if=pflash,format=raw,file=$ovmf_vars")
+      ovmf_args+=(-drive "if=pflash,format=raw,file=$vars_path")
     fi
   fi
 
@@ -195,13 +247,231 @@ run_vm() {
     -smp "$cpus" \
     -m "$memory" \
     "${ovmf_args[@]}" \
-    -drive "if=virtio,file=$overlay_qcow2,format=qcow2" \
+    -drive "if=virtio,file=$disk_path,format=$disk_format" \
     -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22" \
     -device virtio-net-pci,netdev=net0 \
     -virtfs "local,path=$repo_root,mount_tag=workspace,security_model=none,id=workspace" \
     -device virtio-vga \
     -display "$display" \
     "${extra_args[@]}"
+}
+
+run_vm() {
+  require_command qemu-img
+
+  if [ ! -e "$base_qcow2" ]; then
+    echo "Base qcow2 is missing; run fetch first." >&2
+    exit 1
+  fi
+
+  if [ ! -e "$overlay_qcow2" ]; then
+    qemu-img create -f qcow2 -F qcow2 -b "$base_qcow2" "$overlay_qcow2"
+  fi
+
+  run_qemu_disk "$overlay_qcow2" qcow2 "$ovmf_vars" default
+}
+
+run_build_vm() {
+  ensure_build_raw
+  ensure_build_ovmf_vars
+  run_qemu_disk "$build_raw" raw "$build_ovmf_vars" none
+}
+
+attach_build_image() {
+  require_command hdiutil
+
+  hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$build_raw" |
+    awk 'NR == 1 { print $1 }'
+}
+
+mount_build_efi() {
+  require_command diskutil
+
+  disk="$1"
+  part="${disk}s2"
+  diskutil mount "$part" >/dev/null
+  mount | awk -v part="$part" '$1 == part { print $3; exit }'
+}
+
+with_build_efi_mounted() {
+  callback="$1"
+  disk="$(attach_build_image)"
+
+  mount_point="$(mount_build_efi "$disk")"
+  if [ -z "$mount_point" ]; then
+    diskutil unmountDisk "$disk" >/dev/null 2>&1 || true
+    hdiutil detach "$disk" >/dev/null 2>&1 || true
+    echo "failed to find mounted EFI partition for $disk" >&2
+    return 1
+  fi
+
+  set +e
+  "$callback" "$mount_point/EFI/steamos/grub.cfg"
+  rc=$?
+  set -e
+  diskutil unmountDisk "$disk" >/dev/null 2>&1 || true
+  hdiutil detach "$disk" >/dev/null 2>&1 || true
+  return "$rc"
+}
+
+patch_grub_for_provision() {
+  grub="$1"
+
+  if [ ! -e "$grub.qemu-provision.bak" ]; then
+    cp "$grub" "$grub.qemu-provision.bak"
+  fi
+
+  perl -0pi -e \
+    's/console=ttyS0,115200 console=tty1/console=tty1 console=ttyS0,115200/g;
+     s/console=tty1(?! console=ttyS0,115200)/console=tty1 console=ttyS0,115200/g;
+     s/plymouth\.ignore-serial-consoles(?! init=\/usr\/bin\/bash)/plymouth.ignore-serial-consoles init=\/usr\/bin\/bash/g' \
+    "$grub"
+  sync
+}
+
+restore_grub_after_provision() {
+  grub="$1"
+
+  perl -0pi -e 's/ init=\/usr\/bin\/bash//g' "$grub"
+  sync
+}
+
+provision_build_image() {
+  require_command expect
+  require_command hdiutil
+  require_command diskutil
+
+  ensure_build_raw
+  ensure_ssh_key
+  ensure_build_ovmf_vars
+  with_build_efi_mounted patch_grub_for_provision
+
+  pubkey="$(cat "$ssh_key.pub")"
+  script_path="$repo_root/scripts/steamos-qemu-build-env.sh"
+  memory="${STEAMOS_QEMU_MEMORY:-4G}"
+  ssh_port="${STEAMOS_QEMU_SSH_PORT:-2222}"
+
+  set +e
+  expect <<EOF
+set timeout 300
+spawn sh -c "STEAMOS_QEMU_MEMORY='$memory' STEAMOS_QEMU_SSH_PORT='$ssh_port' STEAMOS_QEMU_DISPLAY=none STEAMOS_QEMU_EXTRA_ARGS='-serial mon:stdio' '$script_path' run-build"
+expect {
+  -re {root@.*# } {}
+  timeout {
+    puts stderr "timed out waiting for SteamOS provisioning shell"
+    exit 1
+  }
+}
+send -- "set +e\r"
+send -- "mkdir -p /etc/ssh/sshd_config.d /etc/systemd/system/multi-user.target.wants\r"
+send -- "printf '%s\\\\n' '$pubkey' > /etc/ssh/qemu_authorized_keys\r"
+send -- "chmod 600 /etc/ssh/qemu_authorized_keys\r"
+send -- "cat > /etc/ssh/sshd_config.d/90-qemu-build.conf <<'EOS'\r"
+send -- "PermitRootLogin prohibit-password\r"
+send -- "PubkeyAuthentication yes\r"
+send -- "AuthorizedKeysFile /etc/ssh/qemu_authorized_keys .ssh/authorized_keys\r"
+send -- "PasswordAuthentication no\r"
+send -- "EOS\r"
+send -- "ln -sf /usr/lib/systemd/system/sshd.service /etc/systemd/system/multi-user.target.wants/sshd.service\r"
+send -- "git config --global --add safe.directory /home/workspace/external/MangoHud || true\r"
+send -- "sync; echo PROVISION_DONE\r"
+expect {
+  "PROVISION_DONE" {}
+  timeout {
+    puts stderr "timed out while provisioning SSH"
+    exit 1
+  }
+}
+send "\001x"
+expect eof
+EOF
+  rc=$?
+  set -e
+
+  with_build_efi_mounted restore_grub_after_provision
+  return "$rc"
+}
+
+ssh_port_value() {
+  printf '%s\n' "${STEAMOS_QEMU_SSH_PORT:-2222}"
+}
+
+ssh_base_args() {
+  ensure_ssh_key
+  printf '%s\n' \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=no \
+    -o "UserKnownHostsFile=$ssh_known_hosts" \
+    -i "$ssh_key" \
+    -p "$(ssh_port_value)" \
+    root@127.0.0.1
+}
+
+ssh_guest() {
+  # shellcheck disable=SC2207
+  ssh_args=($(ssh_base_args))
+  ssh "${ssh_args[@]}" "$@"
+}
+
+open_guest_ssh() {
+  # shellcheck disable=SC2207
+  ssh_args=($(ssh_base_args))
+  exec ssh "${ssh_args[@]}"
+}
+
+install_build_deps() {
+  ssh_guest 'bash -s' <<'EOS'
+set -eux
+steamos-readonly disable
+pacman-key --init || true
+pacman-key --populate archlinux holo
+pacman -Sy --needed --noconfirm \
+  base-devel meson ninja pkgconf python-mako vulkan-headers
+pacman -S --noconfirm \
+  glibc linux-api-headers \
+  libx11 xorgproto libxcb xcb-proto xtrans libxau libxdmcp \
+  wayland libxkbcommon dbus glfw glslang vulkan-icd-loader \
+  libffi systemd-libs libglvnd \
+  libxrandr libxinerama libxcursor libxi libxrender libxfixes
+EOS
+}
+
+build_mangoapp() {
+  if [ -z "${STEAMOS_QEMU_SKIP_DEPS:-}" ]; then
+    install_build_deps
+  fi
+
+  jobs="${STEAMOS_QEMU_BUILD_JOBS:-3}"
+  ssh_guest "STEAMOS_QEMU_BUILD_JOBS=$jobs bash -s" <<'EOS'
+set -eux
+mkdir -p /home/workspace /home/build
+mountpoint -q /home/workspace || \
+  mount -t 9p -o trans=virtio,version=9p2000.L workspace /home/workspace
+git config --global --add safe.directory /home/workspace/external/MangoHud || true
+rm -rf /home/build/mangohud
+meson setup /home/build/mangohud /home/workspace/external/MangoHud \
+  --prefix=/usr \
+  -Dmangoapp=true \
+  -Dwith_xnvctrl=disabled \
+  -Dwith_nvml=disabled \
+  -Dinclude_doc=false \
+  -Dtests=disabled \
+  -Dmangoplot=disabled \
+  -Dwith_mangohud_next=false \
+  -Dwith_server=false
+meson compile -C /home/build/mangohud -j "$STEAMOS_QEMU_BUILD_JOBS" mangoapp
+file /home/build/mangohud/src/mangoapp
+EOS
+
+  mkdir -p "$(dirname "$mangoapp_artifact")"
+  scp \
+    -o StrictHostKeyChecking=no \
+    -o "UserKnownHostsFile=$ssh_known_hosts" \
+    -i "$ssh_key" \
+    -P "$(ssh_port_value)" \
+    root@127.0.0.1:/home/build/mangohud/src/mangoapp \
+    "$mangoapp_artifact"
+  file "$mangoapp_artifact"
 }
 
 action="${1:-}"
@@ -212,8 +482,23 @@ case "$action" in
   fetch)
     fetch_image
     ;;
+  provision)
+    provision_build_image
+    ;;
   run)
     run_vm
+    ;;
+  run-build)
+    run_build_vm
+    ;;
+  ssh)
+    open_guest_ssh
+    ;;
+  install-deps)
+    install_build_deps
+    ;;
+  build-mangoapp)
+    build_mangoapp
     ;;
   *)
     usage

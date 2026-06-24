@@ -122,5 +122,11 @@ def test_steamos_qemu_build_env_uses_official_recovery_image():
     assert "STEAMOS_QEMU_DISPLAY" in script
     assert "mount_tag=workspace" in script
     assert "hostfwd=tcp:127.0.0.1:$ssh_port-:22" in script
-    assert "meson setup build/steamos-qemu" in docs
+    assert "provision)" in script
+    assert "run-build)" in script
+    assert "build-mangoapp)" in script
+    assert "python-mako" in script
+    assert "libxrandr libxinerama libxcursor libxi libxrender libxfixes" in script
+    assert ".cache/steamos-qemu/mangoapp" in docs
+    assert "scripts/steamos-qemu-build-env.sh build-mangoapp" in docs
     assert "scripts/configure-mangoapp-dropin.sh" in docs

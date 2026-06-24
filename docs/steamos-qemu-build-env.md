@@ -25,6 +25,8 @@ the newest public image and keep the final smoke test on real hardware.
 - `qemu-img`
 - `curl`
 - `bzip2`
+- `ssh`, `scp`, `ssh-keygen`
+- macOS provisioning helpers: `hdiutil`, `diskutil`, and `expect`
 - 20GB+ free disk space for the raw image, qcow2 base, and overlay
 - Optional: OVMF firmware paths exported as `STEAMOS_QEMU_OVMF_CODE` and
   `STEAMOS_QEMU_OVMF_VARS`; Homebrew QEMU is auto-detected.
@@ -32,60 +34,75 @@ the newest public image and keep the final smoke test on real hardware.
 On Apple Silicon, `qemu-system-x86_64` runs through emulation and will be slower.
 On Linux x86_64, use KVM with `STEAMOS_QEMU_ACCEL=kvm`.
 
-## Prepare And Boot
+## Prepare And Provision
 
 ```bash
 scripts/steamos-qemu-build-env.sh fetch
-scripts/steamos-qemu-build-env.sh run
+scripts/steamos-qemu-build-env.sh provision
 ```
 
 The script stores images under `.cache/steamos-qemu/`, converts the downloaded
-raw image to a reusable qcow2 base, and boots a writable qcow2 overlay. The repo
-is exposed to the VM as a 9p mount named `workspace`.
+raw image to a reusable qcow2 base, and creates a writable raw build image at
+`.cache/steamos-qemu/steamos-build.raw`. `provision` performs a one-time serial
+boot, enables root SSH with a generated key under `.cache/steamos-qemu/`, then
+restores normal SteamOS boot.
 
-Inside SteamOS, mount the workspace:
+The repo is exposed to the VM as a 9p mount named `workspace`. The build image
+mounts it at `/home/workspace` because SteamOS keeps `/` read-only.
+
+## Boot The Build VM
+
+Run the provisioned VM in one terminal:
 
 ```bash
-sudo mkdir -p /workspace
-sudo mount -t 9p -o trans=virtio,version=9p2000.L workspace /workspace
-```
-
-Enable SSH if you want to drive builds from the host:
-
-```bash
-sudo systemctl enable --now sshd
+STEAMOS_QEMU_MEMORY=4G \
+STEAMOS_QEMU_SSH_PORT=2224 \
+scripts/steamos-qemu-build-env.sh run-build
 ```
 
 The QEMU user network forwards `127.0.0.1:2222` to guest port `22` by default.
 Override with `STEAMOS_QEMU_SSH_PORT`.
 
-For a headless smoke boot:
+For a headless smoke boot of the generic qcow2 overlay:
 
 ```bash
 STEAMOS_QEMU_DISPLAY=none scripts/steamos-qemu-build-env.sh run
 ```
 
-## Build MangoHud Mangoapp
-
-Inside the VM:
+For an interactive shell into the provisioned build VM:
 
 ```bash
-cd /workspace/external/MangoHud
-meson setup build/steamos-qemu \
-  --prefix=/usr \
-  -Dmangoapp=true \
-  -Dwith_xnvctrl=disabled \
-  -Dinclude_doc=false \
-  -Dtests=disabled
-meson compile -C build/steamos-qemu mangoapp
+STEAMOS_QEMU_SSH_PORT=2224 scripts/steamos-qemu-build-env.sh ssh
 ```
 
-Then deploy the binary to the target handheld from the host:
+## Build MangoHud Mangoapp
+
+With `run-build` still running:
+
+```bash
+STEAMOS_QEMU_SSH_PORT=2224 \
+STEAMOS_QEMU_BUILD_JOBS=3 \
+scripts/steamos-qemu-build-env.sh build-mangoapp
+```
+
+`build-mangoapp` installs the SteamOS build dependencies, including a reinstall
+of runtime packages whose development headers and `pkg-config` files are
+stripped from the recovery image. It builds in `/home/build/mangohud` inside the
+guest and copies the resulting x86_64 binary to:
+
+`./.cache/steamos-qemu/mangoapp`
+
+Set `STEAMOS_QEMU_SKIP_DEPS=1` after the first successful dependency provision
+to skip the package step on later builds.
+
+## Deploy To The Handheld
+
+Deploy the locally built binary to the target handheld from the host:
 
 ```bash
 scripts/configure-mangoapp-dropin.sh \
   enable root@192.168.128.214 \
-  external/MangoHud/build/steamos-qemu/src/mangoapp
+  .cache/steamos-qemu/mangoapp
 scripts/verify-on-device.sh root@192.168.128.214
 ```
 
@@ -93,6 +110,7 @@ scripts/verify-on-device.sh root@192.168.128.214
 
 - Keep the qcow2 base immutable; throw away and recreate only the overlay.
 - The writable OVMF vars file is stored at `.cache/steamos-qemu/ovmf-vars.fd`.
+- The provisioned raw build image uses `.cache/steamos-qemu/ovmf-vars-build.fd`.
 - Use the real handheld as the final verification source for sensors and
   gamescope/systemd behavior.
 - If Valve publishes a newer recovery image, rerun `fetch`; the helper resolves
