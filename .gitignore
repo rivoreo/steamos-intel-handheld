@@ -6,4 +6,5 @@ build/
 dist/
 .venv/
 .DS_Store
+.cache/
 reference/steamos-holo/

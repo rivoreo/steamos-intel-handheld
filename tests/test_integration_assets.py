@@ -109,3 +109,16 @@ def test_mangohud_submodule_tracks_fork_branch():
 
     assert "https://github.com/JohnnySun/MangoHud.git" in gitmodules
     assert "branch = intel-rapl-gpu-power" in gitmodules
+
+
+def test_steamos_qemu_build_env_uses_official_recovery_image():
+    script = (ROOT / "scripts/steamos-qemu-build-env.sh").read_text()
+    docs = (ROOT / "docs/steamos-qemu-build-env.md").read_text()
+
+    assert "https://steamdeck-images.steamos.cloud/recovery/" in script
+    assert "qemu-system-x86_64" in script
+    assert "qemu-img convert -f raw -O qcow2" in script
+    assert "mount_tag=workspace" in script
+    assert "hostfwd=tcp::$ssh_port-:22" in script
+    assert "meson setup build/steamos-qemu" in docs
+    assert "scripts/configure-mangoapp-dropin.sh" in docs
