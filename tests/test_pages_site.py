@@ -20,6 +20,20 @@ def test_pages_site_documents_project_repo_url() -> None:
     index = SITE_INDEX.read_text()
     assert "https://holo.libz.so/rivoreo-steamos/os/$arch" in index
     assert "SigLevel = Required TrustedOnly" in index
+    assert "SteamOS support for Intel handhelds" in index
+    assert "What it is" in index
+    assert "What it can do" in index
+    assert "Why it exists" in index
+    assert "How to install" in index
+
+
+def test_pages_site_explains_capabilities_and_pending_release_state() -> None:
+    index = SITE_INDEX.read_text()
+    assert "SteamOS Manager TDP remote" in index
+    assert "Intel RAPL power path" in index
+    assert "MangoHud sensor access" in index
+    assert "Packages pending" in index
+    assert "exits without changing the system" in index
 
 
 def test_pages_site_declares_custom_domain() -> None:
