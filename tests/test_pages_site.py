@@ -7,6 +7,13 @@ SITE_INDEX = ROOT / "site/index.html"
 BOOTSTRAP = ROOT / "site/rivoreo-steamos/bootstrap.sh"
 
 
+def read_site_translations() -> dict[str, dict[str, str]]:
+    index = SITE_INDEX.read_text()
+    start = index.index("const TRANSLATIONS = ") + len("const TRANSLATIONS = ")
+    end = index.index(";\n\n      const STORAGE_KEY", start)
+    return json.loads(index[start:end])
+
+
 def test_pages_workflow_deploys_static_site_with_actions() -> None:
     workflow = PAGES_WORKFLOW.read_text()
     assert "actions/configure-pages@v5" in workflow
@@ -61,18 +68,37 @@ def test_pages_site_embeds_supported_locales() -> None:
     assert '"zh-TW"' in index
     assert "SteamOS support for Intel handhelds" in index
     assert "面向 Intel 掌机的 SteamOS 支持层" in index
-    assert "面向 Intel 掌機的 SteamOS 支援層" in index
+    assert "針對 Intel 掌機的 SteamOS 支援層" in index
 
 
 def test_pages_site_locale_dictionaries_have_matching_keys() -> None:
-    index = SITE_INDEX.read_text()
-    start = index.index("const TRANSLATIONS = ") + len("const TRANSLATIONS = ")
-    end = index.index(";\n\n      const STORAGE_KEY", start)
-    translations = json.loads(index[start:end])
+    translations = read_site_translations()
     assert set(translations) == {"en", "zh-CN", "zh-TW"}
     english_keys = set(translations["en"])
     assert english_keys == set(translations["zh-CN"])
     assert english_keys == set(translations["zh-TW"])
+
+
+def test_pages_site_uses_taiwan_zh_tw_wording() -> None:
+    zh_tw_text = "\n".join(read_site_translations()["zh-TW"].values())
+    assert "針對 Intel 掌機的 SteamOS 支援層" in zh_tw_text
+    assert "套件庫" in zh_tw_text
+    assert "套件尚未釋出" in zh_tw_text
+    assert "安全佔位" in zh_tw_text
+    assert "裝置" in zh_tw_text
+    assert "輸出套件狀態" in zh_tw_text
+    assert "面向" not in zh_tw_text
+    assert "軟體源" not in zh_tw_text
+    assert "發布" not in zh_tw_text
+    assert "設備" not in zh_tw_text
+    assert "列印" not in zh_tw_text
+
+
+def test_pages_site_does_not_treat_hong_kong_or_macau_as_zh_tw() -> None:
+    index = SITE_INDEX.read_text()
+    assert 'locale === "zh-hk"' not in index
+    assert 'locale === "zh-mo"' not in index
+    assert 'locale.startsWith("zh-hant-")' not in index
 
 
 def test_pages_site_declares_custom_domain() -> None:

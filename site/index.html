@@ -985,16 +985,16 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "footer.status": "网站已上线。软件包尚未发布。"
         },
         "zh-TW": {
-          "meta.title": "面向 Intel 掌機的 SteamOS 支援層",
-          "meta.description": "steamos-intel-handheld 是面向 Intel 掌機 PC 的 SteamOS 支援層，將透過未來的 rivoreo-steamos pacman 軟體源分發。",
+          "meta.title": "針對 Intel 掌機的 SteamOS 支援層",
+          "meta.description": "steamos-intel-handheld 是針對 Intel 掌機 PC 的 SteamOS 支援層，將透過未來的 rivoreo-steamos pacman 套件庫提供。",
           "brand.name": "steamos-intel-handheld",
           "status.pagesLive": "頁面已上線",
-          "status.packagesNotPublished": "套件尚未發布",
-          "status.safePlaceholder": "安全占位",
+          "status.packagesNotPublished": "套件尚未釋出",
+          "status.safePlaceholder": "安全佔位",
           "nav.install": "安裝",
           "nav.github": "GitHub",
-          "hero.title": "面向 Intel 掌機的 SteamOS 支援層",
-          "hero.lead": "這是一個給執行 SteamOS 的 Intel 掌機 PC 使用的小型支援層。它把 TDP 控制、MangoHud 感測器存取、套件分發和硬體驗證放在一個可稽核的倉庫裡，而不是直接修改系統裡的 SteamOS Manager。",
+          "hero.title": "針對 Intel 掌機的 SteamOS 支援層",
+          "hero.lead": "這是一個針對執行 SteamOS 的 Intel 掌機 PC 的小型支援層。它把 TDP 控制、MangoHud 感測器存取、套件分發與硬體驗證集中在一個可稽核的儲存庫中，而不是直接修改系統中的 SteamOS Manager。",
           "hero.primaryCta": "查看安裝路徑",
           "hero.secondaryCta": "閱讀原始碼",
           "preview.title": "引導腳本預覽",
@@ -1012,39 +1012,39 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "code.preview": "安全預覽",
           "code.target": "SteamOS 目標機",
           "code.planned": "計畫中",
-          "answers.title": "這個倉庫說明什麼。",
-          "answers.lead": "它是 Intel SteamOS 適配的產品入口：範圍清楚、交付可追蹤，並提供從原始碼到簽名套件的安全路徑。",
+          "answers.title": "這個儲存庫說明什麼。",
+          "answers.lead": "它是 Intel SteamOS 支援工作的產品入口：範圍清楚、交付可追蹤，並提供從原始碼到簽名套件的安全路徑。",
           "answers.what.title": "它是什麼？",
-          "answers.what.text": "一個面向 Intel 掌機 PC 的 SteamOS 支援層，包含原始碼、打包、service drop-in 和發布說明。",
+          "answers.what.text": "一個針對 Intel 掌機 PC 的 SteamOS 支援層，包含原始碼、打包設定、service drop-in 和版本說明。",
           "answers.can.title": "它能做什麼？",
-          "answers.can.text": "轉發 TDP 請求，暴露 MangoHud 能讀取的感測器路徑，打包交付結果，並在真實硬體上驗證行為。",
+          "answers.can.text": "轉送 TDP 請求，提供 MangoHud 可讀取的感測器路徑，打包交付成果，並在真實硬體上驗證行為。",
           "answers.why.title": "為什麼需要它？",
-          "answers.why.text": "SteamOS 優先覆蓋 AMD 掌機假設。Intel 掌機需要一套可追蹤、能跨系統升級保留的相容層。",
+          "answers.why.text": "SteamOS 優先支援 AMD 掌機情境。Intel 掌機需要一套可追蹤、能在系統升級後保留的相容層。",
           "answers.install.title": "如何安裝？",
-          "answers.install.text": "簽名套件發布後，透過 bootstrap 端點安裝。在此之前，腳本會安全退出，不會修改系統。",
-          "capabilities.title": "倉庫負責哪些內容。",
-          "capabilities.lead": "每個部分都保持足夠小，便於 review；也足夠貼近目標設備，能在交付使用者前於掌機上驗證。",
+          "answers.install.text": "簽名套件釋出後，透過 bootstrap 端點安裝。在此之前，腳本會安全結束，不會修改系統。",
+          "capabilities.title": "儲存庫負責哪些內容。",
+          "capabilities.lead": "每個部分都保持足夠小，便於 review；也足夠貼近目標裝置，能在交付使用者前於掌機上驗證。",
           "capability.tdp.title": "SteamOS Manager TDP remote",
-          "capability.tdp.text": "增加遠端端點，讓現有 SteamOS 控制介面可以請求 Intel 專用的功耗行為。",
+          "capability.tdp.text": "新增遠端端點，讓現有 SteamOS 控制介面可以請求 Intel 專用的功耗行為。",
           "capability.rapl.title": "Intel RAPL 功耗路徑",
           "capability.rapl.text": "使用 Intel RAPL 介面讀取 CPU 封裝功耗，而不是另做一套遙測系統。",
           "capability.mangohud.title": "MangoHud 感測器存取",
           "capability.mangohud.text": "目標是讓 MangoHud 看見真實感測器，而不是用自訂 overlay 取代 MangoHud。",
-          "capability.repo.title": "Pacman 軟體源託管",
-          "capability.repo.text": "在 holo.libz.so 預留簽名的 Arch 風格軟體源，供 SteamOS 安裝使用。",
+          "capability.repo.title": "Pacman 套件庫託管",
+          "capability.repo.text": "在 holo.libz.so 預留簽名的 Arch 風格套件庫，供 SteamOS 安裝使用。",
           "capability.qemu.title": "QEMU 建置環境",
-          "capability.qemu.text": "記錄基於 SteamOS 映像的建置路徑，讓產物匹配目標系統，而不是宿主機。",
+          "capability.qemu.text": "記錄基於 SteamOS 映像檔的建置路徑，讓產物符合目標系統，而不是主機環境。",
           "capability.verify.title": "硬體驗證腳本",
-          "capability.verify.text": "腳本會收集設備資料、驗證計數器、檢查 pacman 源路徑，並記錄真實硬體結果。",
+          "capability.verify.text": "腳本會收集裝置資料、驗證計數器、檢查 pacman 套件庫路徑，並記錄真實硬體結果。",
           "install.title": "安裝路徑。",
-          "install.lead": "端點現在已經上線。安裝器會保持惰性，直到簽名套件和軟體源資料庫發布。",
+          "install.lead": "端點現在已經上線。安裝程式會保持待命，直到簽名套件和套件庫資料庫釋出。",
           "install.bootstrap.title": "Bootstrap 命令",
-          "install.bootstrap.note": "目前行為：腳本會列印套件狀態並退出，不會修改系統。",
+          "install.bootstrap.note": "目前行為：腳本會輸出套件狀態並結束，不會修改系統。",
           "install.pacman.title": "未來的 pacman 設定",
-          "install.pacman.item1": "套件會在該源啟用前完成簽名。",
-          "install.pacman.item2": "GitHub Pages 從 rivoreo/steamos-intel-handheld 提供此站點。",
+          "install.pacman.item1": "套件會在此套件庫啟用前完成簽名。",
+          "install.pacman.item2": "GitHub Pages 從 rivoreo/steamos-intel-handheld 提供此網站。",
           "install.pacman.item3": "DNS 目標：holo.libz.so CNAME rivoreo.github.io。",
-          "footer.status": "網站已上線。套件尚未發布。"
+          "footer.status": "網站已上線。套件尚未釋出。"
         }
       };
 
@@ -1058,7 +1058,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
             continue;
           }
 
-          if (locale === "zh-tw" || locale === "zh-hk" || locale === "zh-mo" || locale === "zh-hant" || locale.startsWith("zh-hant-")) {
+          if (locale === "zh-tw" || locale === "zh-hant-tw") {
             return "zh-TW";
           }
 
