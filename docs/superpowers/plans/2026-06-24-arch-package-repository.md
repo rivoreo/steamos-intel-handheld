@@ -251,7 +251,7 @@ def test_repo_config_uses_required_signatures() -> None:
     conf = (ROOT / "packaging/arch/rivoreo-steamos-repo/rivoreo-steamos.conf").read_text()
     assert "[rivoreo-steamos]" in conf
     assert "SigLevel = Required TrustedOnly" in conf
-    assert "Server = https://rivoreo.github.io/steamos-intel-handheld/$repo/os/$arch" in conf
+    assert "Server = https://holo.libz.so/$repo/os/$arch" in conf
 
 
 def test_repo_config_package_marks_config_as_backup() -> None:
@@ -295,7 +295,7 @@ Create `packaging/arch/rivoreo-steamos-repo/rivoreo-steamos.conf`:
 ```ini
 [rivoreo-steamos]
 SigLevel = Required TrustedOnly
-Server = https://rivoreo.github.io/steamos-intel-handheld/$repo/os/$arch
+Server = https://holo.libz.so/$repo/os/$arch
 ```
 
 Create `packaging/arch/rivoreo-steamos-repo/PKGBUILD`:
@@ -500,7 +500,7 @@ Create `scripts/bootstrap-steamos-repo.sh`:
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos}"
+REPO_URL="${REPO_URL:-https://holo.libz.so/rivoreo-steamos}"
 EXPECTED_FINGERPRINT="${EXPECTED_FINGERPRINT:?set EXPECTED_FINGERPRINT to the Rivoreo release signing key fingerprint}"
 repo_conf="/etc/pacman.d/rivoreo-steamos.conf"
 include_line="Include = /etc/pacman.d/rivoreo-steamos.conf"
@@ -530,7 +530,7 @@ pacman-key --lsign-key "$EXPECTED_FINGERPRINT"
 cat >"$repo_conf" <<'CONF'
 [rivoreo-steamos]
 SigLevel = Required TrustedOnly
-Server = https://rivoreo.github.io/steamos-intel-handheld/$repo/os/$arch
+Server = https://holo.libz.so/$repo/os/$arch
 CONF
 
 if ! grep -Fxq "$include_line" /etc/pacman.conf; then
@@ -562,7 +562,7 @@ Create `docs/package-repository.md` with:
 Install on SteamOS:
 
 ```bash
-curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash
+curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash
 ```
 
 The bootstrap imports the Rivoreo package signing key, configures the
@@ -705,7 +705,7 @@ git commit -m "ci(packaging): publish signed Arch repository on tags"
 Run on the target device:
 
 ```bash
-curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash
+curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash
 ```
 
 Expected: pacman installs `rivoreo-keyring`, `rivoreo-steamos-repo`, and
@@ -738,7 +738,7 @@ Expected: same success criteria as Step 2.
 After a SteamOS update, rerun:
 
 ```bash
-curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash
+curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash
 scripts/verify-on-device.sh root@<handheld-host>
 ```
 

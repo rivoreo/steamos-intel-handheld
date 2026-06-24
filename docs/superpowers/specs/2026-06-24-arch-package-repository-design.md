@@ -91,12 +91,12 @@ public/
         steamos-intel-handheld-mangoapp-<version>-<rel>-x86_64.pkg.tar.zst.sig
 ```
 
-Use the repository name `rivoreo-steamos` and the project GitHub Pages URL:
+Use the repository name `rivoreo-steamos` and the custom GitHub Pages domain:
 
 ```ini
 [rivoreo-steamos]
 SigLevel = Required TrustedOnly
-Server = https://rivoreo.github.io/steamos-intel-handheld/$repo/os/$arch
+Server = https://holo.libz.so/$repo/os/$arch
 ```
 
 The `any` architecture packages are published inside the `x86_64` repository
@@ -194,7 +194,7 @@ environment documented by `.codex/skills/steamos-qemu-build-env` and
 The bootstrap script should be idempotent and safe to rerun after SteamOS OTA:
 
 ```bash
-curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash
+curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash
 ```
 
 Flow:

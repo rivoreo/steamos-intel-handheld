@@ -18,8 +18,13 @@ def test_pages_workflow_deploys_static_site_with_actions() -> None:
 
 def test_pages_site_documents_project_repo_url() -> None:
     index = SITE_INDEX.read_text()
-    assert "https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$arch" in index
+    assert "https://holo.libz.so/rivoreo-steamos/os/$arch" in index
     assert "SigLevel = Required TrustedOnly" in index
+
+
+def test_pages_site_declares_custom_domain() -> None:
+    cname = (ROOT / "site/CNAME").read_text()
+    assert cname.strip() == "holo.libz.so"
 
 
 def test_placeholder_bootstrap_exits_before_packages_exist() -> None:
