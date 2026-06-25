@@ -9,6 +9,42 @@ from steamos_intel_handheld.power_control import (
     compute_tdp_limits,
 )
 
+MSI_CLAW_EC_FIRMWARE = b"1T52EMS1.1091204202509:10:47"
+
+
+def make_dmi_root(
+    tmp_path: Path,
+    *,
+    sys_vendor: str = "Micro-Star International Co., Ltd.",
+    product_name: str = "Claw 8 AI+ A2VM",
+    board_name: str = "MS-1T52",
+    bios_version: str = "E1T52IMS.112",
+) -> Path:
+    dmi_root = tmp_path / "sys" / "class" / "dmi" / "id"
+    dmi_root.mkdir(parents=True)
+    (dmi_root / "sys_vendor").write_text(sys_vendor)
+    (dmi_root / "product_name").write_text(product_name)
+    (dmi_root / "board_name").write_text(board_name)
+    (dmi_root / "bios_version").write_text(bios_version)
+    return dmi_root
+
+
+def make_ec_io(
+    tmp_path: Path,
+    *,
+    firmware: bytes = MSI_CLAW_EC_FIRMWARE,
+) -> tuple[Path, Path]:
+    debugfs_root = tmp_path / "sys" / "kernel" / "debug"
+    io_path = debugfs_root / "ec" / "ec0" / "io"
+    io_path.parent.mkdir(parents=True)
+    ec = bytearray(256)
+    ec[0x50] = 0x11
+    ec[0x51] = 0x25
+    ec[0xD2] = 0xC1
+    ec[0xA0 : 0xA0 + len(firmware)] = firmware
+    io_path.write_bytes(bytes(ec))
+    return debugfs_root, io_path
+
 
 def make_rapl_domain(
     sysfs_root: Path,
@@ -103,6 +139,173 @@ def test_write_limit_updates_state_and_rapl(tmp_path):
     assert state_file.read_text() == "28"
     assert (domain / "constraint_0_power_limit_uw").read_text() == "28000000"
     assert (domain / "constraint_1_power_limit_uw").read_text() == "30000000"
+
+
+def test_write_limit_updates_msi_claw_ec_when_guard_matches(tmp_path):
+    dmi_root = make_dmi_root(tmp_path)
+    debugfs_root, io_path = make_ec_io(tmp_path)
+    state_file = tmp_path / "state" / "tdp_w"
+
+    backend = TdpBackend(
+        state_file=state_file,
+        apply_rapl=False,
+        apply_msi_claw_ec=True,
+        dmi_root=dmi_root,
+        debugfs_root=debugfs_root,
+    )
+
+    assert backend.write_limit_w(30) == 30
+
+    ec = io_path.read_bytes()
+    assert state_file.read_text() == "30"
+    assert ec[0x50] == 30
+    assert ec[0x51] == 32
+    assert ec[0xD2] == 0xC4
+
+
+def test_write_limit_sets_msi_claw_ec_comfort_mode_at_17_watts(tmp_path):
+    dmi_root = make_dmi_root(tmp_path)
+    debugfs_root, io_path = make_ec_io(tmp_path)
+
+    backend = TdpBackend(
+        state_file=tmp_path / "state" / "tdp_w",
+        apply_rapl=False,
+        apply_msi_claw_ec=True,
+        dmi_root=dmi_root,
+        debugfs_root=debugfs_root,
+    )
+
+    assert backend.write_limit_w(17) == 17
+
+    ec = io_path.read_bytes()
+    assert ec[0x50] == 17
+    assert ec[0x51] == 19
+    assert ec[0xD2] == 0xC1
+
+
+def test_write_limit_sets_msi_claw_ec_turbo_mode_above_17_watts(tmp_path):
+    dmi_root = make_dmi_root(tmp_path)
+    debugfs_root, io_path = make_ec_io(tmp_path)
+
+    backend = TdpBackend(
+        state_file=tmp_path / "state" / "tdp_w",
+        apply_rapl=False,
+        apply_msi_claw_ec=True,
+        dmi_root=dmi_root,
+        debugfs_root=debugfs_root,
+    )
+
+    assert backend.write_limit_w(18) == 18
+
+    ec = io_path.read_bytes()
+    assert ec[0x50] == 18
+    assert ec[0x51] == 20
+    assert ec[0xD2] == 0xC4
+
+
+def test_write_limit_skips_msi_claw_ec_write_when_values_are_unchanged(
+    tmp_path,
+    monkeypatch,
+):
+    dmi_root = make_dmi_root(tmp_path)
+    debugfs_root, io_path = make_ec_io(tmp_path)
+    ec = bytearray(io_path.read_bytes())
+    ec[0x50] = 30
+    ec[0x51] = 32
+    ec[0xD2] = 0xC4
+    io_path.write_bytes(bytes(ec))
+
+    backend = TdpBackend(
+        state_file=tmp_path / "state" / "tdp_w",
+        apply_rapl=False,
+        apply_msi_claw_ec=True,
+        dmi_root=dmi_root,
+        debugfs_root=debugfs_root,
+    )
+
+    def fail_write(*_args):
+        raise AssertionError("unchanged EC values should not be written")
+
+    monkeypatch.setattr(backend.ec_controller, "_write_ec_byte", fail_write)
+
+    assert backend.write_limit_w(30) == 30
+    assert io_path.read_bytes()[0x50] == 30
+    assert io_path.read_bytes()[0x51] == 32
+    assert io_path.read_bytes()[0xD2] == 0xC4
+
+
+def test_write_limit_debounces_msi_claw_ec_writes_to_last_value(tmp_path, monkeypatch):
+    dmi_root = make_dmi_root(tmp_path)
+    debugfs_root, _io_path = make_ec_io(tmp_path)
+    applied = []
+
+    backend = TdpBackend(
+        state_file=tmp_path / "state" / "tdp_w",
+        apply_rapl=False,
+        apply_msi_claw_ec=True,
+        ec_write_debounce_ms=750,
+        dmi_root=dmi_root,
+        debugfs_root=debugfs_root,
+    )
+
+    def record_apply(watts):
+        applied.append(watts)
+
+    monkeypatch.setattr(backend, "apply_limit_to_msi_claw_ec", record_apply)
+
+    backend.write_limit_w(18)
+    backend.write_limit_w(24)
+    backend.write_limit_w(30)
+
+    assert applied == []
+    assert (tmp_path / "state" / "tdp_w").read_text() == "30"
+
+    backend.flush_pending_ec_write()
+
+    assert applied == [30]
+
+
+def test_write_limit_caps_msi_claw_ec_pl1_to_30_watts_and_allows_pl2_to_37(tmp_path):
+    dmi_root = make_dmi_root(tmp_path)
+    debugfs_root, io_path = make_ec_io(tmp_path)
+
+    backend = TdpBackend(
+        max_w=37,
+        short_limit_max_w=37,
+        state_file=tmp_path / "state" / "tdp_w",
+        apply_rapl=False,
+        apply_msi_claw_ec=True,
+        dmi_root=dmi_root,
+        debugfs_root=debugfs_root,
+    )
+
+    assert backend.write_limit_w(37) == 37
+
+    ec = io_path.read_bytes()
+    assert ec[0x50] == 30
+    assert ec[0x51] == 37
+
+
+def test_write_limit_refuses_msi_claw_ec_on_unmatched_dmi(tmp_path):
+    dmi_root = make_dmi_root(tmp_path, product_name="Claw A1M")
+    debugfs_root, io_path = make_ec_io(tmp_path)
+    state_file = tmp_path / "state" / "tdp_w"
+
+    backend = TdpBackend(
+        state_file=state_file,
+        apply_rapl=False,
+        apply_msi_claw_ec=True,
+        dmi_root=dmi_root,
+        debugfs_root=debugfs_root,
+    )
+
+    with pytest.raises(RuntimeError, match="unsupported MSI Claw EC target"):
+        backend.write_limit_w(30)
+
+    ec = io_path.read_bytes()
+    assert not state_file.exists()
+    assert ec[0x50] == 0x11
+    assert ec[0x51] == 0x25
 
 
 def test_write_limit_uses_rapl_constraint_names(tmp_path):

@@ -39,6 +39,40 @@ The 37W Maximum Turbo Power value is kept as the short-term hardware ceiling,
 not as the default game PL2. A `--pl2-w` override remains available for device
 profiles that need a different burst limit.
 
+## EC TDP note
+
+On the first MSI Claw 8 AI+ A2VM test device, Windows MSI Center M Manual mode
+was used to set PL1/PL2 to 30W/32W. A read-only Linux EC dump then showed these
+stable changes compared with the previous baseline:
+
+- EC offset `0x50`: `0x11` to `0x1e` (17 to 30)
+- EC offset `0x51`: `0x25` to `0x20` (37 to 32)
+
+The values match the requested wattages directly. Offset `0xd2` stayed at
+`0xc1`, so the Manual PL1/PL2 path is treated separately from MSI's shift mode
+or user-scenario byte.
+
+The power-control service can optionally mirror the SteamOS TDP curve into
+those EC bytes with `--apply-msi-claw-ec`. This path is intentionally guarded:
+it only runs when DMI reports MSI `Claw 8 AI+ A2VM` on board `MS-1T52`, and
+when the EC firmware string read from offset `0xa0` starts with
+`1T52EMS1.109`. It writes only `0x50` and `0x51`, then reads both offsets back.
+The EC PL1 byte has an additional hard cap of 30W even if a future service
+profile raises the generic SteamOS/RAPL maximum. Requests above 30W leave EC
+PL1 at 30W and only raise EC PL2, up to the 37W short-term ceiling.
+The service also mirrors the MSI shift/user-scenario byte at `0xd2`: TDP values
+up to 17W keep comfort mode `0xc1`, while values above 17W use turbo mode
+`0xc4`. In live testing with the game running, `0x50/0x51=30/32` plus
+`0xd2=0xc1` held package power near 17W, while temporarily switching `0xd2` to
+`0xc4` let package power rise into the 25W to 30W range.
+
+Before writing, the service reads `0x50`, `0x51`, and `0xd2`; if all bytes
+already match the target values, it skips the EC write entirely. The systemd
+unit also debounces EC writes for 750 ms so Steam slider movement can update
+RAPL immediately while only the final settled TDP value is written to EC.
+The implementation uses Linux `ec_sys` through debugfs and requests
+`write_support=1`, which should remain limited to this known firmware profile.
+
 ## MangoHud sensor note
 
 On SteamOS 3.8.11 build `20260620.1` with kernel
@@ -116,13 +150,24 @@ with `--force-composition` was not sufficient on this SteamOS build. Applying
 the runtime gamescope convar `composite_force 1` with `gamescopectl` stabilized
 the session on the `XR30` 1920x1200 path during testing.
 
+The same SteamOS build launches gamescope with the Steam Deck default
+`-w 1280 -h 800` even though the connected `eDP-1` panel advertises
+`1920x1200`. The optional workaround installs a `gamescope` wrapper ahead of
+`/usr/bin` in `gamescope-session.service`'s `PATH`; the wrapper reads the first
+connected `eDP-1` mode from `/sys/class/drm` and rewrites gamescope's `-w` and
+`-h` arguments to that native panel mode before execing `/usr/bin/gamescope`.
+That keeps gamescope's canvas 1:1 with the panel while leaving per-game render
+resolution decisions to each game.
+
 The repository keeps this as an optional workaround in
 `scripts/configure-gamescope-display-workaround.sh enable root@host`. The
-script installs a user service that waits for gamescope's environment file and
-runs `gamescopectl composite_force 1` after each gamescope session service
-start. The unit is bound to `gamescope-session.service` so gamescope service
-restarts re-apply the convar instead of leaving an already-active oneshot behind.
-The helper re-sends the convar during the early startup window because the Steam
+script installs the native-panel wrapper and a user service that waits for
+gamescope's environment file and runs `gamescopectl composite_force 1` after
+each gamescope session service start. The wrapper takes effect after the next
+gamescope session restart or reboot. The unit is bound to
+`gamescope-session.service` so gamescope service restarts re-apply the convar
+instead of leaving an already-active oneshot behind. The helper re-sends the
+convar during the early startup window because the Steam
 client and gamescope WSI can create the game swapchain after the user service
 first starts; a single early send was observed to leave the active DRM state on
 an `XB24` plane after reboot, while a later send returned it to a single `XR30`

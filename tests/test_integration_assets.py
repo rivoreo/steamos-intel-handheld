@@ -19,6 +19,8 @@ def test_systemd_unit_waits_for_steamos_manager_before_serving():
     assert "PATH=/etc/rivoreo/bin" not in unit
     assert "--user deck" in unit
     assert "--apply-rapl" in unit
+    assert "--apply-msi-claw-ec" in unit
+    assert "--ec-write-debounce-ms 750" in unit
     assert "--prepare-mangohud-sensors" in unit
     assert "StateDirectory=steamos-intel-handheld" in unit
 
@@ -52,6 +54,18 @@ def test_gamescope_display_user_service_runs_after_gamescope_session():
     assert "TimeoutStartSec=360" in service
     assert "WantedBy=gamescope-session.service" in service
     assert "WantedBy=gamescope-session.target" not in service
+
+
+def test_gamescope_session_prefers_native_panel_resolution_wrapper():
+    dropin = (
+        ROOT
+        / "data/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf"
+    ).read_text()
+    script = (ROOT / "scripts/configure-gamescope-display-workaround.sh").read_text()
+
+    assert "Environment=PATH=/opt/steamos-intel-handheld/bin:" in dropin
+    assert "/opt/steamos-intel-handheld/bin/gamescope" in script
+    assert "20-native-panel-resolution.conf" in script
 
 
 def test_device_verifier_checks_mangohud_cpu_power_sensor_access():

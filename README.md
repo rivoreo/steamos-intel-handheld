@@ -14,6 +14,7 @@ when the interfaces settle.
   Manager remote interface mechanism.
 - Own the system bus name `org.rivoreo.SteamOSManager.PowerControl`.
 - Apply TDP requests to Intel RAPL PL1 and PL2 limits.
+- Optionally mirror TDP requests to guarded MSI Claw 8 AI+ EC PL1/PL2 bytes.
 - Prepare package and uncore RAPL `energy_uj` access so MangoHud can report
   CPU power and Intel integrated GPU power from real kernel counters.
 - Provide install and verification harnesses for real SteamOS devices.
@@ -51,9 +52,16 @@ Manager remote definitions.
 
 ## Optional display workaround
 
-On the MSI Claw 8 AI+ A2VM test device, gamescope can switch the primary DRM
-framebuffer between `XR30` and `XB24` paths when the Steam cursor/overlay
-disappears. That can look like a subtle color or gamma shift in games.
+On the MSI Claw 8 AI+ A2VM test device, SteamOS can start gamescope with the
+Steam Deck's `1280x800` game canvas even though the internal panel is
+`1920x1200`. The display workaround installs a gamescope wrapper so the session
+uses the connected `eDP-1` panel's native mode for `-w` and `-h`, keeping the
+gamescope canvas 1:1 with the panel. Game render scale or lower resolutions
+should then be chosen inside each game instead of by shrinking gamescope.
+
+The same test device can also switch the primary DRM framebuffer between
+`XR30` and `XB24` paths when the Steam cursor/overlay disappears. That can look
+like a subtle color or gamma shift in games.
 
 The workaround uses gamescope's runtime control channel after the session starts:
 
@@ -62,7 +70,8 @@ scripts/configure-gamescope-display-workaround.sh enable root@192.168.128.214
 scripts/configure-gamescope-display-workaround.sh disable root@192.168.128.214
 ```
 
-The enabled user service waits for SteamOS to write
+The native-panel wrapper takes effect after the next gamescope session restart
+or reboot. The enabled user service waits for SteamOS to write
 `/run/user/1000/gamescope-environment`, then runs
 `gamescopectl composite_force 1`. The service is bound to
 `gamescope-session.service`, so a gamescope session restart stops and re-runs
@@ -106,6 +115,16 @@ hardware ceiling remains 37W. Intel-published Claw 8 AI+ game test points use
 17W/19W and 30W/32W, so the default policy follows that fixed +2W curve instead
 of a generic notebook PL2 multiplier. Future device profiles can override PL2
 with `--pl2-w` when platform thermals require a different burst limit.
+
+On the MSI Claw 8 AI+ A2VM, Windows MSI Center M Manual mode was observed to
+store Manual PL1/PL2 directly in EC offsets `0x50` and `0x51` as watt values.
+The installed service enables `--apply-msi-claw-ec`, which mirrors the same
+PL1/PL2 curve to those EC bytes after strict DMI and EC firmware checks. It
+also switches the MSI EC shift byte `0xd2` from comfort (`0xc1`) to turbo
+(`0xc4`) when TDP rises above 17W, and debounces EC writes so Steam slider
+movement only writes the final settled EC target. It only accepts MSI
+`Claw 8 AI+ A2VM`, board `MS-1T52`, and EC firmware strings that start with
+`1T52EMS1.109`; other systems fail closed before any EC write.
 
 The same root service also prepares MangoHud sensor paths. On the tested
 SteamOS 3.8.11 Claw 8 AI+ system, MangoHud runs as `deck` and needs read access

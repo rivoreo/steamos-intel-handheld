@@ -20,3 +20,19 @@ def test_wait_and_serve_prepares_mangohud_sensors_before_wait(monkeypatch):
     power_control.main(["wait-and-serve", "--prepare-mangohud-sensors"])
 
     assert events == ["prepare", "wait", "serve"]
+
+
+def test_parser_enables_guarded_msi_claw_ec_backend():
+    args = power_control.build_parser().parse_args(["serve", "--apply-msi-claw-ec"])
+    backend = power_control.build_backend(args)
+
+    assert backend.apply_msi_claw_ec is True
+
+
+def test_parser_configures_ec_write_debounce_ms():
+    args = power_control.build_parser().parse_args(
+        ["serve", "--apply-msi-claw-ec", "--ec-write-debounce-ms", "750"]
+    )
+    backend = power_control.build_backend(args)
+
+    assert backend.ec_write_debounce_ms == 750

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+real_gamescope="${STEAMOS_INTEL_HANDHELD_REAL_GAMESCOPE:-/usr/bin/gamescope}"
+sysfs_drm_root="${STEAMOS_INTEL_HANDHELD_SYSFS_DRM_ROOT:-/sys/class/drm}"
+panel_connector="${STEAMOS_INTEL_HANDHELD_GAMESCOPE_CONNECTOR:-eDP-1}"
+
+read_native_panel_mode() {
+  local connector mode
+
+  shopt -s nullglob
+  for connector in "$sysfs_drm_root"/card*-"$panel_connector"; do
+    [ -d "$connector" ] || continue
+    [ -f "$connector/status" ] || continue
+    [ -f "$connector/modes" ] || continue
+    [ "$(cat "$connector/status")" = "connected" ] || continue
+
+    mode="$(sed -n '1p' "$connector/modes")"
+    if [[ "$mode" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+      printf '%s\n' "$mode"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+rewrite_size_args() {
+  local width="$1"
+  local height="$2"
+  shift 2
+
+  local rewritten=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -w|--width)
+        if [ "$#" -ge 2 ]; then
+          rewritten+=("$1" "$width")
+          shift 2
+        else
+          rewritten+=("$1")
+          shift
+        fi
+        ;;
+      -h|--height)
+        if [ "$#" -ge 2 ]; then
+          rewritten+=("$1" "$height")
+          shift 2
+        else
+          rewritten+=("$1")
+          shift
+        fi
+        ;;
+      *)
+        rewritten+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  exec "$real_gamescope" "${rewritten[@]}"
+}
+
+if native_mode="$(read_native_panel_mode)"; then
+  width="${native_mode%x*}"
+  height="${native_mode#*x}"
+  echo "steamos-intel-handheld: using native panel mode ${width}x${height} for gamescope" >&2
+  rewrite_size_args "$width" "$height" "$@"
+fi
+
+echo "steamos-intel-handheld: native panel mode unavailable; leaving gamescope size unchanged" >&2
+exec "$real_gamescope" "$@"
