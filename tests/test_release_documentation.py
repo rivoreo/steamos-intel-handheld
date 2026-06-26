@@ -69,6 +69,13 @@ def test_release_process_runbook_includes_build_scope_and_install_path() -> None
     assert "Users should not install from hidden release-candidate artifacts" in docs
 
 
+def test_release_process_runbook_matches_published_key_artifact_name() -> None:
+    docs = RELEASE_DOCS.read_text()
+
+    assert "`key/rivoreo.gpg`" in docs
+    assert "rivoreo.asc" not in docs
+
+
 def test_release_process_runbook_captures_first_rc_failure_modes() -> None:
     docs = RELEASE_DOCS.read_text()
 

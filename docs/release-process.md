@@ -136,7 +136,7 @@ find /tmp/rivoreo-rc -maxdepth 4 -type f | sort
 Expected files include:
 
 - `key/fingerprint.txt`
-- `key/rivoreo.asc`
+- `key/rivoreo.gpg`
 - `rivoreo-steamos/os/x86_64/*.pkg.tar.zst`
 - `rivoreo-steamos/os/x86_64/*.pkg.tar.zst.sig`
 - `rivoreo-steamos/os/x86_64/steamos-intel-handheld-mangoapp-*.pkg.tar.zst`
