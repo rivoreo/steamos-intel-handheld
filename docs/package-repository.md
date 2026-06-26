@@ -3,10 +3,10 @@
 This repository uses GitHub Pages as the static hosting endpoint for the
 `rivoreo-steamos` pacman repository.
 
-Current custom domain:
+Current GitHub Pages HTTPS endpoint:
 
 ```text
-https://holo.libz.so/
+https://rivoreo.github.io/steamos-intel-handheld/
 ```
 
 Pacman repository URL:
@@ -14,13 +14,13 @@ Pacman repository URL:
 ```ini
 [rivoreo-steamos]
 SigLevel = Required TrustedOnly
-Server = https://holo.libz.so/rivoreo-steamos/os/$arch
+Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$arch
 ```
 
 Bootstrap URL:
 
 ```bash
-curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash
+curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash
 ```
 
 The public release path is the GitHub Actions release publisher in
@@ -51,15 +51,17 @@ Release flow:
 1. Push a stable version tag such as `v0.1.0`, or a hidden validation tag such
    as `v0.1.0-rc.1`.
 2. The `validate` job runs the local harness with recursive submodules.
-3. The `build-repo` job runs in `archlinux:base-devel`, imports the protected
+3. The `build-mangoapp` job builds the patched MangoHud `mangoapp` binary in
+   the SteamOS QEMU build environment.
+4. The `build-repo` job runs in `archlinux:base-devel`, imports the protected
    signing key, builds packages with `makepkg`, signs package artifacts, and
    creates signed `rivoreo-steamos` repository metadata with `repo-add`.
-4. Stable tags run the `deploy-pages` job, which assembles the static site,
+5. Stable tags run the `deploy-pages` job, which assembles the static site,
    rendered bootstrap script, public key files, and signed pacman repository into
    the Pages artifact.
-5. Release-candidate tags such as `vX.Y.Z-rc.N` do not deploy GitHub Pages; use
+6. Release-candidate tags such as `vX.Y.Z-rc.N` do not deploy GitHub Pages; use
    the signed repository artifact attached to the workflow run for inspection.
-6. GitHub Pages serves stable results from `https://holo.libz.so/`.
+7. GitHub Pages serves stable results from `https://rivoreo.github.io/steamos-intel-handheld/`.
 
 GitLab CI remains the build path for validation artifacts:
 
@@ -75,11 +77,9 @@ Those validation artifacts prove that package and repository metadata can be
 generated for a given commit. They are not the public release path and do not
 use signing secrets.
 
-DNS should point the subdomain to GitHub Pages with:
-
-```text
-holo.libz.so.  CNAME  rivoreo.github.io.
-```
+The Pages artifact does not ship a `CNAME` file. Keep the public install path on
+GitHub Pages' HTTPS project URL unless a custom domain has a valid HTTPS
+certificate and redirects only to HTTPS.
 
 The publisher writes regular files for `rivoreo-steamos.db`,
 `rivoreo-steamos.files`, and their signatures. Do not use symlinks in the Pages

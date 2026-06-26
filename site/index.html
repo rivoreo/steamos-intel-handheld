@@ -671,7 +671,7 @@
       <main>
         <section class="hero" aria-labelledby="hero-title">
           <div class="hero-copy">
-            <p class="eyebrow">holo.libz.so / rivoreo-steamos</p>
+            <p class="eyebrow">rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos</p>
             <h1 id="hero-title" data-i18n="hero.title">SteamOS support for Intel handhelds</h1>
             <p class="lead" data-i18n="hero.lead">
               A small support layer for Intel handheld PCs running SteamOS. It keeps
@@ -724,7 +724,7 @@
             </div>
             <div class="code-block">
               <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.preview">install command</span></div>
-              <pre><code>curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
+              <pre><code>curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
             </div>
           </aside>
         </section>
@@ -780,7 +780,7 @@
             </article>
             <article class="capability">
               <h3 data-i18n="capability.repo.title">Pacman repository hosting</h3>
-              <p data-i18n="capability.repo.text">Reserves a signed Arch-style package repository at holo.libz.so for SteamOS installs.</p>
+              <p data-i18n="capability.repo.text">Reserves a signed Arch-style package repository at rivoreo.github.io/steamos-intel-handheld for SteamOS installs.</p>
             </article>
             <article class="capability">
               <h3 data-i18n="capability.qemu.title">QEMU build environment</h3>
@@ -810,7 +810,7 @@
               </div>
               <div class="code-block">
                 <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.target">SteamOS target</span></div>
-                <pre><code>curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
+                <pre><code>curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
               </div>
               <p class="note" data-i18n="install.bootstrap.note">
                 Review the script before running it. It imports the pinned signing
@@ -824,12 +824,12 @@
                 <div class="code-label"><span>pacman.conf</span><span data-i18n="code.planned">active</span></div>
                 <pre><code>[rivoreo-steamos]
 SigLevel = Required TrustedOnly
-Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
+Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$arch</code></pre>
               </div>
               <ul class="list">
                 <li data-i18n="install.pacman.item1">Packages and repository metadata are signed by the Rivoreo release key.</li>
                 <li data-i18n="install.pacman.item2">GitHub Pages serves this site from rivoreo/steamos-intel-handheld.</li>
-                <li data-i18n="install.pacman.item3">DNS target: holo.libz.so CNAME rivoreo.github.io.</li>
+                <li data-i18n="install.pacman.item3">HTTPS endpoint: rivoreo.github.io/steamos-intel-handheld.</li>
               </ul>
             </article>
 
@@ -841,7 +841,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
               <ul class="list">
                 <li data-i18n="release.stable">Stable tags update the public pacman repository.</li>
                 <li data-i18n="release.candidate">release-candidate tags build signed artifacts without deploying Pages.</li>
-                <li data-i18n="release.users">Users install from holo.libz.so after a stable release.</li>
+                <li data-i18n="release.users">Users install from rivoreo.github.io/steamos-intel-handheld after a stable release.</li>
                 <li data-i18n="release.maintainers">Maintainers inspect candidate artifacts in GitHub Actions.</li>
               </ul>
             </article>
@@ -850,7 +850,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
       </main>
 
       <footer>
-        <span data-i18n="footer.status">holo.libz.so / rivoreo-steamos</span>
+        <span data-i18n="footer.status">rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos</span>
         <a href="https://github.com/rivoreo/steamos-intel-handheld">github.com/rivoreo/steamos-intel-handheld</a>
       </footer>
     </div>
@@ -904,7 +904,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "capability.mangohud.title": "MangoHud sensor access",
           "capability.mangohud.text": "Keeps the goal focused on making MangoHud see real sensors, not replacing MangoHud with a custom overlay.",
           "capability.repo.title": "Pacman repository hosting",
-          "capability.repo.text": "Reserves a signed Arch-style package repository at holo.libz.so for SteamOS installs.",
+          "capability.repo.text": "Reserves a signed Arch-style package repository at rivoreo.github.io/steamos-intel-handheld for SteamOS installs.",
           "capability.qemu.title": "QEMU build environment",
           "capability.qemu.text": "Documents a SteamOS image based build path so artifacts match the target system instead of the host machine.",
           "capability.verify.title": "Hardware verification harness",
@@ -916,13 +916,13 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "install.pacman.title": "Active pacman stanza",
           "install.pacman.item1": "Packages and repository metadata are signed by the Rivoreo release key.",
           "install.pacman.item2": "GitHub Pages serves this site from rivoreo/steamos-intel-handheld.",
-          "install.pacman.item3": "DNS target: holo.libz.so CNAME rivoreo.github.io.",
+          "install.pacman.item3": "HTTPS endpoint: rivoreo.github.io/steamos-intel-handheld.",
           "release.title": "Release behavior",
           "release.stable": "Stable tags update the public pacman repository.",
           "release.candidate": "release-candidate tags build signed artifacts without deploying Pages.",
-          "release.users": "Users install from holo.libz.so after a stable release.",
+          "release.users": "Users install from rivoreo.github.io/steamos-intel-handheld after a stable release.",
           "release.maintainers": "Maintainers inspect candidate artifacts in GitHub Actions.",
-          "footer.status": "holo.libz.so / rivoreo-steamos"
+          "footer.status": "rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos"
         },
         "zh-CN": {
           "meta.title": "面向 Intel 掌机的 SteamOS 支持层",
@@ -971,7 +971,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "capability.mangohud.title": "MangoHud 传感器访问",
           "capability.mangohud.text": "目标是让 MangoHud 看见真实传感器，而不是用自定义 overlay 替代 MangoHud。",
           "capability.repo.title": "Pacman 软件源托管",
-          "capability.repo.text": "在 holo.libz.so 预留签名的 Arch 风格软件源，供 SteamOS 安装使用。",
+          "capability.repo.text": "在 rivoreo.github.io/steamos-intel-handheld 预留签名的 Arch 风格软件源，供 SteamOS 安装使用。",
           "capability.qemu.title": "QEMU 构建环境",
           "capability.qemu.text": "记录基于 SteamOS 镜像的构建路径，让产物匹配目标系统，而不是宿主机。",
           "capability.verify.title": "硬件验证脚本",
@@ -983,13 +983,13 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "install.pacman.title": "当前 pacman 配置",
           "install.pacman.item1": "软件包和软件源元数据都由 Rivoreo 发布密钥签名。",
           "install.pacman.item2": "GitHub Pages 从 rivoreo/steamos-intel-handheld 提供此站点。",
-          "install.pacman.item3": "DNS 目标：holo.libz.so CNAME rivoreo.github.io。",
+          "install.pacman.item3": "HTTPS 端点：rivoreo.github.io/steamos-intel-handheld。",
           "release.title": "发布行为",
           "release.stable": "稳定版本会更新公开 pacman 软件源。",
           "release.candidate": "候选版本会构建签名产物，但不会部署 GitHub Pages。",
-          "release.users": "用户只在稳定版本发布后从 holo.libz.so 安装。",
+          "release.users": "用户只在稳定版本发布后从 rivoreo.github.io/steamos-intel-handheld 安装。",
           "release.maintainers": "维护者在 GitHub Actions 中检查候选产物。",
-          "footer.status": "holo.libz.so / rivoreo-steamos"
+          "footer.status": "rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos"
         },
         "zh-TW": {
           "meta.title": "針對 Intel 掌機的 SteamOS 支援層",
@@ -1038,7 +1038,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "capability.mangohud.title": "MangoHud 感測器存取",
           "capability.mangohud.text": "目標是讓 MangoHud 看見真實感測器，而不是用自訂 overlay 取代 MangoHud。",
           "capability.repo.title": "Pacman 套件庫託管",
-          "capability.repo.text": "在 holo.libz.so 預留簽名的 Arch 風格套件庫，供 SteamOS 安裝使用。",
+          "capability.repo.text": "在 rivoreo.github.io/steamos-intel-handheld 預留簽名的 Arch 風格套件庫，供 SteamOS 安裝使用。",
           "capability.qemu.title": "QEMU 建置環境",
           "capability.qemu.text": "記錄基於 SteamOS 映像檔的建置路徑，讓產物符合目標系統，而不是主機環境。",
           "capability.verify.title": "硬體驗證腳本",
@@ -1050,13 +1050,13 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "install.pacman.title": "目前的 pacman 設定",
           "install.pacman.item1": "套件和套件庫中繼資料都由 Rivoreo 釋出金鑰簽名。",
           "install.pacman.item2": "GitHub Pages 從 rivoreo/steamos-intel-handheld 提供此網站。",
-          "install.pacman.item3": "DNS 目標：holo.libz.so CNAME rivoreo.github.io。",
+          "install.pacman.item3": "HTTPS 端點：rivoreo.github.io/steamos-intel-handheld。",
           "release.title": "釋出行為",
           "release.stable": "穩定版本會更新公開 pacman 套件庫。",
           "release.candidate": "候選版本會建置簽名產物，但不會部署 GitHub Pages。",
-          "release.users": "使用者只在穩定版本釋出後從 holo.libz.so 安裝。",
+          "release.users": "使用者只在穩定版本釋出後從 rivoreo.github.io/steamos-intel-handheld 安裝。",
           "release.maintainers": "維護者在 GitHub Actions 中檢查候選產物。",
-          "footer.status": "holo.libz.so / rivoreo-steamos"
+          "footer.status": "rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos"
         }
       };
 

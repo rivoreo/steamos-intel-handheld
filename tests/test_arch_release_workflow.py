@@ -1,8 +1,10 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+PUBLIC_REPO_BASE = "https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos"
 BOOTSTRAP_INSTALL_COMMAND = (
-    "pacman -S --needed rivoreo-keyring rivoreo-steamos-repo steamos-intel-handheld"
+    "pacman -S --needed rivoreo-keyring rivoreo-steamos-repo "
+    "steamos-intel-handheld steamos-intel-handheld-mangoapp"
 )
 WORKFLOW = ROOT / ".github/workflows/arch-release.yml"
 PAGES_WORKFLOW = ROOT / ".github/workflows/pages.yml"
@@ -14,6 +16,7 @@ MAIN_PKGBUILD = ROOT / "packaging/arch/PKGBUILD"
 KEYRING_PKGBUILD = ROOT / "packaging/arch/rivoreo-keyring/PKGBUILD"
 REPO_PKGBUILD = ROOT / "packaging/arch/rivoreo-steamos-repo/PKGBUILD"
 REPO_CONF = ROOT / "packaging/arch/rivoreo-steamos-repo/rivoreo-steamos.conf"
+MANGOAPP_PKGBUILD = ROOT / "packaging/arch/steamos-intel-handheld-mangoapp/PKGBUILD"
 
 
 def _logical_shell_lines(text: str) -> list[str]:
@@ -70,6 +73,37 @@ def test_arch_release_workflow_uses_protected_signing_secrets_and_pages_deploy()
     assert "actions/upload-pages-artifact@v4" in workflow
     assert "actions/deploy-pages@v4" in workflow
     assert "needs: [validate, build-repo]" in workflow
+
+
+def test_arch_release_workflow_builds_mangoapp_before_repository_package_build() -> None:
+    workflow = WORKFLOW.read_text()
+
+    download_line = _line_index_containing(workflow, "Download patched mangoapp binary")
+    chmod_line = _line_index_containing(
+        workflow,
+        "chmod 0755",
+        ".cache/arch-release/mangoapp/mangoapp",
+    )
+    build_repo_line = _line_index_containing(workflow, "Build signed pacman repository")
+
+    assert "build-mangoapp:" in workflow
+    assert "scripts/steamos-qemu-build-env.sh fetch" in workflow
+    assert "scripts/steamos-qemu-build-env.sh provision" in workflow
+    assert "scripts/steamos-qemu-build-env.sh run-build" in workflow
+    assert "scripts/steamos-qemu-build-env.sh build-mangoapp" in workflow
+    assert "mangoapp-binary" in workflow
+    assert "needs: [validate, build-mangoapp]" in workflow
+    assert "actions/download-artifact@v4" in workflow
+    assert "MANGOAPP_BINARY=" in workflow
+    assert download_line < chmod_line < build_repo_line
+
+
+def test_arch_release_workflow_uses_current_intel_macos_runner_for_qemu_build() -> None:
+    workflow = WORKFLOW.read_text()
+
+    assert "runs-on: macos-15-intel" in workflow
+    assert "runs-on: macos-13" not in workflow
+    assert "rm -f .cache/steamos-qemu/steamos-base.qcow2" in workflow
 
 
 def test_arch_release_workflow_keeps_prerelease_tags_hidden_from_pages() -> None:
@@ -149,15 +183,32 @@ def test_release_build_script_removes_repo_add_alias_symlinks_before_copying_ali
 
 def test_release_build_script_syncs_main_pkgbuild_version_before_building() -> None:
     script = BUILD_SCRIPT.read_text()
-    sync_line = _line_index_containing(
+    main_sync_line = _line_index_containing(
         script,
         "sed -i",
         "pkgver=$pkgver",
         "packaging/arch/PKGBUILD",
     )
+    mangoapp_sync_line = _line_index_containing(
+        script,
+        "sed -i",
+        "pkgver=$pkgver",
+        "packaging/arch/steamos-intel-handheld-mangoapp/PKGBUILD",
+    )
     build_line = _line_index_containing(script, "build_pkg packaging/arch")
 
-    assert sync_line < build_line
+    assert main_sync_line < build_line
+    assert mangoapp_sync_line < build_line
+
+
+def test_release_build_script_builds_all_release_packages_including_mangoapp() -> None:
+    script = BUILD_SCRIPT.read_text()
+
+    assert "prepare_mangoapp_package_inputs" in script
+    assert "MANGOAPP_BINARY" in script
+    assert "external/MangoHud/LICENSE" in script
+    assert "10-rivoreo-mangoapp.conf" in script
+    assert "build_pkg packaging/arch/steamos-intel-handheld-mangoapp" in script
 
 
 def test_release_build_script_accepts_candidate_tags_for_pyproject_version() -> None:
@@ -186,6 +237,7 @@ def test_release_packages_are_defined_for_keyring_and_repo_config() -> None:
     keyring = KEYRING_PKGBUILD.read_text()
     repo_pkg = REPO_PKGBUILD.read_text()
     repo_conf = REPO_CONF.read_text()
+    mangoapp = MANGOAPP_PKGBUILD.read_text()
 
     assert "pkgname=rivoreo-keyring" in keyring
     assert "rivoreo-trusted" in keyring
@@ -193,7 +245,16 @@ def test_release_packages_are_defined_for_keyring_and_repo_config() -> None:
     assert 'backup=("etc/pacman.d/rivoreo-steamos.conf")' in repo_pkg
     assert "[rivoreo-steamos]" in repo_conf
     assert "SigLevel = Required TrustedOnly" in repo_conf
-    assert "Server = https://holo.libz.so/rivoreo-steamos/os/$arch" in repo_conf
+    assert f"Server = {PUBLIC_REPO_BASE}/os/$arch" in repo_conf
+    assert "pkgname=steamos-intel-handheld-mangoapp" in mangoapp
+    assert 'arch=("x86_64")' in mangoapp
+    assert 'source=("mangoapp" "10-rivoreo-mangoapp.conf" "MangoHud-LICENSE")' in mangoapp
+    assert "/opt/steamos-intel-handheld/bin/mangoapp" in mangoapp
+    assert (
+        "/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
+        in mangoapp
+    )
+    assert "/usr/share/licenses/$pkgname/MangoHud-LICENSE" in mangoapp
 
 
 def test_release_pkgbuilds_do_not_ship_main_package_with_skip_checksum() -> None:
@@ -213,12 +274,32 @@ def test_active_bootstrap_is_fingerprint_pinned_and_secure() -> None:
     bootstrap = BOOTSTRAP.read_text()
 
     assert "__RIVOREO_KEY_FINGERPRINT__" in bootstrap
+    assert f'REPO_BASE_URL:-{PUBLIC_REPO_BASE}' in bootstrap
     assert "SigLevel = Required TrustedOnly" in bootstrap
     assert "SigLevel = Never" not in bootstrap
+    assert "http://" not in bootstrap
+    assert "https://holo.libz.so" not in bootstrap
     assert "pacman-key --add" in bootstrap
     assert "pacman-key --lsign-key" in bootstrap
     assert BOOTSTRAP_INSTALL_COMMAND in bootstrap
     assert "steamos-readonly disable" in bootstrap
+
+
+def test_release_public_urls_are_https_only_project_pages_urls() -> None:
+    active_paths = [
+        ROOT / "site/index.html",
+        ROOT / "site/rivoreo-steamos/bootstrap.sh",
+        ROOT / "docs/package-repository.md",
+        ROOT / "docs/release-process.md",
+        ROOT / "packaging/arch/rivoreo-steamos-repo/rivoreo-steamos.conf",
+    ]
+
+    assert not (ROOT / "site/CNAME").exists()
+    for path in active_paths:
+        text = path.read_text()
+        assert PUBLIC_REPO_BASE in text
+        assert "http://" not in text
+        assert "https://holo.libz.so" not in text
 
 
 def test_package_repository_docs_describe_github_actions_release_publisher() -> None:

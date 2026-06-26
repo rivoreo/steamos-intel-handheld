@@ -62,7 +62,7 @@ jobs:
 
   build-repo:
     runs-on: ubuntu-latest
-    needs: validate
+    needs: [validate, build-mangoapp]
     container:
       image: archlinux:base-devel
     env:
@@ -84,6 +84,13 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
           submodules: recursive
+      - name: Download patched mangoapp binary
+        uses: actions/download-artifact@v4
+        with:
+          name: mangoapp-binary
+          path: .cache/arch-release/mangoapp
+      - name: Restore patched mangoapp executable bit
+        run: chmod 0755 .cache/arch-release/mangoapp/mangoapp
       - name: Install Arch build dependencies
         run: |
           set -euo pipefail
@@ -129,7 +136,7 @@ jobs:
               exit 2
             fi
 
-            su builder -c "gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key 'Rivoreo candidate signing key <candidate@holo.libz.so>' rsa3072 sign 1d"
+            su builder -c "gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key 'Rivoreo candidate signing key <candidate@rivoreo.invalid>' rsa3072 sign 1d"
             imported="$(
               su builder -c "gpg --batch --with-colons --list-secret-keys" \
                 | awk -F: '$1 == "fpr" {print $10; exit}'
@@ -149,12 +156,74 @@ jobs:
       - name: Build signed pacman repository
         run: |
           set -euo pipefail
-          su builder -c "cd '$GITHUB_WORKSPACE' && RELEASE_TAG='$RELEASE_TAG' ARCH_REPO_GPG_KEY_ID='$ARCH_REPO_GPG_KEY_ID' GPGKEY='$ARCH_REPO_GPG_KEY_ID' KEY_OUT='$KEY_OUT' scripts/build-arch-release-repo.sh"
+          su builder -c "cd '$GITHUB_WORKSPACE' && RELEASE_TAG='$RELEASE_TAG' ARCH_REPO_GPG_KEY_ID='$ARCH_REPO_GPG_KEY_ID' GPGKEY='$ARCH_REPO_GPG_KEY_ID' KEY_OUT='$KEY_OUT' MANGOAPP_BINARY='$GITHUB_WORKSPACE/.cache/arch-release/mangoapp/mangoapp' scripts/build-arch-release-repo.sh"
       - name: Upload signed repository artifact
         uses: actions/upload-artifact@v4
         with:
           name: signed-pacman-repository
           path: .cache/arch-release/public
+          if-no-files-found: error
+
+  build-mangoapp:
+    runs-on: macos-15-intel
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Install SteamOS QEMU build dependencies
+        run: |
+          set -euo pipefail
+          brew install qemu expect
+      - name: Build patched mangoapp in SteamOS QEMU
+        run: |
+          set -euo pipefail
+          export STEAMOS_QEMU_MEMORY=4G
+          export STEAMOS_QEMU_SSH_PORT=2224
+          export STEAMOS_QEMU_BUILD_JOBS=3
+          export STEAMOS_QEMU_MANGOAPP_ARTIFACT="$PWD/.cache/arch-release/mangoapp/mangoapp"
+
+          scripts/steamos-qemu-build-env.sh fetch
+          rm -f .cache/steamos-qemu/steamos-base.qcow2
+          scripts/steamos-qemu-build-env.sh provision
+
+          mkdir -p .cache/steamos-qemu .cache/arch-release/mangoapp
+          scripts/steamos-qemu-build-env.sh run-build > .cache/steamos-qemu/run-build.log 2>&1 &
+          vm_pid=$!
+          cleanup() {
+            kill "$vm_pid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          ssh_ready=0
+          for _attempt in $(seq 1 90); do
+            if ssh \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=.cache/steamos-qemu/known_hosts \
+              -i .cache/steamos-qemu/id_ed25519 \
+              -p "$STEAMOS_QEMU_SSH_PORT" \
+              root@127.0.0.1 true; then
+              ssh_ready=1
+              break
+            fi
+            sleep 10
+          done
+
+          if [ "$ssh_ready" != "1" ]; then
+            tail -200 .cache/steamos-qemu/run-build.log || true
+            echo "SteamOS build VM did not become reachable over SSH" >&2
+            exit 1
+          fi
+
+          scripts/steamos-qemu-build-env.sh build-mangoapp
+      - name: Upload patched mangoapp binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mangoapp-binary
+          path: .cache/arch-release/mangoapp/mangoapp
           if-no-files-found: error
 
   deploy-pages:

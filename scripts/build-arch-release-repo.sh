@@ -32,11 +32,13 @@ package_out="${PACKAGE_OUT:-$repo_root/.cache/arch-release/packages}"
 repo_out="${REPO_OUT:-$repo_root/.cache/arch-release/public/rivoreo-steamos/os/x86_64}"
 key_out="${KEY_OUT:-$repo_root/site/rivoreo-steamos/key}"
 src_archive="$repo_root/packaging/arch/steamos-intel-handheld-$pkgver.tar.gz"
+mangoapp_pkgdir="$repo_root/packaging/arch/steamos-intel-handheld-mangoapp"
 
 rm -rf "$package_out" "$repo_out"
 mkdir -p "$package_out" "$repo_out" "$key_out"
 
 sed -i "s/^pkgver=.*/pkgver=$pkgver/" packaging/arch/PKGBUILD
+sed -i "s/^pkgver=.*/pkgver=$pkgver/" packaging/arch/steamos-intel-handheld-mangoapp/PKGBUILD
 git archive --format=tar --prefix="steamos-intel-handheld-$pkgver/" "$release_tag" \
   | gzip -n > "$src_archive"
 
@@ -60,14 +62,31 @@ build_pkg() {
   local pkgdir="$1"
   (
     cd "$pkgdir"
-    if grep -q 'sha256sums=("0000000000000000000000000000000000000000000000000000000000000000")' PKGBUILD; then
+    if grep -q '0000000000000000000000000000000000000000000000000000000000000000' PKGBUILD; then
       updpkgsums
     fi
     PKGDEST="$package_out" makepkg --cleanbuild --syncdeps --noconfirm --needed --sign
   )
 }
 
+prepare_mangoapp_package_inputs() {
+  local mangoapp_binary="${MANGOAPP_BINARY:-$repo_root/.cache/steamos-qemu/mangoapp}"
+
+  if [ ! -x "$mangoapp_binary" ]; then
+    echo "MANGOAPP_BINARY must point to the patched executable mangoapp binary, got: $mangoapp_binary" >&2
+    exit 2
+  fi
+
+  install -Dm0755 "$mangoapp_binary" "$mangoapp_pkgdir/mangoapp"
+  install -Dm0644 \
+    data/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf \
+    "$mangoapp_pkgdir/10-rivoreo-mangoapp.conf"
+  install -Dm0644 external/MangoHud/LICENSE "$mangoapp_pkgdir/MangoHud-LICENSE"
+}
+
+prepare_mangoapp_package_inputs
 build_pkg packaging/arch
+build_pkg packaging/arch/steamos-intel-handheld-mangoapp
 build_pkg packaging/arch/rivoreo-keyring
 build_pkg packaging/arch/rivoreo-steamos-repo
 

@@ -35,11 +35,15 @@ candidate signing fallback.
 - Stable `vX.Y.Z` releases deploy GitHub Pages through `deploy-pages`.
 - Hidden `vX.Y.Z-rc.N` releases upload `signed-pacman-repository` and skip
   `deploy-pages`.
+- Release builds include `steamos-intel-handheld`, `steamos-intel-handheld-mangoapp`,
+  `rivoreo-keyring`, and `rivoreo-steamos-repo`.
 - Hidden release candidates may generate a short-lived candidate signing key.
 - Stable releases require `ARCH_REPO_GPG_PRIVATE_KEY`,
   `ARCH_REPO_GPG_PASSPHRASE`, and `ARCH_REPO_GPG_KEY_ID`.
 - Users install only from the public stable bootstrap URL, not from hidden
   release-candidate artifacts.
+- Public install and pacman URLs must stay HTTPS-only. Use the GitHub Pages
+  project URL unless a custom domain has a valid HTTPS certificate.
 
 ## Files To Inspect
 

@@ -2,11 +2,13 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+PUBLIC_REPO_BASE = "https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos"
 PAGES_WORKFLOW = ROOT / ".github/workflows/pages.yml"
 SITE_INDEX = ROOT / "site/index.html"
 BOOTSTRAP = ROOT / "site/rivoreo-steamos/bootstrap.sh"
 BOOTSTRAP_INSTALL_COMMAND = (
-    "pacman -S --needed rivoreo-keyring rivoreo-steamos-repo steamos-intel-handheld"
+    "pacman -S --needed rivoreo-keyring rivoreo-steamos-repo "
+    "steamos-intel-handheld steamos-intel-handheld-mangoapp"
 )
 
 
@@ -29,7 +31,9 @@ def test_pages_workflow_validates_static_site_without_deploying() -> None:
 
 def test_pages_site_documents_project_repo_url() -> None:
     index = SITE_INDEX.read_text()
-    assert "https://holo.libz.so/rivoreo-steamos/os/$arch" in index
+    assert f"{PUBLIC_REPO_BASE}/os/$arch" in index
+    assert "https://holo.libz.so" not in index
+    assert "http://" not in index
     assert "SigLevel = Required TrustedOnly" in index
     assert "SteamOS support for Intel handhelds" in index
     assert "What it is" in index
@@ -59,7 +63,10 @@ def test_pages_site_explains_stable_install_and_candidate_release_flow() -> None
     index = SITE_INDEX.read_text()
     assert "Stable tags update the public pacman repository" in index
     assert "release-candidate tags build signed artifacts without deploying Pages" in index
-    assert "Users install from holo.libz.so after a stable release" in index
+    assert (
+        "Users install from rivoreo.github.io/steamos-intel-handheld after a stable release"
+        in index
+    )
     assert "Maintainers inspect candidate artifacts in GitHub Actions" in index
 
 
@@ -126,14 +133,16 @@ def test_pages_site_does_not_treat_hong_kong_or_macau_as_zh_tw() -> None:
     assert 'locale.startsWith("zh-hant-")' not in index
 
 
-def test_pages_site_declares_custom_domain() -> None:
-    cname = (ROOT / "site/CNAME").read_text()
-    assert cname.strip() == "holo.libz.so"
+def test_pages_site_uses_https_project_pages_domain_not_custom_domain() -> None:
+    assert not (ROOT / "site/CNAME").exists()
 
 
 def test_active_bootstrap_configures_signed_repo() -> None:
     bootstrap = BOOTSTRAP.read_text()
     assert BOOTSTRAP_INSTALL_COMMAND in bootstrap
+    assert f'REPO_BASE_URL:-{PUBLIC_REPO_BASE}' in bootstrap
+    assert "https://holo.libz.so" not in bootstrap
+    assert "http://" not in bootstrap
     assert "signed package database has not been published" not in bootstrap
     assert "exit 1" not in bootstrap
     assert "SigLevel = Required TrustedOnly" in bootstrap

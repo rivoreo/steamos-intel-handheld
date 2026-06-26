@@ -1,6 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+PUBLIC_REPO_BASE = "https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos"
 README = ROOT / "README.md"
 PACKAGE_DOCS = ROOT / "docs/package-repository.md"
 RELEASE_DOCS = ROOT / "docs/release-process.md"
@@ -53,15 +54,18 @@ def test_release_process_runbook_includes_build_scope_and_install_path() -> None
     assert "steamos-intel-handheld" in docs
     assert "rivoreo-keyring" in docs
     assert "rivoreo-steamos-repo" in docs
+    assert "steamos-intel-handheld-mangoapp" in docs
     assert "package versions derive from `pyproject.toml`" in docs
     assert (
         "repo aliases `.db`, `.files`, and `.sig` are regular files"
         in normalized_docs
     )
     assert (
-        "curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash"
+        f"curl -fsSL {PUBLIC_REPO_BASE}/bootstrap.sh | sudo bash"
         in docs
     )
+    assert "https://holo.libz.so" not in docs
+    assert "http://" not in docs
     assert "Users should not install from hidden release-candidate artifacts" in docs
 
 

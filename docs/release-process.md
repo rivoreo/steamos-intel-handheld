@@ -47,6 +47,7 @@ The `Arch Package Release` workflow in `.github/workflows/arch-release.yml`
 builds:
 
 - `steamos-intel-handheld`
+- `steamos-intel-handheld-mangoapp`
 - `rivoreo-keyring`
 - `rivoreo-steamos-repo`
 
@@ -54,6 +55,11 @@ The release build script also creates signed `rivoreo-steamos` repository
 metadata, and package versions derive from `pyproject.toml`; before building the
 main package, CI syncs `packaging/arch/PKGBUILD` to that version and refreshes
 checksums with `updpkgsums`.
+
+The `steamos-intel-handheld-mangoapp` package uses the patched MangoHud
+submodule. CI builds the `mangoapp` executable in the SteamOS QEMU build
+environment first, then packages that binary separately so users do not fall
+back to the unpatched system MangoHud.
 
 For GitHub Pages compatibility, repo aliases `.db`, `.files`, and `.sig` are
 regular files, not symlinks.
@@ -103,6 +109,7 @@ gh run view <run-id> --log-failed --repo rivoreo/steamos-intel-handheld
 Expected candidate result:
 
 - `validate`: success
+- `build-mangoapp`: success
 - `build-repo`: success
 - `deploy-pages`: skipped
 - `signed-pacman-repository`: uploaded artifact
@@ -130,6 +137,8 @@ Expected files include:
 - `key/rivoreo.asc`
 - `rivoreo-steamos/os/x86_64/*.pkg.tar.zst`
 - `rivoreo-steamos/os/x86_64/*.pkg.tar.zst.sig`
+- `rivoreo-steamos/os/x86_64/steamos-intel-handheld-mangoapp-*.pkg.tar.zst`
+- `rivoreo-steamos/os/x86_64/steamos-intel-handheld-mangoapp-*.pkg.tar.zst.sig`
 - `rivoreo-steamos/os/x86_64/rivoreo-steamos.db`
 - `rivoreo-steamos/os/x86_64/rivoreo-steamos.db.sig`
 - `rivoreo-steamos/os/x86_64/rivoreo-steamos.files`
@@ -155,15 +164,16 @@ gh run watch <run-id> --repo rivoreo/steamos-intel-handheld --exit-status
 Expected stable result:
 
 - `validate`: success
+- `build-mangoapp`: success
 - `build-repo`: success
 - `deploy-pages`: success
 - public repository served from
-  `https://holo.libz.so/rivoreo-steamos/os/x86_64`
+  `https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/x86_64`
 
 After the Pages deployment, users install from the public bootstrap path:
 
 ```bash
-curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash
+curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash
 ```
 
 Users should not install from hidden release-candidate artifacts. Those artifacts

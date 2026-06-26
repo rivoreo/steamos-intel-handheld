@@ -1,0 +1,23 @@
+# Maintainer: JohnnySun <bmy001@gmail.com>
+pkgname=steamos-intel-handheld-mangoapp
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Patched SteamOS mangoapp for Intel handheld MangoHud sensor support"
+arch=("x86_64")
+url="https://github.com/rivoreo/steamos-intel-handheld"
+license=("MIT")
+depends=("glibc")
+source=("mangoapp" "10-rivoreo-mangoapp.conf" "MangoHud-LICENSE")
+sha256sums=(
+  "0000000000000000000000000000000000000000000000000000000000000000"
+  "0000000000000000000000000000000000000000000000000000000000000000"
+  "0000000000000000000000000000000000000000000000000000000000000000"
+)
+
+package() {
+  install -Dm0755 mangoapp "$pkgdir/opt/steamos-intel-handheld/bin/mangoapp"
+  install -Dm0644 10-rivoreo-mangoapp.conf \
+    "$pkgdir/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
+  install -Dm0644 MangoHud-LICENSE \
+    "$pkgdir/usr/share/licenses/$pkgname/MangoHud-LICENSE"
+}

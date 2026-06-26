@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_base_url="${REPO_BASE_URL:-https://holo.libz.so/rivoreo-steamos}"
+repo_base_url="${REPO_BASE_URL:-https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos}"
 key_fingerprint="__RIVOREO_KEY_FINGERPRINT__"
 repo_conf="/etc/pacman.d/rivoreo-steamos.conf"
 include_line="Include = /etc/pacman.d/rivoreo-steamos.conf"
@@ -69,7 +69,7 @@ if ! grep -Fxq "$include_line" /etc/pacman.conf; then
 fi
 
 pacman -Sy
-pacman -S --needed rivoreo-keyring rivoreo-steamos-repo steamos-intel-handheld
+pacman -S --needed rivoreo-keyring rivoreo-steamos-repo steamos-intel-handheld steamos-intel-handheld-mangoapp
 
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true
