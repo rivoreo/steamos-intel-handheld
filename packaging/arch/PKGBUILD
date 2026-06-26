@@ -7,7 +7,7 @@ arch=("any")
 url="https://github.com/rivoreo/steamos-intel-handheld"
 license=("MIT")
 depends=("python" "python-dbus-next")
-makedepends=("python-build" "python-installer" "python-wheel")
+makedepends=("python-build" "python-installer" "python-setuptools" "python-wheel")
 source=("$pkgname-$pkgver.tar.gz")
 sha256sums=("0000000000000000000000000000000000000000000000000000000000000000")
 

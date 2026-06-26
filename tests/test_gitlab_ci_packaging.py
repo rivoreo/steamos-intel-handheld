@@ -27,6 +27,7 @@ def test_gitlab_ci_builds_arch_package_in_arch_container() -> None:
     assert "stage: package" in ci
     assert "makepkg --cleanbuild" in ci
     assert "PKGDEST=" in ci
+    assert "python-setuptools" in ci
     assert ".cache/arch-packages/*.pkg.tar.zst" in ci
 
 

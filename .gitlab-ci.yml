@@ -27,7 +27,7 @@ arch:package:
   image: archlinux:base-devel
   before_script:
     - pacman -Syu --noconfirm
-    - pacman -S --noconfirm git pacman-contrib python python-build python-installer python-wheel python-dbus-next python-pytest
+    - pacman -S --noconfirm git pacman-contrib python python-build python-installer python-setuptools python-wheel python-dbus-next python-pytest
     - useradd -m builder
     - chown -R builder:builder "$CI_PROJECT_DIR"
   script:

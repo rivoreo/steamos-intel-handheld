@@ -203,6 +203,12 @@ def test_release_pkgbuilds_do_not_ship_main_package_with_skip_checksum() -> None
     assert "sha256sums=(" in pkgbuild
 
 
+def test_main_pkgbuild_declares_python_build_backend_dependency() -> None:
+    pkgbuild = MAIN_PKGBUILD.read_text()
+
+    assert '"python-setuptools"' in pkgbuild
+
+
 def test_active_bootstrap_is_fingerprint_pinned_and_secure() -> None:
     bootstrap = BOOTSTRAP.read_text()
 

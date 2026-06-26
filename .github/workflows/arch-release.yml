@@ -90,7 +90,7 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
             git gzip gnupg pacman-contrib python python-build python-installer \
-            python-wheel python-dbus-next python-pytest sudo
+            python-setuptools python-wheel python-dbus-next python-pytest sudo
           useradd -m builder
           printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
           chmod 0440 /etc/sudoers.d/builder
