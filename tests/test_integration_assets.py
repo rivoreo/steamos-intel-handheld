@@ -233,6 +233,8 @@ def test_steamos_qemu_build_env_uses_official_recovery_image():
     assert "build-mangoapp-rootfs)" in script
     assert "STEAMOS_ROOTFS_DIR" in script
     assert "chroot" in script
+    assert 'mount_for_rootfs "$rootfs_dir" "$rootfs_dir" bind' in script
+    assert "gpgconf --kill all" in script
     assert "qemu_args=(" in script
     assert 'if [ "${#extra_args[@]}" -gt 0 ]; then' in script
     assert "STEAMOS_QEMU_CLEAN_BUILD" in script

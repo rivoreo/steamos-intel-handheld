@@ -635,6 +635,7 @@ cleanup_rootfs_mounts() {
 run_rootfs_chroot() {
   prepare_rootfs
   trap cleanup_rootfs_mounts RETURN
+  mount_for_rootfs "$rootfs_dir" "$rootfs_dir" bind
   mount_for_rootfs /dev "$rootfs_dir/dev" bind
   mount_for_rootfs /proc "$rootfs_dir/proc" proc
   mount_for_rootfs /sys "$rootfs_dir/sys" sysfs
@@ -644,6 +645,7 @@ run_rootfs_chroot() {
   set +e
   sudo_cmd chroot "$rootfs_dir" "$@"
   rc=$?
+  sudo_cmd chroot "$rootfs_dir" /usr/bin/env gpgconf --kill all >/dev/null 2>&1 || true
   set -e
   cleanup_rootfs_mounts
   trap - RETURN

@@ -200,6 +200,9 @@ them in mind when changing the workflow:
 - `v0.1.0-rc.5`: cancelled after the QEMU/SSH `build-mangoapp` path spent about
   19 minutes waiting on a VM that never exposed SSH; release CI now uses the
   Linux SteamOS rootfs chroot path instead.
+- `v0.1.0-rc.6`: rootfs/chroot path reached SteamOS `pacman`, then failed
+  `CheckSpace` because the chroot root was not a mount point; the helper now
+  bind-mounts the rootfs onto itself before entering chroot.
 
 ## Reporting A Release
 
