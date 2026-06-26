@@ -87,10 +87,13 @@ def test_arch_release_workflow_builds_mangoapp_before_repository_package_build()
     build_repo_line = _line_index_containing(workflow, "Build signed pacman repository")
 
     assert "build-mangoapp:" in workflow
-    assert "scripts/steamos-qemu-build-env.sh fetch" in workflow
-    assert "scripts/steamos-qemu-build-env.sh provision" in workflow
-    assert "scripts/steamos-qemu-build-env.sh run-build" in workflow
-    assert "scripts/steamos-qemu-build-env.sh build-mangoapp" in workflow
+    assert "Build patched mangoapp in SteamOS rootfs chroot" in workflow
+    assert "scripts/steamos-qemu-build-env.sh fetch-raw" in workflow
+    assert "scripts/steamos-qemu-build-env.sh prepare-rootfs" in workflow
+    assert "scripts/steamos-qemu-build-env.sh build-mangoapp-rootfs" in workflow
+    assert "scripts/steamos-qemu-build-env.sh provision" not in workflow
+    assert "scripts/steamos-qemu-build-env.sh run-build" not in workflow
+    assert "ssh_ready" not in workflow
     assert "mangoapp-binary" in workflow
     assert "needs: [validate, build-mangoapp]" in workflow
     assert "actions/download-artifact@v4" in workflow
@@ -98,12 +101,22 @@ def test_arch_release_workflow_builds_mangoapp_before_repository_package_build()
     assert download_line < chmod_line < build_repo_line
 
 
-def test_arch_release_workflow_uses_current_intel_macos_runner_for_qemu_build() -> None:
+def test_arch_release_workflow_uses_linux_rootfs_chroot_for_mangoapp_build() -> None:
     workflow = WORKFLOW.read_text()
 
-    assert "runs-on: macos-15-intel" in workflow
+    build_mangoapp_line = _line_index_containing(workflow, "build-mangoapp:")
+    runner_line = next(
+        index
+        for index in _line_indices_containing(workflow, "runs-on:", "ubuntu-latest")
+        if index > build_mangoapp_line
+    )
+
+    assert build_mangoapp_line < runner_line
+    assert "STEAMOS_ROOTFS_DIR=" in workflow
+    assert "macos-15-intel" not in workflow
     assert "runs-on: macos-13" not in workflow
-    assert "rm -f .cache/steamos-qemu/steamos-base.qcow2" in workflow
+    assert "brew install qemu expect" not in workflow
+    assert "qemu-system-x86_64" not in workflow
 
 
 def test_arch_release_workflow_keeps_prerelease_tags_hidden_from_pages() -> None:

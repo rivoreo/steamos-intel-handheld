@@ -165,7 +165,7 @@ jobs:
           if-no-files-found: error
 
   build-mangoapp:
-    runs-on: macos-15-intel
+    runs-on: ubuntu-latest
     needs: validate
     steps:
       - uses: actions/checkout@v4
@@ -173,52 +173,21 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
           submodules: recursive
-      - name: Install SteamOS QEMU build dependencies
+      - name: Install SteamOS rootfs build dependencies
         run: |
           set -euo pipefail
-          brew install qemu expect
-      - name: Build patched mangoapp in SteamOS QEMU
+          sudo apt-get update
+          sudo apt-get install -y bzip2 curl file rsync util-linux
+      - name: Build patched mangoapp in SteamOS rootfs chroot
         run: |
           set -euo pipefail
-          export STEAMOS_QEMU_MEMORY=4G
-          export STEAMOS_QEMU_SSH_PORT=2224
+          export STEAMOS_ROOTFS_DIR="$PWD/.cache/steamos-rootfs/rootfs"
           export STEAMOS_QEMU_BUILD_JOBS=3
           export STEAMOS_QEMU_MANGOAPP_ARTIFACT="$PWD/.cache/arch-release/mangoapp/mangoapp"
 
-          scripts/steamos-qemu-build-env.sh fetch
-          rm -f .cache/steamos-qemu/steamos-base.qcow2
-          scripts/steamos-qemu-build-env.sh provision
-
-          mkdir -p .cache/steamos-qemu .cache/arch-release/mangoapp
-          scripts/steamos-qemu-build-env.sh run-build > .cache/steamos-qemu/run-build.log 2>&1 &
-          vm_pid=$!
-          cleanup() {
-            kill "$vm_pid" >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
-
-          ssh_ready=0
-          for _attempt in $(seq 1 90); do
-            if ssh \
-              -o BatchMode=yes \
-              -o StrictHostKeyChecking=no \
-              -o UserKnownHostsFile=.cache/steamos-qemu/known_hosts \
-              -i .cache/steamos-qemu/id_ed25519 \
-              -p "$STEAMOS_QEMU_SSH_PORT" \
-              root@127.0.0.1 true; then
-              ssh_ready=1
-              break
-            fi
-            sleep 10
-          done
-
-          if [ "$ssh_ready" != "1" ]; then
-            tail -200 .cache/steamos-qemu/run-build.log || true
-            echo "SteamOS build VM did not become reachable over SSH" >&2
-            exit 1
-          fi
-
-          scripts/steamos-qemu-build-env.sh build-mangoapp
+          scripts/steamos-qemu-build-env.sh fetch-raw
+          scripts/steamos-qemu-build-env.sh prepare-rootfs
+          scripts/steamos-qemu-build-env.sh build-mangoapp-rootfs
       - name: Upload patched mangoapp binary
         uses: actions/upload-artifact@v4
         with:

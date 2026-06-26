@@ -9,7 +9,10 @@ Usage: scripts/steamos-qemu-build-env.sh <action>
 
 Actions:
   latest-url  Print the newest SteamOS recovery image URL
+  fetch-raw   Download and decompress the SteamOS image
   fetch       Download and convert the SteamOS image to a qcow2 base
+  prepare-rootfs
+              Extract a writable SteamOS rootfs from the recovery image on Linux
   provision   Create a raw build image and enable SSH via a one-time serial boot
   run         Boot a writable qcow2 overlay with this repo mounted as 9p
   run-build   Boot the provisioned raw build image with this repo mounted as 9p
@@ -18,10 +21,13 @@ Actions:
               Install SteamOS build dependencies in a running build VM
   build-mangoapp
               Build MangoHud mangoapp in a running build VM and copy it to cache
+  build-mangoapp-rootfs
+              Build MangoHud mangoapp in a Linux SteamOS rootfs chroot
 
 Environment:
   STEAMOS_IMAGE_URL          Override the discovered recovery image URL
   STEAMOS_QEMU_DIR           Cache directory (default: .cache/steamos-qemu)
+  STEAMOS_ROOTFS_DIR         SteamOS rootfs directory for Linux chroot builds
   STEAMOS_QEMU_CPUS          VM CPU count (default: 4)
   STEAMOS_QEMU_MEMORY        VM memory (default: 8G)
   STEAMOS_QEMU_ACCEL         QEMU accelerator (default: tcg)
@@ -37,6 +43,8 @@ Environment:
                             Optional Meson optimization level override for build-mangoapp
   STEAMOS_QEMU_MANGOAPP_ARTIFACT
                             Host output path (default: .cache/steamos-qemu/mangoapp)
+  STEAMOS_ROOTFS_MANGOAPP_ARTIFACT
+                            Host output path for rootfs builds
 EOF
 }
 
@@ -51,12 +59,30 @@ build_raw="$cache_dir/steamos-build.raw"
 build_ovmf_vars="$cache_dir/ovmf-vars-build.fd"
 ssh_key="$cache_dir/id_ed25519"
 ssh_known_hosts="$cache_dir/known_hosts"
-mangoapp_artifact="${STEAMOS_QEMU_MANGOAPP_ARTIFACT:-$cache_dir/mangoapp}"
+rootfs_dir="${STEAMOS_ROOTFS_DIR:-$cache_dir/rootfs}"
+mangoapp_artifact="${STEAMOS_ROOTFS_MANGOAPP_ARTIFACT:-${STEAMOS_QEMU_MANGOAPP_ARTIFACT:-$cache_dir/mangoapp}}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "missing required command: $1" >&2
     exit 1
+  fi
+}
+
+sudo_cmd() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  else
+    require_command sudo
+    sudo "$@"
+  fi
+}
+
+require_linux_x86_64() {
+  if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
+    echo "SteamOS rootfs chroot builds require a Linux x86_64 host." >&2
+    echo "Use the QEMU VM actions on macOS, ARM, or non-Linux hosts." >&2
+    exit 2
   fi
 }
 
@@ -111,10 +137,9 @@ print(urljoin(index_url, max(candidates)[3]))
 PY
 }
 
-fetch_image() {
+fetch_raw_image() {
   require_command curl
   require_command bzip2
-  require_command qemu-img
 
   mkdir -p "$cache_dir"
   url="$(latest_url)"
@@ -125,11 +150,76 @@ fetch_image() {
     echo "Decompressing $image_bz2"
     bzip2 -dc "$image_bz2" > "$raw_image"
   fi
+}
+
+fetch_image() {
+  fetch_raw_image
+  require_command qemu-img
 
   if [ ! -e "$base_qcow2" ] || [ "$raw_image" -nt "$base_qcow2" ]; then
     echo "Converting raw image to $base_qcow2"
     qemu-img convert -f raw -O qcow2 "$raw_image" "$base_qcow2"
   fi
+}
+
+prepare_rootfs() {
+  require_linux_x86_64
+  require_command losetup
+  require_command lsblk
+  require_command rsync
+  require_command mountpoint
+
+  if [ ! -e "$raw_image" ]; then
+    echo "Raw image is missing; run fetch-raw first." >&2
+    exit 1
+  fi
+
+  if [ -e "$rootfs_dir/usr/bin/pacman" ] && [ -e "$rootfs_dir/etc/os-release" ]; then
+    echo "SteamOS rootfs already prepared at $rootfs_dir"
+    return
+  fi
+
+  mkdir -p "$cache_dir"
+  sudo_cmd rm -rf "$rootfs_dir"
+  sudo_cmd mkdir -p "$rootfs_dir"
+
+  local loop_dev=""
+  local probe_mount="$cache_dir/rootfs-probe"
+  cleanup_probe() {
+    if [ -n "$probe_mount" ] && mountpoint -q "$probe_mount"; then
+      sudo_cmd umount "$probe_mount" || true
+    fi
+    if [ -n "$loop_dev" ]; then
+      sudo_cmd losetup -d "$loop_dev" || true
+    fi
+  }
+  trap cleanup_probe RETURN
+
+  loop_dev="$(sudo_cmd losetup --find --partscan --show "$raw_image")"
+  sudo_cmd mkdir -p "$probe_mount"
+
+  local found_rootfs=0
+  while IFS= read -r partition; do
+    if sudo_cmd mount -o ro "$partition" "$probe_mount" >/dev/null 2>&1; then
+      if sudo_cmd test -e "$probe_mount/usr/bin/pacman" &&
+        sudo_cmd test -e "$probe_mount/etc/os-release"; then
+        echo "Copying SteamOS rootfs from $partition to $rootfs_dir"
+        sudo_cmd rsync -aH --numeric-ids "$probe_mount"/ "$rootfs_dir"/
+        found_rootfs=1
+        break
+      fi
+      sudo_cmd umount "$probe_mount"
+    fi
+  done < <(lsblk -lnpo NAME,TYPE "$loop_dev" | awk '$2 == "part" { print $1 }')
+
+  if [ "$found_rootfs" != "1" ]; then
+    echo "failed to find a SteamOS rootfs partition in $raw_image" >&2
+    exit 1
+  fi
+
+  sudo_cmd chown -R "$(id -u):$(id -g)" "$rootfs_dir"
+  cleanup_probe
+  trap - RETURN
 }
 
 copy_reflink_or_plain() {
@@ -249,7 +339,13 @@ run_qemu_disk() {
     -cpu max
     -smp "$cpus"
     -m "$memory"
-    "${ovmf_args[@]}"
+  )
+
+  if [ "${#ovmf_args[@]}" -gt 0 ]; then
+    qemu_args+=("${ovmf_args[@]}")
+  fi
+
+  qemu_args+=(
     -drive "if=virtio,file=$disk_path,format=$disk_format"
     -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22"
     -device virtio-net-pci,netdev=net0
@@ -499,13 +595,142 @@ EOS
   file "$mangoapp_artifact"
 }
 
+rootfs_mounts=()
+
+mount_for_rootfs() {
+  source_path="$1"
+  target_path="$2"
+  mount_kind="$3"
+
+  sudo_cmd mkdir -p "$target_path"
+  if mountpoint -q "$target_path"; then
+    return
+  fi
+
+  case "$mount_kind" in
+    bind)
+      sudo_cmd mount --bind "$source_path" "$target_path"
+      ;;
+    proc)
+      sudo_cmd mount -t proc proc "$target_path"
+      ;;
+    sysfs)
+      sudo_cmd mount -t sysfs sysfs "$target_path"
+      ;;
+    *)
+      echo "unknown rootfs mount kind: $mount_kind" >&2
+      exit 2
+      ;;
+  esac
+  rootfs_mounts+=("$target_path")
+}
+
+cleanup_rootfs_mounts() {
+  for ((index=${#rootfs_mounts[@]} - 1; index >= 0; index--)); do
+    sudo_cmd umount "${rootfs_mounts[$index]}" || true
+  done
+  rootfs_mounts=()
+}
+
+run_rootfs_chroot() {
+  prepare_rootfs
+  trap cleanup_rootfs_mounts RETURN
+  mount_for_rootfs /dev "$rootfs_dir/dev" bind
+  mount_for_rootfs /proc "$rootfs_dir/proc" proc
+  mount_for_rootfs /sys "$rootfs_dir/sys" sysfs
+  mount_for_rootfs /run "$rootfs_dir/run" bind
+  mount_for_rootfs "$repo_root" "$rootfs_dir/home/workspace" bind
+
+  set +e
+  sudo_cmd chroot "$rootfs_dir" "$@"
+  rc=$?
+  set -e
+  cleanup_rootfs_mounts
+  trap - RETURN
+  return "$rc"
+}
+
+install_build_deps_rootfs() {
+  run_rootfs_chroot /usr/bin/env bash -s <<'EOS'
+set -eux
+pacman-key --init || true
+pacman-key --populate archlinux holo
+pacman -Sy --needed --noconfirm \
+  base-devel meson ninja pkgconf python-mako vulkan-headers
+pacman -S --noconfirm \
+  glibc linux-api-headers \
+  libx11 xorgproto libxcb xcb-proto xtrans libxau libxdmcp \
+  wayland libxkbcommon dbus glfw glslang vulkan-icd-loader \
+  libffi systemd-libs libglvnd \
+  libxrandr libxinerama libxcursor libxi libxrender libxfixes
+EOS
+}
+
+build_mangoapp_rootfs() {
+  if [ -z "${STEAMOS_QEMU_SKIP_DEPS:-}" ]; then
+    install_build_deps_rootfs
+  else
+    prepare_rootfs
+  fi
+
+  jobs="${STEAMOS_QEMU_BUILD_JOBS:-3}"
+  run_rootfs_chroot \
+    /usr/bin/env \
+    STEAMOS_QEMU_BUILD_JOBS="$jobs" \
+    STEAMOS_QEMU_CLEAN_BUILD="${STEAMOS_QEMU_CLEAN_BUILD:-}" \
+    STEAMOS_QEMU_MESON_OPTIMIZATION="${STEAMOS_QEMU_MESON_OPTIMIZATION:-}" \
+    bash -s <<'EOS'
+set -eux
+mkdir -p /home/build
+git config --global --add safe.directory /home/workspace/external/MangoHud || true
+meson_options=(
+  --prefix=/usr
+  -Dmangoapp=true
+  -Dwith_xnvctrl=disabled
+  -Dwith_nvml=disabled
+  -Dinclude_doc=false
+  -Dtests=disabled
+  -Dmangoplot=disabled
+  -Dwith_mangohud_next=false
+  -Dwith_server=false
+)
+if [ -n "${STEAMOS_QEMU_MESON_OPTIMIZATION:-}" ]; then
+  meson_options+=("-Doptimization=$STEAMOS_QEMU_MESON_OPTIMIZATION")
+fi
+if [ -n "${STEAMOS_QEMU_CLEAN_BUILD:-}" ]; then
+  rm -rf /home/build/mangohud
+fi
+if [ -e /home/build/mangohud/build.ninja ]; then
+  meson setup --reconfigure /home/build/mangohud /home/workspace/external/MangoHud \
+    "${meson_options[@]}"
+else
+  meson setup /home/build/mangohud /home/workspace/external/MangoHud \
+    "${meson_options[@]}"
+fi
+meson compile -C /home/build/mangohud -j "$STEAMOS_QEMU_BUILD_JOBS" mangoapp
+file /home/build/mangohud/src/mangoapp
+EOS
+
+  mkdir -p "$(dirname "$mangoapp_artifact")"
+  sudo_cmd cp "$rootfs_dir/home/build/mangohud/src/mangoapp" "$mangoapp_artifact"
+  sudo_cmd chown "$(id -u):$(id -g)" "$mangoapp_artifact"
+  chmod 0755 "$mangoapp_artifact"
+  file "$mangoapp_artifact"
+}
+
 action="${1:-}"
 case "$action" in
   latest-url)
     latest_url
     ;;
+  fetch-raw)
+    fetch_raw_image
+    ;;
   fetch)
     fetch_image
+    ;;
+  prepare-rootfs)
+    prepare_rootfs
     ;;
   provision)
     provision_build_image
@@ -524,6 +749,9 @@ case "$action" in
     ;;
   build-mangoapp)
     build_mangoapp
+    ;;
+  build-mangoapp-rootfs)
+    build_mangoapp_rootfs
     ;;
   *)
     usage

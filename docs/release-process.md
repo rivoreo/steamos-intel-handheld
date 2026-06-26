@@ -57,9 +57,11 @@ main package, CI syncs `packaging/arch/PKGBUILD` to that version and refreshes
 checksums with `updpkgsums`.
 
 The `steamos-intel-handheld-mangoapp` package uses the patched MangoHud
-submodule. CI builds the `mangoapp` executable in the SteamOS QEMU build
-environment first, then packages that binary separately so users do not fall
-back to the unpatched system MangoHud.
+submodule. CI builds the `mangoapp` executable on Linux x86_64 in a SteamOS
+rootfs chroot extracted from Valve's recovery image, then packages that binary
+separately so users do not fall back to the unpatched system MangoHud. The QEMU
+VM path is for local macOS or non-Linux development and should not be used as
+the release CI path.
 
 For GitHub Pages compatibility, repo aliases `.db`, `.files`, and `.sig` are
 regular files, not symlinks.
@@ -195,6 +197,9 @@ them in mind when changing the workflow:
   for Arch builds.
 - `v0.1.0-rc.4`: hidden candidate validation succeeded. The run uploaded the
   `signed-pacman-repository` artifact and skipped Pages deployment.
+- `v0.1.0-rc.5`: cancelled after the QEMU/SSH `build-mangoapp` path spent about
+  19 minutes waiting on a VM that never exposed SSH; release CI now uses the
+  Linux SteamOS rootfs chroot path instead.
 
 ## Reporting A Release
 

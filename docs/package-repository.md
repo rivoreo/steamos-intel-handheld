@@ -51,8 +51,9 @@ Release flow:
 1. Push a stable version tag such as `v0.1.0`, or a hidden validation tag such
    as `v0.1.0-rc.1`.
 2. The `validate` job runs the local harness with recursive submodules.
-3. The `build-mangoapp` job builds the patched MangoHud `mangoapp` binary in
-   the SteamOS QEMU build environment.
+3. The `build-mangoapp` job builds the patched MangoHud `mangoapp` binary on
+   Linux x86_64 in a SteamOS rootfs chroot extracted from Valve's recovery
+   image.
 4. The `build-repo` job runs in `archlinux:base-devel`, imports the protected
    signing key, builds packages with `makepkg`, signs package artifacts, and
    creates signed `rivoreo-steamos` repository metadata with `repo-add`.

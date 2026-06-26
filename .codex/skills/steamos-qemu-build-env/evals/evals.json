@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "I changed external/MangoHud and need a SteamOS-compatible mangoapp binary without compiling on the handheld. Set up or reuse the QEMU build environment and tell me what validation still needs the real device.",
-      "expected_output": "Uses scripts/steamos-qemu-build-env.sh fetch/provision/run-build/build-mangoapp, keeps artifacts under .cache/steamos-qemu, and clearly separates VM build success from hardware sensor validation.",
+      "expected_output": "On Linux x86_64, uses scripts/steamos-qemu-build-env.sh fetch-raw/prepare-rootfs/build-mangoapp-rootfs; uses fetch/provision/run-build/build-mangoapp only for local VM needs, keeps artifacts under .cache, and clearly separates build success from hardware sensor validation.",
       "files": []
     },
     {

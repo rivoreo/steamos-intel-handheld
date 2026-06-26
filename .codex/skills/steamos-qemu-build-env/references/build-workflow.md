@@ -1,12 +1,16 @@
 # Build Workflow Reference
 
-Use this reference for the detailed SteamOS/QEMU build path in this repository.
+Use this reference for the detailed SteamOS MangoHud build paths in this
+repository.
 
 ## Purpose
 
-The build VM compiles MangoHud's `mangoapp` against a SteamOS userland that is
-close to the target handheld. It avoids host-side glibc, Mesa, and package
+The build harness compiles MangoHud's `mangoapp` against a SteamOS userland that
+is close to the target handheld. It avoids host-side glibc, Mesa, and package
 version drift. It does not replace final testing on the Intel handheld.
+
+Release CI uses a Linux x86_64 SteamOS rootfs chroot. The QEMU VM path remains
+for local macOS/non-Linux development and boot-level debugging.
 
 ## Image Source
 
@@ -23,6 +27,16 @@ hardware.
 
 ## Host Requirements
 
+For Linux x86_64 rootfs builds:
+
+- `curl`
+- `bzip2`
+- `losetup`, `lsblk`, `mount`, `chroot`, and `sudo`
+- `rsync`
+- 20GB or more free disk space for the raw image and rootfs
+
+For the QEMU VM path:
+
 - `qemu-system-x86_64`
 - `qemu-img`
 - `curl`
@@ -36,7 +50,8 @@ hardware.
   - `STEAMOS_QEMU_OVMF_VARS`
 
 On Apple Silicon, expect x86_64 emulation to be slow. On Linux x86_64, prefer
-`STEAMOS_QEMU_ACCEL=kvm`.
+the rootfs chroot path for builds. Use `STEAMOS_QEMU_ACCEL=kvm` only when you
+need to boot the VM.
 
 ## Harness Actions
 
@@ -44,6 +59,9 @@ Common actions:
 
 ```bash
 scripts/steamos-qemu-build-env.sh latest-url
+scripts/steamos-qemu-build-env.sh fetch-raw
+scripts/steamos-qemu-build-env.sh prepare-rootfs
+scripts/steamos-qemu-build-env.sh build-mangoapp-rootfs
 scripts/steamos-qemu-build-env.sh fetch
 scripts/steamos-qemu-build-env.sh provision
 scripts/steamos-qemu-build-env.sh run-build
@@ -56,6 +74,7 @@ Useful environment:
 
 ```bash
 STEAMOS_QEMU_DIR=.cache/steamos-qemu
+STEAMOS_ROOTFS_DIR=.cache/steamos-qemu/rootfs
 STEAMOS_QEMU_CPUS=4
 STEAMOS_QEMU_MEMORY=4G
 STEAMOS_QEMU_ACCEL=tcg
@@ -66,6 +85,20 @@ STEAMOS_QEMU_BUILD_JOBS=3
 STEAMOS_QEMU_SKIP_DEPS=1
 STEAMOS_QEMU_MANGOAPP_ARTIFACT=.cache/steamos-qemu/mangoapp
 ```
+
+## Rootfs Build Behavior
+
+`fetch-raw` downloads and decompresses the recovery image without converting it
+to qcow2. `prepare-rootfs` attaches the raw image with `losetup --partscan`,
+finds the partition that contains `/usr/bin/pacman`, and copies it into a
+writable rootfs directory. `build-mangoapp-rootfs` bind-mounts the repository at
+`/home/workspace`, installs the SteamOS build dependencies, builds
+`/home/build/mangohud/src/mangoapp`, and copies it to the configured artifact
+path.
+
+This path requires a Linux x86_64 host because the SteamOS target is x86_64.
+ARM Linux requires an explicit cross-toolchain or qemu-user binfmt layer before
+using a chroot build.
 
 ## Provisioning Behavior
 

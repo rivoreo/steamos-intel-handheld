@@ -37,6 +37,8 @@ candidate signing fallback.
   `deploy-pages`.
 - Release builds include `steamos-intel-handheld`, `steamos-intel-handheld-mangoapp`,
   `rivoreo-keyring`, and `rivoreo-steamos-repo`.
+- Release CI builds patched `mangoapp` on Linux x86_64 with a SteamOS rootfs
+  chroot; do not use the local QEMU/SSH VM path for GitHub release publishing.
 - Hidden release candidates may generate a short-lived candidate signing key.
 - Stable releases require `ARCH_REPO_GPG_PRIVATE_KEY`,
   `ARCH_REPO_GPG_PASSPHRASE`, and `ARCH_REPO_GPG_KEY_ID`.
