@@ -36,7 +36,11 @@ candidate signing fallback.
 - Hidden `vX.Y.Z-rc.N` releases upload `signed-pacman-repository` and skip
   `deploy-pages`.
 - Release builds include `steamos-intel-handheld`, `steamos-intel-handheld-mangoapp`,
-  `rivoreo-keyring`, and `rivoreo-steamos-repo`.
+  `steamos-intel-handheld-mangoapp-debug`, `rivoreo-keyring`, and
+  `rivoreo-steamos-repo`.
+- Release CI must run `verify-repo-artifact` after `build-repo` and before
+  `deploy-pages`. That gate validates package contents, repository metadata,
+  HTTPS repo configuration, public key fingerprint, and detached signatures.
 - Release CI builds patched `mangoapp` on Linux x86_64 with a SteamOS rootfs
   chroot; do not use the local QEMU/SSH VM path for GitHub release publishing.
 - Hidden release candidates may generate a short-lived candidate signing key.
@@ -68,9 +72,10 @@ For release behavior changes, inspect:
 3. Run the local harness before tagging.
 4. Prefer a hidden release candidate after any release workflow change.
 5. Watch the GitHub Actions run until it reaches a final state.
-6. For candidates, verify the `signed-pacman-repository` artifact exists and
+6. Confirm `verify-repo-artifact` succeeded.
+7. For candidates, verify the `signed-pacman-repository` artifact exists and
    `deploy-pages` was skipped.
-7. For stable releases, verify `deploy-pages` succeeded and report the public
+8. For stable releases, verify `deploy-pages` succeeded and report the public
    repository URL.
 
 ## Verification
@@ -103,6 +108,7 @@ When reporting a release or release-documentation change, include:
 
 - tag and commit SHA, if a tag was pushed
 - GitHub Actions run ID and URL, if a run was observed
-- `validate`, `build-repo`, and `deploy-pages` results
+- `validate`, `build-mangoapp`, `build-repo`, `verify-repo-artifact`, and
+  `deploy-pages` results
 - artifact name for candidates, or public repo URL for stable releases
 - tests and validation commands actually run

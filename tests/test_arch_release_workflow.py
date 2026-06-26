@@ -72,7 +72,7 @@ def test_arch_release_workflow_uses_protected_signing_secrets_and_pages_deploy()
     assert "github-pages" in workflow
     assert "actions/upload-pages-artifact@v4" in workflow
     assert "actions/deploy-pages@v4" in workflow
-    assert "needs: [validate, build-repo]" in workflow
+    assert "needs: [validate, build-repo, verify-repo-artifact]" in workflow
 
 
 def test_arch_release_workflow_builds_mangoapp_before_repository_package_build() -> None:
@@ -127,7 +127,27 @@ def test_arch_release_workflow_keeps_prerelease_tags_hidden_from_pages() -> None
     assert 'echo "publish_pages=true" >> "$GITHUB_OUTPUT"' in workflow
     assert 'echo "publish_pages=false" >> "$GITHUB_OUTPUT"' in workflow
     assert "needs.validate.outputs.publish_pages == 'true'" in workflow
-    assert "needs: [validate, build-repo]" in workflow
+    assert "needs: [validate, build-repo, verify-repo-artifact]" in workflow
+
+
+def test_arch_release_workflow_verifies_repository_artifact_before_pages_deploy() -> None:
+    workflow = WORKFLOW.read_text()
+
+    verify_line = _line_index_containing(workflow, "verify-repo-artifact:")
+    deploy_line = _line_index_containing(workflow, "deploy-pages:")
+
+    assert verify_line < deploy_line
+    assert "needs: build-repo" in workflow
+    assert "archlinux:base-devel" in workflow
+    assert "Download signed repository artifact" in workflow
+    assert "Verify signed pacman repository artifact" in workflow
+    assert "rivoreo-steamos.db.tar.zst" in workflow
+    assert "pkgver=\"${RELEASE_TAG#v}\"" in workflow
+    assert "steamos-intel-handheld-mangoapp-${pkgver}-1-x86_64.pkg.tar.zst" in workflow
+    assert "gpg --batch --import" in workflow
+    assert "gpg --batch --verify" in workflow
+    assert "opt/steamos-intel-handheld/bin/mangoapp" in workflow
+    assert "usr/bin/steamos-intel-handheld-power-control" in workflow
 
 
 def test_arch_release_workflow_installs_git_before_container_checkout() -> None:

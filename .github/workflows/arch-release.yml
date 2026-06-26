@@ -164,6 +164,144 @@ jobs:
           path: .cache/arch-release/public
           if-no-files-found: error
 
+  verify-repo-artifact:
+    runs-on: ubuntu-latest
+    needs: build-repo
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Download signed repository artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: signed-pacman-repository
+          path: release-repository
+      - name: Install artifact verification tools
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm gnupg
+      - name: Verify signed pacman repository artifact
+        run: |
+          set -euo pipefail
+
+          repo="$GITHUB_WORKSPACE/release-repository/rivoreo-steamos/os/x86_64"
+          key_dir="$GITHUB_WORKSPACE/release-repository/rivoreo-steamos/key"
+          key="$key_dir/rivoreo.gpg"
+          fingerprint_file="$key_dir/fingerprint.txt"
+
+          pkgver="${RELEASE_TAG#v}"
+          pkgver="${pkgver%%-*}"
+          main_pkg="$repo/steamos-intel-handheld-${pkgver}-1-any.pkg.tar.zst"
+          mango_pkg="$repo/steamos-intel-handheld-mangoapp-${pkgver}-1-x86_64.pkg.tar.zst"
+          mango_debug_pkg="$repo/steamos-intel-handheld-mangoapp-debug-${pkgver}-1-x86_64.pkg.tar.zst"
+
+          shopt -s nullglob
+          keyring_pkgs=("$repo"/rivoreo-keyring-*-any.pkg.tar.zst)
+          repo_config_pkgs=("$repo"/rivoreo-steamos-repo-*-any.pkg.tar.zst)
+          test "${#keyring_pkgs[@]}" -eq 1
+          test "${#repo_config_pkgs[@]}" -eq 1
+          keyring_pkg="${keyring_pkgs[0]}"
+          repo_config_pkg="${repo_config_pkgs[0]}"
+
+          test -s "$key"
+          test -s "$fingerprint_file"
+          test -s "$repo/rivoreo-steamos.db"
+          test -s "$repo/rivoreo-steamos.db.sig"
+          test -s "$repo/rivoreo-steamos.db.tar.zst"
+          test -s "$repo/rivoreo-steamos.db.tar.zst.sig"
+          test -s "$repo/rivoreo-steamos.files"
+          test -s "$repo/rivoreo-steamos.files.sig"
+          test -s "$repo/rivoreo-steamos.files.tar.zst"
+          test -s "$repo/rivoreo-steamos.files.tar.zst.sig"
+
+          test ! -L "$repo/rivoreo-steamos.db"
+          test ! -L "$repo/rivoreo-steamos.db.sig"
+          test ! -L "$repo/rivoreo-steamos.files"
+          test ! -L "$repo/rivoreo-steamos.files.sig"
+          cmp -s "$repo/rivoreo-steamos.db" "$repo/rivoreo-steamos.db.tar.zst"
+          cmp -s "$repo/rivoreo-steamos.files" "$repo/rivoreo-steamos.files.tar.zst"
+
+          packages=(
+            "$main_pkg"
+            "$mango_pkg"
+            "$mango_debug_pkg"
+            "$keyring_pkg"
+            "$repo_config_pkg"
+          )
+          for pkg in "${packages[@]}"; do
+            test -s "$pkg"
+            test -s "$pkg.sig"
+            tar -xOf "$pkg" .PKGINFO >/dev/null
+          done
+
+          contains() {
+            tar -tf "$1" | grep -Fx "$2" >/dev/null
+          }
+          pkginfo_has() {
+            tar -xOf "$1" .PKGINFO | grep -Fx "$2" >/dev/null
+          }
+
+          pkginfo_has "$main_pkg" "pkgname = steamos-intel-handheld"
+          pkginfo_has "$main_pkg" "pkgver = ${pkgver}-1"
+          pkginfo_has "$main_pkg" "arch = any"
+          contains "$main_pkg" "usr/bin/steamos-intel-handheld-power-control"
+          contains "$main_pkg" "usr/lib/systemd/system/steamos-intel-handheld-power-control.service"
+          contains "$main_pkg" "etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf"
+          contains "$main_pkg" "etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+
+          pkginfo_has "$mango_pkg" "pkgname = steamos-intel-handheld-mangoapp"
+          pkginfo_has "$mango_pkg" "pkgver = ${pkgver}-1"
+          pkginfo_has "$mango_pkg" "arch = x86_64"
+          contains "$mango_pkg" "opt/steamos-intel-handheld/bin/mangoapp"
+          contains "$mango_pkg" "etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
+          contains "$mango_pkg" "usr/share/licenses/steamos-intel-handheld-mangoapp/MangoHud-LICENSE"
+
+          pkginfo_has "$mango_debug_pkg" "pkgname = steamos-intel-handheld-mangoapp-debug"
+          pkginfo_has "$mango_debug_pkg" "pkgver = ${pkgver}-1"
+          contains "$mango_debug_pkg" "usr/lib/debug/opt/steamos-intel-handheld/bin/mangoapp.debug"
+
+          pkginfo_has "$keyring_pkg" "pkgname = rivoreo-keyring"
+          contains "$keyring_pkg" "usr/share/pacman/keyrings/rivoreo.gpg"
+          contains "$keyring_pkg" "usr/share/pacman/keyrings/rivoreo-trusted"
+          contains "$keyring_pkg" "usr/share/pacman/keyrings/rivoreo-revoked"
+
+          pkginfo_has "$repo_config_pkg" "pkgname = rivoreo-steamos-repo"
+          contains "$repo_config_pkg" "etc/pacman.d/rivoreo-steamos.conf"
+          repo_conf="$(tar -xOf "$repo_config_pkg" etc/pacman.d/rivoreo-steamos.conf)"
+          printf '%s\n' "$repo_conf" | grep -Fx "[rivoreo-steamos]" >/dev/null
+          printf '%s\n' "$repo_conf" | grep -Fx "SigLevel = Required TrustedOnly" >/dev/null
+          printf '%s\n' "$repo_conf" | grep -Fx 'Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$arch' >/dev/null
+          if printf '%s\n' "$repo_conf" | grep -F "http://" >/dev/null; then
+            echo "Repository config must not contain insecure HTTP URLs" >&2
+            exit 2
+          fi
+
+          tar -tf "$repo/rivoreo-steamos.db" | grep -Fx "steamos-intel-handheld-${pkgver}-1/desc" >/dev/null
+          tar -tf "$repo/rivoreo-steamos.db" | grep -Fx "steamos-intel-handheld-mangoapp-${pkgver}-1/desc" >/dev/null
+          tar -tf "$repo/rivoreo-steamos.db" | grep -Fx "steamos-intel-handheld-mangoapp-debug-${pkgver}-1/desc" >/dev/null
+          tar -tf "$repo/rivoreo-steamos.db" | grep -F "rivoreo-keyring-" >/dev/null
+          tar -tf "$repo/rivoreo-steamos.db" | grep -F "rivoreo-steamos-repo-" >/dev/null
+          tar -tf "$repo/rivoreo-steamos.files" | grep -Fx "steamos-intel-handheld-mangoapp-${pkgver}-1/files" >/dev/null
+
+          export GNUPGHOME="$(mktemp -d)"
+          chmod 0700 "$GNUPGHOME"
+          gpg --batch --import "$key"
+          actual_fingerprint="$(
+            gpg --batch --with-colons --show-keys "$key" \
+              | awk -F: '$1 == "fpr" {print $10; exit}'
+          )"
+          expected_fingerprint="$(cat "$fingerprint_file")"
+          test "$actual_fingerprint" = "$expected_fingerprint"
+
+          verified=0
+          for sig in "$repo"/*.sig; do
+            target="${sig%.sig}"
+            test -s "$target"
+            gpg --batch --verify "$sig" "$target"
+            verified=$((verified + 1))
+          done
+          test "$verified" -eq 9
+
   build-mangoapp:
     runs-on: ubuntu-latest
     needs: validate
@@ -197,7 +335,7 @@ jobs:
 
   deploy-pages:
     runs-on: ubuntu-latest
-    needs: [validate, build-repo]
+    needs: [validate, build-repo, verify-repo-artifact]
     if: ${{ needs.validate.outputs.publish_pages == 'true' }}
     permissions:
       contents: read

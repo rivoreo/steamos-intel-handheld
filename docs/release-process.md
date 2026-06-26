@@ -14,12 +14,14 @@ Stable tags: `vX.Y.Z`
 
 - run repository validation through GitHub Actions
 - build all Arch packages in `archlinux:base-devel`
+- verify the signed pacman repository artifact before deployment
 - sign package artifacts and repository metadata with the protected release key
 - deploys GitHub Pages with the public pacman repository
 
 Candidate tags: `vX.Y.Z-rc.N`
 
 - run the same validation and package/repository build path
+- run the same `verify-repo-artifact` gate
 - upload the `signed-pacman-repository` artifact for inspection
 - skips `deploy-pages`
 - may use a short-lived candidate signing key when protected signing secrets are
@@ -48,6 +50,7 @@ builds:
 
 - `steamos-intel-handheld`
 - `steamos-intel-handheld-mangoapp`
+- `steamos-intel-handheld-mangoapp-debug`
 - `rivoreo-keyring`
 - `rivoreo-steamos-repo`
 
@@ -65,6 +68,13 @@ the release CI path.
 
 For GitHub Pages compatibility, repo aliases `.db`, `.files`, and `.sig` are
 regular files, not symlinks.
+
+The `verify-repo-artifact` job downloads the generated
+`signed-pacman-repository` artifact before any Pages deployment. It verifies the
+repo database aliases, package and database signature pairs, published signing
+key fingerprint, package metadata, expected package contents, HTTPS-only repo
+configuration, and `mangoapp` payload path. It imports the artifact public key
+and runs `gpg --batch --verify` for every generated `.sig` file.
 
 ## Before Tagging
 
@@ -113,6 +123,7 @@ Expected candidate result:
 - `validate`: success
 - `build-mangoapp`: success
 - `build-repo`: success
+- `verify-repo-artifact`: success
 - `deploy-pages`: skipped
 - `signed-pacman-repository`: uploaded artifact
 
@@ -141,6 +152,8 @@ Expected files include:
 - `rivoreo-steamos/os/x86_64/*.pkg.tar.zst.sig`
 - `rivoreo-steamos/os/x86_64/steamos-intel-handheld-mangoapp-*.pkg.tar.zst`
 - `rivoreo-steamos/os/x86_64/steamos-intel-handheld-mangoapp-*.pkg.tar.zst.sig`
+- `rivoreo-steamos/os/x86_64/steamos-intel-handheld-mangoapp-debug-*.pkg.tar.zst`
+- `rivoreo-steamos/os/x86_64/steamos-intel-handheld-mangoapp-debug-*.pkg.tar.zst.sig`
 - `rivoreo-steamos/os/x86_64/rivoreo-steamos.db`
 - `rivoreo-steamos/os/x86_64/rivoreo-steamos.db.sig`
 - `rivoreo-steamos/os/x86_64/rivoreo-steamos.files`
@@ -168,6 +181,7 @@ Expected stable result:
 - `validate`: success
 - `build-mangoapp`: success
 - `build-repo`: success
+- `verify-repo-artifact`: success
 - `deploy-pages`: success
 - public repository served from
   `https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/x86_64`
@@ -203,6 +217,11 @@ them in mind when changing the workflow:
 - `v0.1.0-rc.6`: rootfs/chroot path reached SteamOS `pacman`, then failed
   `CheckSpace` because the chroot root was not a mount point; the helper now
   bind-mounts the rootfs onto itself before entering chroot.
+- `v0.1.0-rc.8`: hidden candidate validation succeeded, including the patched
+  `mangoapp` build and signed repository artifact upload; release CI now has a
+  dedicated `verify-repo-artifact` gate for package contents, repository
+  metadata, HTTPS repo configuration, and detached signatures before Pages
+  deployment.
 
 ## Reporting A Release
 
@@ -211,6 +230,7 @@ When reporting a candidate or stable release result, include:
 - tag name
 - commit SHA
 - GitHub Actions run ID and URL
-- `validate`, `build-repo`, and `deploy-pages` job results
+- `validate`, `build-mangoapp`, `build-repo`, `verify-repo-artifact`, and
+  `deploy-pages` job results
 - artifact name for candidates, or public repository URL for stable releases
 - whether protected signing secrets or the candidate signing fallback were used

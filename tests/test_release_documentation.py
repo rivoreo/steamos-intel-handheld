@@ -28,6 +28,7 @@ def test_release_process_runbook_documents_release_channels_and_secrets() -> Non
     assert "deploys GitHub Pages" in docs
     assert "skips `deploy-pages`" in docs
     assert "signed-pacman-repository" in docs
+    assert "verify-repo-artifact" in docs
     assert "short-lived candidate signing key" in docs
     assert "stable releases require the protected signing secrets" in docs
     assert "ARCH_REPO_GPG_PRIVATE_KEY" in docs
@@ -45,6 +46,7 @@ def test_release_process_runbook_includes_operator_commands() -> None:
     assert "gh run view <run-id> --log-failed" in docs
     assert "gh run download <run-id>" in docs
     assert "gh api repos/rivoreo/steamos-intel-handheld/actions/runs/<run-id>/artifacts" in docs
+    assert "gpg --batch --verify" in docs
 
 
 def test_release_process_runbook_includes_build_scope_and_install_path() -> None:
@@ -55,6 +57,7 @@ def test_release_process_runbook_includes_build_scope_and_install_path() -> None
     assert "rivoreo-keyring" in docs
     assert "rivoreo-steamos-repo" in docs
     assert "steamos-intel-handheld-mangoapp" in docs
+    assert "steamos-intel-handheld-mangoapp-debug" in docs
     assert "package versions derive from `pyproject.toml`" in docs
     assert (
         "repo aliases `.db`, `.files`, and `.sig` are regular files"
