@@ -16,6 +16,29 @@ REPO_PKGBUILD = ROOT / "packaging/arch/rivoreo-steamos-repo/PKGBUILD"
 REPO_CONF = ROOT / "packaging/arch/rivoreo-steamos-repo/rivoreo-steamos.conf"
 
 
+def _logical_shell_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        if line.endswith("\\"):
+            current += line[:-1] + " "
+            continue
+        current += line
+        lines.append(current)
+        current = ""
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _line_index_containing(text: str, *needles: str) -> int:
+    for index, line in enumerate(_logical_shell_lines(text)):
+        if all(needle in line for needle in needles):
+            return index
+    raise AssertionError(f"Could not find line containing: {needles}")
+
+
 def test_arch_release_workflow_is_tag_only_and_uses_recursive_checkout() -> None:
     workflow = WORKFLOW.read_text()
 
@@ -38,7 +61,18 @@ def test_arch_release_workflow_uses_protected_signing_secrets_and_pages_deploy()
     assert "github-pages" in workflow
     assert "actions/upload-pages-artifact@v4" in workflow
     assert "actions/deploy-pages@v4" in workflow
-    assert "needs: build-repo" in workflow
+    assert "needs: [validate, build-repo]" in workflow
+
+
+def test_arch_release_workflow_keeps_prerelease_tags_hidden_from_pages() -> None:
+    workflow = WORKFLOW.read_text()
+
+    assert "publish_pages:" in workflow
+    assert "^v[0-9]+[.][0-9]+[.][0-9]+$" in workflow
+    assert 'echo "publish_pages=true" >> "$GITHUB_OUTPUT"' in workflow
+    assert 'echo "publish_pages=false" >> "$GITHUB_OUTPUT"' in workflow
+    assert "needs.validate.outputs.publish_pages == 'true'" in workflow
+    assert "needs: [validate, build-repo]" in workflow
 
 
 def test_ordinary_pages_workflow_cannot_overwrite_release_repository() -> None:
@@ -61,13 +95,56 @@ def test_release_build_script_signs_packages_and_regularizes_repo_aliases() -> N
     assert "updpkgsums" in script
 
 
+def test_release_build_script_removes_repo_add_alias_symlinks_before_copying_aliases() -> None:
+    script = BUILD_SCRIPT.read_text()
+    repo_add_line = _line_index_containing(script, "repo-add --sign --verify")
+
+    aliases = (
+        "rivoreo-steamos.db",
+        "rivoreo-steamos.db.sig",
+        "rivoreo-steamos.files",
+        "rivoreo-steamos.files.sig",
+    )
+    for alias in aliases:
+        alias_path = f'"$repo_out/{alias}"'
+        remove_line = _line_index_containing(script, "rm -f", alias_path)
+        copy_line = _line_index_containing(script, "cp ", alias_path)
+
+        assert repo_add_line < remove_line < copy_line
+
+
+def test_release_build_script_syncs_main_pkgbuild_version_before_building() -> None:
+    script = BUILD_SCRIPT.read_text()
+    sync_line = _line_index_containing(
+        script,
+        "sed -i",
+        "pkgver=$pkgver",
+        "packaging/arch/PKGBUILD",
+    )
+    build_line = _line_index_containing(script, "build_pkg packaging/arch")
+
+    assert sync_line < build_line
+
+
+def test_release_build_script_accepts_candidate_tags_for_pyproject_version() -> None:
+    script = BUILD_SCRIPT.read_text()
+
+    assert "release_tag_pattern=" in script
+    assert "v${pkgver//./[.]}" in script
+    assert "([-.][A-Za-z0-9._]+)?" in script
+    assert '[[ ! "$release_tag" =~ $release_tag_pattern ]]' in script
+    assert '[ "$release_tag" != "v$pkgver" ]' not in script
+
+
 def test_release_pages_assembler_renders_fingerprint_and_checks_artifact_shape() -> None:
     script = ASSEMBLE_SCRIPT.read_text()
 
     assert "__RIVOREO_KEY_FINGERPRINT__" in script
     assert "RIVOREO_KEY_FINGERPRINT" in script
     assert 'test ! -L "$site_out/rivoreo-steamos/os/x86_64/rivoreo-steamos.db"' in script
+    assert 'test ! -L "$site_out/rivoreo-steamos/os/x86_64/rivoreo-steamos.db.sig"' in script
     assert 'test ! -L "$site_out/rivoreo-steamos/os/x86_64/rivoreo-steamos.files"' in script
+    assert 'test ! -L "$site_out/rivoreo-steamos/os/x86_64/rivoreo-steamos.files.sig"' in script
     assert "fingerprint.txt" in script
 
 
@@ -111,4 +188,7 @@ def test_package_repository_docs_describe_github_actions_release_publisher() -> 
     assert "ARCH_REPO_GPG_PRIVATE_KEY" in docs
     assert "ARCH_REPO_GPG_KEY_ID" in docs
     assert "vX.Y.Z" in docs
+    assert "vX.Y.Z-rc.N" in docs
+    assert "do not deploy GitHub Pages" in docs
+    assert "signed repository artifact" in docs
     assert "ordinary pushes" in docs

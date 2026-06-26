@@ -55,6 +55,14 @@ def test_pages_site_explains_capabilities_and_active_release_state() -> None:
     assert "exits without changing the system" not in index
 
 
+def test_pages_site_explains_stable_install_and_candidate_release_flow() -> None:
+    index = SITE_INDEX.read_text()
+    assert "Stable tags update the public pacman repository" in index
+    assert "release-candidate tags build signed artifacts without deploying Pages" in index
+    assert "Users install from holo.libz.so after a stable release" in index
+    assert "Maintainers inspect candidate artifacts in GitHub Actions" in index
+
+
 def test_pages_site_has_visible_brand_mark_and_language_switcher() -> None:
     index = SITE_INDEX.read_text()
     brand_start = index.index('<span class="brand-mark"')
@@ -97,6 +105,8 @@ def test_pages_site_uses_taiwan_zh_tw_wording() -> None:
     assert "套件庫已啟用" in zh_tw_text
     assert "可以安裝" in zh_tw_text
     assert "簽名套件庫" in zh_tw_text
+    assert "候選版本" in zh_tw_text
+    assert "不會部署 GitHub Pages" in zh_tw_text
     assert "裝置" in zh_tw_text
     assert "輸出套件狀態" not in zh_tw_text
     assert "套件尚未釋出" not in zh_tw_text

@@ -24,9 +24,12 @@ curl -fsSL https://holo.libz.so/rivoreo-steamos/bootstrap.sh | sudo bash
 ```
 
 The public release path is the GitHub Actions release publisher in
-`.github/workflows/arch-release.yml`. It publishes only `vX.Y.Z` tags. Ordinary
-pushes, pull requests, and the static Pages check validate the repository, but
-ordinary pushes cannot sign packages or deploy GitHub Pages.
+`.github/workflows/arch-release.yml`. Stable `vX.Y.Z` tags build signed packages
+and deploy GitHub Pages. Release-candidate tags such as `vX.Y.Z-rc.N` run the
+same signed package and repository build, then stop after uploading the signed
+repository artifact; they do not deploy GitHub Pages. Ordinary pushes and pull
+requests validate the repository through CI, but ordinary pushes cannot sign
+packages or deploy GitHub Pages.
 
 Required GitHub secrets:
 
@@ -37,14 +40,18 @@ Required GitHub secrets:
 
 Release flow:
 
-1. Push a version tag such as `v0.1.0`.
+1. Push a stable version tag such as `v0.1.0`, or a hidden validation tag such
+   as `v0.1.0-rc.1`.
 2. The `validate` job runs the local harness with recursive submodules.
 3. The `build-repo` job runs in `archlinux:base-devel`, imports the protected
    signing key, builds packages with `makepkg`, signs package artifacts, and
    creates signed `rivoreo-steamos` repository metadata with `repo-add`.
-4. The `deploy-pages` job assembles the static site, rendered bootstrap script,
-   public key files, and signed pacman repository into the Pages artifact.
-5. GitHub Pages serves the result from `https://holo.libz.so/`.
+4. Stable tags run the `deploy-pages` job, which assembles the static site,
+   rendered bootstrap script, public key files, and signed pacman repository into
+   the Pages artifact.
+5. Release-candidate tags such as `vX.Y.Z-rc.N` do not deploy GitHub Pages; use
+   the signed repository artifact attached to the workflow run for inspection.
+6. GitHub Pages serves stable results from `https://holo.libz.so/`.
 
 GitLab CI remains the build path for validation artifacts:
 

@@ -19,7 +19,8 @@ if [[ ! "$release_tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+([-.][A-Za-z0-9._]+)?$ ]]; t
   exit 2
 fi
 
-if [ "$release_tag" != "v$pkgver" ]; then
+release_tag_pattern="^v${pkgver//./[.]}([-.][A-Za-z0-9._]+)?$"
+if [[ ! "$release_tag" =~ $release_tag_pattern ]]; then
   echo "Tag $release_tag does not match pyproject version $pkgver" >&2
   exit 2
 fi
@@ -35,6 +36,7 @@ src_archive="$repo_root/packaging/arch/steamos-intel-handheld-$pkgver.tar.gz"
 rm -rf "$package_out" "$repo_out"
 mkdir -p "$package_out" "$repo_out" "$key_out"
 
+sed -i "s/^pkgver=.*/pkgver=$pkgver/" packaging/arch/PKGBUILD
 git archive --format=tar --prefix="steamos-intel-handheld-$pkgver/" "$release_tag" \
   | gzip -n > "$src_archive"
 
@@ -73,9 +75,16 @@ cp "$package_out"/*.pkg.tar.zst "$package_out"/*.pkg.tar.zst.sig "$repo_out"/
 repo_db="$repo_out/rivoreo-steamos.db.tar.zst"
 repo_files="$repo_out/rivoreo-steamos.files.tar.zst"
 repo-add --sign --verify "$repo_db" "$repo_out"/*.pkg.tar.zst
+rm -f \
+  "$repo_out/rivoreo-steamos.db" \
+  "$repo_out/rivoreo-steamos.db.sig" \
+  "$repo_out/rivoreo-steamos.files" \
+  "$repo_out/rivoreo-steamos.files.sig"
 cp "$repo_db" "$repo_out/rivoreo-steamos.db"
 cp "$repo_db.sig" "$repo_out/rivoreo-steamos.db.sig"
 cp "$repo_files" "$repo_out/rivoreo-steamos.files"
 cp "$repo_files.sig" "$repo_out/rivoreo-steamos.files.sig"
 test ! -L "$repo_out/rivoreo-steamos.db"
+test ! -L "$repo_out/rivoreo-steamos.db.sig"
 test ! -L "$repo_out/rivoreo-steamos.files"
+test ! -L "$repo_out/rivoreo-steamos.files.sig"

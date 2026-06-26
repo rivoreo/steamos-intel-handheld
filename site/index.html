@@ -495,6 +495,10 @@
         gap: 14px;
       }
 
+      .install-panel.wide {
+        grid-column: 1 / -1;
+      }
+
       .list {
         margin: 14px 0 0;
         padding-left: 20px;
@@ -828,6 +832,19 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
                 <li data-i18n="install.pacman.item3">DNS target: holo.libz.so CNAME rivoreo.github.io.</li>
               </ul>
             </article>
+
+            <article class="install-panel wide">
+              <div class="card-heading">
+                <h3 data-i18n="release.title">Release behavior</h3>
+                <span class="status waiting"><span class="status-dot warning" aria-hidden="true"></span><span data-i18n="status.candidateHidden">Candidate builds hidden</span></span>
+              </div>
+              <ul class="list">
+                <li data-i18n="release.stable">Stable tags update the public pacman repository.</li>
+                <li data-i18n="release.candidate">release-candidate tags build signed artifacts without deploying Pages.</li>
+                <li data-i18n="release.users">Users install from holo.libz.so after a stable release.</li>
+                <li data-i18n="release.maintainers">Maintainers inspect candidate artifacts in GitHub Actions.</li>
+              </ul>
+            </article>
           </div>
         </section>
       </main>
@@ -846,6 +863,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "brand.name": "steamos-intel-handheld",
           "status.repositoryNotActivated": "Repository active",
           "status.installChannelClosed": "Install channel open",
+          "status.candidateHidden": "Candidate builds hidden",
           "nav.install": "Install",
           "nav.github": "GitHub",
           "hero.title": "SteamOS support for Intel handhelds",
@@ -899,6 +917,11 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "install.pacman.item1": "Packages and repository metadata are signed by the Rivoreo release key.",
           "install.pacman.item2": "GitHub Pages serves this site from rivoreo/steamos-intel-handheld.",
           "install.pacman.item3": "DNS target: holo.libz.so CNAME rivoreo.github.io.",
+          "release.title": "Release behavior",
+          "release.stable": "Stable tags update the public pacman repository.",
+          "release.candidate": "release-candidate tags build signed artifacts without deploying Pages.",
+          "release.users": "Users install from holo.libz.so after a stable release.",
+          "release.maintainers": "Maintainers inspect candidate artifacts in GitHub Actions.",
           "footer.status": "holo.libz.so / rivoreo-steamos"
         },
         "zh-CN": {
@@ -907,6 +930,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "brand.name": "steamos-intel-handheld",
           "status.repositoryNotActivated": "软件源已启用",
           "status.installChannelClosed": "可以安装",
+          "status.candidateHidden": "候选版本隐藏",
           "nav.install": "安装",
           "nav.github": "GitHub",
           "hero.title": "面向 Intel 掌机的 SteamOS 支持层",
@@ -960,6 +984,11 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "install.pacman.item1": "软件包和软件源元数据都由 Rivoreo 发布密钥签名。",
           "install.pacman.item2": "GitHub Pages 从 rivoreo/steamos-intel-handheld 提供此站点。",
           "install.pacman.item3": "DNS 目标：holo.libz.so CNAME rivoreo.github.io。",
+          "release.title": "发布行为",
+          "release.stable": "稳定版本会更新公开 pacman 软件源。",
+          "release.candidate": "候选版本会构建签名产物，但不会部署 GitHub Pages。",
+          "release.users": "用户只在稳定版本发布后从 holo.libz.so 安装。",
+          "release.maintainers": "维护者在 GitHub Actions 中检查候选产物。",
           "footer.status": "holo.libz.so / rivoreo-steamos"
         },
         "zh-TW": {
@@ -968,6 +997,7 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "brand.name": "steamos-intel-handheld",
           "status.repositoryNotActivated": "套件庫已啟用",
           "status.installChannelClosed": "可以安裝",
+          "status.candidateHidden": "候選版本隱藏",
           "nav.install": "安裝",
           "nav.github": "GitHub",
           "hero.title": "針對 Intel 掌機的 SteamOS 支援層",
@@ -1021,6 +1051,11 @@ Server = https://holo.libz.so/rivoreo-steamos/os/$arch</code></pre>
           "install.pacman.item1": "套件和套件庫中繼資料都由 Rivoreo 釋出金鑰簽名。",
           "install.pacman.item2": "GitHub Pages 從 rivoreo/steamos-intel-handheld 提供此網站。",
           "install.pacman.item3": "DNS 目標：holo.libz.so CNAME rivoreo.github.io。",
+          "release.title": "釋出行為",
+          "release.stable": "穩定版本會更新公開 pacman 套件庫。",
+          "release.candidate": "候選版本會建置簽名產物，但不會部署 GitHub Pages。",
+          "release.users": "使用者只在穩定版本釋出後從 holo.libz.so 安裝。",
+          "release.maintainers": "維護者在 GitHub Actions 中檢查候選產物。",
           "footer.status": "holo.libz.so / rivoreo-steamos"
         }
       };
