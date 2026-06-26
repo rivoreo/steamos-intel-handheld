@@ -21,6 +21,8 @@ def test_systemd_unit_waits_for_steamos_manager_before_serving():
     assert "--apply-rapl" in unit
     assert "--apply-msi-claw-ec" in unit
     assert "--ec-write-debounce-ms 750" in unit
+    assert "--tdp-policy auto" in unit
+    assert "--msi-claw-ec-shift-policy tdp-threshold" in unit
     assert "--prepare-mangohud-sensors" in unit
     assert "StateDirectory=steamos-intel-handheld" in unit
 
@@ -103,6 +105,32 @@ def test_device_verifier_reports_mangohud_gpu_memory_fdinfo():
     assert "drm-resident-gtt" in script
     assert "drm-resident-system0" in script
     assert "drm-resident-vram0" in script
+
+
+def test_device_verifier_checks_profile_aware_tdp_policy_and_tau():
+    script = (ROOT / "scripts/verify-on-device.sh").read_text()
+
+    assert 'VERIFY_TDP_POLICY_MODE="${VERIFY_TDP_POLICY_MODE:-battery-maxq}"' in script
+    assert "battery-maxq:17) echo 25" in script
+    assert "battery-maxq:18) echo 25" in script
+    assert "battery-maxq:30) echo 35" in script
+    assert "watts * 125 + 99" in script
+    assert "watts * 145 + 99" in script
+    assert "ac-performance:12) echo 25" in script
+    assert "ac-performance:17|ac-performance:18" in script
+    assert 'elif [ "$watts" -lt 17 ]; then' in script
+    assert "rapl_constraint_time_window_us" in script
+    assert "expected_pl2_tau_us" in script
+    assert "assert_time_window_close" in script
+    assert "RAPL_TIME_WINDOW_TOLERANCE_US" in script
+
+
+def test_device_verifier_reports_msi_claw_ec_tdp_bytes():
+    script = (ROOT / "scripts/verify-on-device.sh").read_text()
+
+    assert "report_msi_claw_ec_tdp_bytes" in script
+    assert "MSI EC PL1/PL2 bytes" in script
+    assert "MSI EC shift byte" in script
 
 
 def test_gamescope_workaround_harness_can_enable_and_disable():

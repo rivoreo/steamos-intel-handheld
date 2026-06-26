@@ -33,11 +33,18 @@ reported:
 - RAPL PL2: initially 21W in the prototype that used a `1.25x` heuristic
 
 The SteamOS UI controls the single SteamOS Manager `TdpLimit`; this project maps
-that to PL1 after clamping it to the 258V handheld sustained range. PL2 follows
-the Claw game curve `min(PL1 + 2W, 32W)`: 17W maps to 19W, and 30W maps to 32W.
-The 37W Maximum Turbo Power value is kept as the short-term hardware ceiling,
-not as the default game PL2. A `--pl2-w` override remains available for device
-profiles that need a different burst limit.
+that to PL1 after clamping it to the 258V handheld sustained range. Current
+backend policy derives PL2 from PL1, power source, and policy mode. The default
+`--tdp-policy auto` resolves to Battery Max-Q on battery, AC Performance when
+plugged in, and Battery Max-Q when the power source is unknown. Battery Max-Q
+uses ceiling-rounded ratio steps at low and mid slider values, maps 17W and 18W
+PL1 to 25W PL2 with a 5s Tau, and maps 30W PL1 to 35W PL2 with an 8s Tau. AC
+Performance maps 9W through 16W PL1 to 25W PL2 with a 10s Tau, then maps PL1
+values of 17W and higher to the 37W Maximum Turbo Power ceiling with a 28s Tau.
+A `--pl2-w` override remains available for device profiles that need a
+different burst limit. The 37W ceiling is absolute; if a future profile allows
+PL1 to reach 37W, PL2 remains 37W rather than exceeding the hardware ceiling for
+extra headroom.
 
 ## EC TDP note
 
@@ -52,7 +59,7 @@ The values match the requested wattages directly. Offset `0xd2` stayed at
 `0xc1`, so the Manual PL1/PL2 path is treated separately from MSI's shift mode
 or user-scenario byte.
 
-The power-control service can optionally mirror the SteamOS TDP curve into
+The power-control service can optionally mirror the SteamOS TDP policy into
 those EC bytes with `--apply-msi-claw-ec`. This path is intentionally guarded:
 it only runs when DMI reports MSI `Claw 8 AI+ A2VM` on board `MS-1T52`, and
 when the EC firmware string read from offset `0xa0` starts with
@@ -60,9 +67,15 @@ when the EC firmware string read from offset `0xa0` starts with
 The EC PL1 byte has an additional hard cap of 30W even if a future service
 profile raises the generic SteamOS/RAPL maximum. Requests above 30W leave EC
 PL1 at 30W and only raise EC PL2, up to the 37W short-term ceiling.
-The service also mirrors the MSI shift/user-scenario byte at `0xd2`: TDP values
-up to 17W keep comfort mode `0xc1`, while values above 17W use turbo mode
-`0xc4`. In live testing with the game running, `0x50/0x51=30/32` plus
+
+The service also mirrors the MSI shift/user-scenario byte at `0xd2`. The
+installed default remains the conservative `--msi-claw-ec-shift-policy
+tdp-threshold`: TDP values up to 17W keep comfort mode `0xc1`, while values
+above 17W use turbo mode `0xc4`. A staged `profile` policy is implemented for
+validation and can switch Battery Max-Q at 17W to turbo so the 17W/25W burst is
+not blocked by comfort mode. It should not become the installed default until
+17W and 18W Battery Max-Q runs show sustained package power returning close to
+PL1 after bursts. In live testing with the game running, `0x50/0x51=30/32` plus
 `0xd2=0xc1` held package power near 17W, while temporarily switching `0xd2` to
 `0xc4` let package power rise into the 25W to 30W range.
 
@@ -133,8 +146,9 @@ GPU temperature substitutes.
 After reboot, the service started and SteamOS Manager rediscovered the remote.
 The service first read the persisted 30W state, then a SteamOS-side client set
 TDP to 37W. The provider now clamps that legacy request to 30W and applies
-30W/32W to long-term/short-term RAPL constraints. This should be treated as a
-SteamOS policy interaction, not as a state persistence failure.
+30W/35W to long-term/short-term RAPL constraints under Battery Max-Q. This
+should be treated as a SteamOS policy interaction, not as a state persistence
+failure.
 
 ## Display note
 

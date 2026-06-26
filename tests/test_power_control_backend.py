@@ -4,9 +4,14 @@ from stat import S_IMODE
 import pytest
 
 from steamos_intel_handheld.power_control import (
+    MsiClawEcShiftPolicy,
+    PowerSource,
+    RaplConstraint,
     TdpBackend,
+    TdpPolicyMode,
     TdpRangeError,
     compute_tdp_limits,
+    compute_tdp_policy,
 )
 
 MSI_CLAW_EC_FIRMWARE = b"1T52EMS1.1091204202509:10:47"
@@ -53,20 +58,53 @@ def make_rapl_domain(
     pl2: int = 37,
     pl1_max: int = 37,
     pl2_max: int = 37,
+    pl1_tau_us: int | None = None,
+    pl2_tau_us: int | None = None,
+    pl1_min_tau_us: int | None = None,
+    pl1_max_tau_us: int | None = None,
+    pl2_min_tau_us: int | None = None,
+    pl2_max_tau_us: int | None = None,
     *,
     swap_constraints: bool = False,
 ):
     domain = sysfs_root / "class" / "powercap" / name
     domain.mkdir(parents=True)
     if swap_constraints:
-        constraints = (("short_term", pl2, pl2_max), ("long_term", pl1, pl1_max))
+        constraints = (
+            ("short_term", pl2, pl2_max, pl2_tau_us, pl2_min_tau_us, pl2_max_tau_us),
+            ("long_term", pl1, pl1_max, pl1_tau_us, pl1_min_tau_us, pl1_max_tau_us),
+        )
     else:
-        constraints = (("long_term", pl1, pl1_max), ("short_term", pl2, pl2_max))
-    for index, (constraint_name, watts, max_watts) in enumerate(constraints):
+        constraints = (
+            ("long_term", pl1, pl1_max, pl1_tau_us, pl1_min_tau_us, pl1_max_tau_us),
+            ("short_term", pl2, pl2_max, pl2_tau_us, pl2_min_tau_us, pl2_max_tau_us),
+        )
+    for index, (
+        constraint_name,
+        watts,
+        max_watts,
+        tau_us,
+        min_tau_us,
+        max_tau_us,
+    ) in enumerate(constraints):
         (domain / f"constraint_{index}_name").write_text(constraint_name)
         (domain / f"constraint_{index}_power_limit_uw").write_text(str(watts * 1_000_000))
         (domain / f"constraint_{index}_max_power_uw").write_text(str(max_watts * 1_000_000))
+        if tau_us is not None:
+            (domain / f"constraint_{index}_time_window_us").write_text(str(tau_us))
+        if min_tau_us is not None:
+            (domain / f"constraint_{index}_min_time_window_us").write_text(str(min_tau_us))
+        if max_tau_us is not None:
+            (domain / f"constraint_{index}_max_time_window_us").write_text(str(max_tau_us))
     return domain
+
+
+def make_power_supply(sysfs_root: Path, name: str, supply_type: str, online: str) -> Path:
+    supply = sysfs_root / "class" / "power_supply" / name
+    supply.mkdir(parents=True)
+    (supply / "type").write_text(supply_type)
+    (supply / "online").write_text(online)
+    return supply
 
 
 def test_compute_tdp_limits_uses_258v_handheld_curve():
@@ -107,6 +145,119 @@ def test_compute_tdp_limits_allows_device_specific_pl2_wattage():
     assert compute_tdp_limits(20, 37, pl2_w=45).pl2_uw == 37_000_000
 
 
+def test_compute_tdp_policy_uses_battery_maxq_curve():
+    expected = {
+        8: (8, 10, 2_000_000),
+        10: (10, 13, 3_000_000),
+        11: (11, 14, 3_000_000),
+        12: (12, 15, 3_000_000),
+        14: (14, 21, 5_000_000),
+        16: (16, 24, 5_000_000),
+        17: (17, 25, 5_000_000),
+        18: (18, 25, 5_000_000),
+        20: (20, 25, 5_000_000),
+        25: (25, 30, 8_000_000),
+        30: (30, 35, 8_000_000),
+    }
+
+    for requested_watts, (pl1_w, pl2_w, pl2_tau_us) in expected.items():
+        policy = compute_tdp_policy(
+            requested_watts,
+            mode=TdpPolicyMode.BATTERY_MAXQ,
+            power_source=PowerSource.BATTERY,
+            short_limit_max_w=37,
+        )
+        assert policy.pl1_w == pl1_w
+        assert policy.pl2_w == pl2_w
+        assert policy.pl2_tau_us == pl2_tau_us
+
+
+def test_compute_tdp_policy_uses_ac_performance_curve():
+    expected = {
+        8: (8, 18, 8_000_000),
+        10: (10, 25, 10_000_000),
+        12: (12, 25, 10_000_000),
+        15: (15, 25, 10_000_000),
+        16: (16, 25, 10_000_000),
+        17: (17, 37, 28_000_000),
+        18: (18, 37, 28_000_000),
+        30: (30, 37, 28_000_000),
+    }
+
+    for requested_watts, (pl1_w, pl2_w, pl2_tau_us) in expected.items():
+        policy = compute_tdp_policy(
+            requested_watts,
+            mode=TdpPolicyMode.AC_PERFORMANCE,
+            power_source=PowerSource.AC,
+            short_limit_max_w=37,
+        )
+        assert policy.pl1_w == pl1_w
+        assert policy.pl2_w == pl2_w
+        assert policy.pl2_tau_us == pl2_tau_us
+
+
+def test_compute_tdp_policy_curves_are_monotonic_across_slider_range():
+    for mode, power_source in (
+        (TdpPolicyMode.BATTERY_LOW_POWER, PowerSource.BATTERY),
+        (TdpPolicyMode.BATTERY_MAXQ, PowerSource.BATTERY),
+        (TdpPolicyMode.AC_QUIET, PowerSource.AC),
+        (TdpPolicyMode.AC_PERFORMANCE, PowerSource.AC),
+    ):
+        previous_pl2 = 0
+        previous_tau = 0
+        for watts in range(8, 31):
+            policy = compute_tdp_policy(
+                watts,
+                mode=mode,
+                power_source=power_source,
+                short_limit_max_w=37,
+            )
+            assert policy.pl2_w >= previous_pl2, (mode, watts, policy)
+            assert policy.pl2_tau_us is not None
+            assert policy.pl2_tau_us >= previous_tau, (mode, watts, policy)
+            previous_pl2 = policy.pl2_w
+            previous_tau = policy.pl2_tau_us
+
+
+def test_compute_tdp_policy_auto_resolves_unknown_to_battery_maxq():
+    policy = compute_tdp_policy(
+        17,
+        mode=TdpPolicyMode.AUTO,
+        power_source=PowerSource.UNKNOWN,
+        short_limit_max_w=37,
+    )
+
+    assert policy.resolved_mode == TdpPolicyMode.BATTERY_MAXQ
+    assert policy.pl1_w == 17
+    assert policy.pl2_w == 25
+    assert policy.pl2_tau_us == 5_000_000
+
+
+def test_compute_tdp_policy_keeps_pl2_above_pl1_and_respects_short_limit_max():
+    policy = compute_tdp_policy(
+        30,
+        mode=TdpPolicyMode.AC_PERFORMANCE,
+        power_source=PowerSource.AC,
+        short_limit_max_w=31,
+    )
+
+    assert policy.pl1_w == 30
+    assert policy.pl2_w == 31
+
+
+def test_compute_tdp_policy_keeps_pl2_at_short_limit_ceiling_when_pl1_hits_ceiling():
+    policy = compute_tdp_policy(
+        37,
+        mode=TdpPolicyMode.AC_PERFORMANCE,
+        power_source=PowerSource.AC,
+        short_limit_max_w=37,
+        max_w=37,
+    )
+
+    assert policy.pl1_w == 37
+    assert policy.pl2_w == 37
+
+
 def test_read_limit_prefers_valid_state_file(tmp_path):
     sysfs_root = tmp_path / "sys"
     make_rapl_domain(sysfs_root, pl1=37, pl2=37)
@@ -133,12 +284,51 @@ def test_write_limit_updates_state_and_rapl(tmp_path):
     domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
     state_file = tmp_path / "state" / "tdp_w"
 
-    backend = TdpBackend(state_file=state_file, sysfs_root=sysfs_root)
-    backend.write_limit_w(28)
+    backend = TdpBackend(
+        state_file=state_file,
+        sysfs_root=sysfs_root,
+        tdp_policy_mode=TdpPolicyMode.BATTERY_MAXQ,
+        power_source_override=PowerSource.BATTERY,
+    )
+    backend.write_limit_w(17)
 
-    assert state_file.read_text() == "28"
-    assert (domain / "constraint_0_power_limit_uw").read_text() == "28000000"
-    assert (domain / "constraint_1_power_limit_uw").read_text() == "30000000"
+    assert state_file.read_text() == "17"
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "17000000"
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "25000000"
+
+
+def test_write_limit_uses_ac_performance_pl2_on_ac(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
+    state_file = tmp_path / "state" / "tdp_w"
+
+    backend = TdpBackend(
+        state_file=state_file,
+        sysfs_root=sysfs_root,
+        tdp_policy_mode=TdpPolicyMode.AC_PERFORMANCE,
+        power_source_override=PowerSource.AC,
+    )
+    backend.write_limit_w(18)
+
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "18000000"
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "37000000"
+
+
+def test_write_limit_explicit_pl2_override_still_wins(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
+
+    backend = TdpBackend(
+        state_file=tmp_path / "state" / "tdp_w",
+        sysfs_root=sysfs_root,
+        tdp_policy_mode=TdpPolicyMode.AC_PERFORMANCE,
+        power_source_override=PowerSource.AC,
+        pl2_w=22,
+    )
+    backend.write_limit_w(18)
+
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "18000000"
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "22000000"
 
 
 def test_write_limit_updates_msi_claw_ec_when_guard_matches(tmp_path):
@@ -159,7 +349,7 @@ def test_write_limit_updates_msi_claw_ec_when_guard_matches(tmp_path):
     ec = io_path.read_bytes()
     assert state_file.read_text() == "30"
     assert ec[0x50] == 30
-    assert ec[0x51] == 32
+    assert ec[0x51] == 35
     assert ec[0xD2] == 0xC4
 
 
@@ -179,7 +369,7 @@ def test_write_limit_sets_msi_claw_ec_comfort_mode_at_17_watts(tmp_path):
 
     ec = io_path.read_bytes()
     assert ec[0x50] == 17
-    assert ec[0x51] == 19
+    assert ec[0x51] == 25
     assert ec[0xD2] == 0xC1
 
 
@@ -199,7 +389,30 @@ def test_write_limit_sets_msi_claw_ec_turbo_mode_above_17_watts(tmp_path):
 
     ec = io_path.read_bytes()
     assert ec[0x50] == 18
-    assert ec[0x51] == 20
+    assert ec[0x51] == 25
+    assert ec[0xD2] == 0xC4
+
+
+def test_profile_shift_policy_uses_turbo_for_battery_maxq_at_17_watts(tmp_path):
+    dmi_root = make_dmi_root(tmp_path)
+    debugfs_root, io_path = make_ec_io(tmp_path)
+
+    backend = TdpBackend(
+        state_file=tmp_path / "state" / "tdp_w",
+        apply_rapl=False,
+        apply_msi_claw_ec=True,
+        dmi_root=dmi_root,
+        debugfs_root=debugfs_root,
+        tdp_policy_mode=TdpPolicyMode.BATTERY_MAXQ,
+        power_source_override=PowerSource.BATTERY,
+        msi_claw_ec_shift_policy=MsiClawEcShiftPolicy.PROFILE,
+    )
+
+    backend.write_limit_w(17)
+
+    ec = io_path.read_bytes()
+    assert ec[0x50] == 17
+    assert ec[0x51] == 25
     assert ec[0xD2] == 0xC4
 
 
@@ -211,7 +424,7 @@ def test_write_limit_skips_msi_claw_ec_write_when_values_are_unchanged(
     debugfs_root, io_path = make_ec_io(tmp_path)
     ec = bytearray(io_path.read_bytes())
     ec[0x50] = 30
-    ec[0x51] = 32
+    ec[0x51] = 35
     ec[0xD2] = 0xC4
     io_path.write_bytes(bytes(ec))
 
@@ -230,7 +443,7 @@ def test_write_limit_skips_msi_claw_ec_write_when_values_are_unchanged(
 
     assert backend.write_limit_w(30) == 30
     assert io_path.read_bytes()[0x50] == 30
-    assert io_path.read_bytes()[0x51] == 32
+    assert io_path.read_bytes()[0x51] == 35
     assert io_path.read_bytes()[0xD2] == 0xC4
 
 
@@ -316,7 +529,7 @@ def test_write_limit_uses_rapl_constraint_names(tmp_path):
     backend = TdpBackend(state_file=state_file, sysfs_root=sysfs_root)
     backend.write_limit_w(17)
 
-    assert (domain / "constraint_0_power_limit_uw").read_text() == "19000000"
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "25000000"
     assert (domain / "constraint_1_power_limit_uw").read_text() == "17000000"
 
 
@@ -341,21 +554,128 @@ def test_write_limit_does_not_cap_long_term_to_reported_max_power(tmp_path):
     backend.write_limit_w(30)
 
     assert (domain / "constraint_0_power_limit_uw").read_text() == "30000000"
-    assert (domain / "constraint_1_power_limit_uw").read_text() == "32000000"
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "35000000"
 
 
-def test_write_limit_does_not_change_tau_windows(tmp_path):
+def test_constraint_by_name_includes_time_window_files(tmp_path):
     sysfs_root = tmp_path / "sys"
-    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
-    (domain / "constraint_0_time_window_us").write_text("1000000")
-    (domain / "constraint_1_time_window_us").write_text("28000000")
-    state_file = tmp_path / "state" / "tdp_w"
+    domain = make_rapl_domain(
+        sysfs_root,
+        pl1=30,
+        pl2=37,
+        pl1_tau_us=1_000_000,
+        pl2_tau_us=28_000_000,
+        pl2_min_tau_us=1_000_000,
+        pl2_max_tau_us=10_000_000,
+    )
 
-    backend = TdpBackend(state_file=state_file, sysfs_root=sysfs_root)
+    backend = TdpBackend(state_file=tmp_path / "state" / "tdp_w", sysfs_root=sysfs_root)
+    short_term = backend._constraint_by_name(domain, "short_term", fallback_index=1)
+
+    assert short_term is not None
+    assert short_term.time_window_file == domain / "constraint_1_time_window_us"
+    assert short_term.min_time_window_file == domain / "constraint_1_min_time_window_us"
+    assert short_term.max_time_window_file == domain / "constraint_1_max_time_window_us"
+
+
+def test_limit_time_window_for_constraint_clamps_to_range(tmp_path):
+    time_window_file = tmp_path / "constraint_1_time_window_us"
+    min_file = tmp_path / "constraint_1_min_time_window_us"
+    max_file = tmp_path / "constraint_1_max_time_window_us"
+    time_window_file.write_text("28000000")
+    min_file.write_text("8000000")
+    max_file.write_text("10000000")
+    constraint = RaplConstraint(
+        power_limit_file=tmp_path / "constraint_1_power_limit_uw",
+        time_window_file=time_window_file,
+        min_time_window_file=min_file,
+        max_time_window_file=max_file,
+    )
+
+    backend = TdpBackend(state_file=tmp_path / "state" / "tdp_w", sysfs_root=tmp_path / "sys")
+
+    assert backend._limit_time_window_for_constraint(5_000_000, constraint) == 8_000_000
+    assert backend._limit_time_window_for_constraint(9_000_000, constraint) == 9_000_000
+    assert backend._limit_time_window_for_constraint(28_000_000, constraint) == 10_000_000
+
+
+def test_limit_time_window_for_constraint_ignores_missing_range(tmp_path):
+    constraint = RaplConstraint(
+        power_limit_file=tmp_path / "constraint_1_power_limit_uw",
+        time_window_file=None,
+    )
+    backend = TdpBackend(state_file=tmp_path / "state" / "tdp_w", sysfs_root=tmp_path / "sys")
+
+    assert backend._limit_time_window_for_constraint(5_000_000, constraint) == 5_000_000
+
+
+def test_write_limit_writes_policy_short_term_tau_when_available(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(
+        sysfs_root,
+        pl1=30,
+        pl2=37,
+        pl1_tau_us=1_000_000,
+        pl2_tau_us=28_000_000,
+    )
+
+    backend = TdpBackend(
+        state_file=tmp_path / "state" / "tdp_w",
+        sysfs_root=sysfs_root,
+        tdp_policy_mode=TdpPolicyMode.BATTERY_MAXQ,
+        power_source_override=PowerSource.BATTERY,
+    )
     backend.write_limit_w(17)
 
     assert (domain / "constraint_0_time_window_us").read_text() == "1000000"
-    assert (domain / "constraint_1_time_window_us").read_text() == "28000000"
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "25000000"
+    assert (domain / "constraint_1_time_window_us").read_text() == "5000000"
+
+
+def test_write_limit_skips_policy_tau_when_time_window_file_is_missing(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
+
+    backend = TdpBackend(
+        state_file=tmp_path / "state" / "tdp_w",
+        sysfs_root=sysfs_root,
+        tdp_policy_mode=TdpPolicyMode.BATTERY_MAXQ,
+        power_source_override=PowerSource.BATTERY,
+    )
+    backend.write_limit_w(17)
+
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "25000000"
+    assert not (domain / "constraint_1_time_window_us").exists()
+
+
+def test_detect_power_source_prefers_online_ac_adapter(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    make_power_supply(sysfs_root, "BAT0", "Battery", "0")
+    make_power_supply(sysfs_root, "ACAD", "Mains", "1")
+
+    backend = TdpBackend(state_file=tmp_path / "state" / "tdp_w", sysfs_root=sysfs_root)
+
+    assert backend.current_power_source() == PowerSource.AC
+
+
+def test_detect_power_source_returns_battery_when_no_ac_is_online(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    make_power_supply(sysfs_root, "BAT0", "Battery", "0")
+    make_power_supply(sysfs_root, "ACAD", "Mains", "0")
+
+    backend = TdpBackend(state_file=tmp_path / "state" / "tdp_w", sysfs_root=sysfs_root)
+
+    assert backend.current_power_source() == PowerSource.BATTERY
+
+
+def test_detect_power_source_allows_override_for_tests_and_profiles(tmp_path):
+    backend = TdpBackend(
+        state_file=tmp_path / "state" / "tdp_w",
+        sysfs_root=tmp_path / "sys",
+        power_source_override=PowerSource.AC,
+    )
+
+    assert backend.current_power_source() == PowerSource.AC
 
 
 def test_write_limit_uses_configured_pl2_wattage(tmp_path):
@@ -385,7 +705,7 @@ def test_write_limit_clamps_out_of_range_values_to_handheld_range(tmp_path):
     assert backend.write_limit_w(37) == 30
     assert state_file.read_text() == "30"
     assert (domain / "constraint_0_power_limit_uw").read_text() == "30000000"
-    assert (domain / "constraint_1_power_limit_uw").read_text() == "32000000"
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "35000000"
 
 
 def test_write_limit_rejects_values_outside_hardware_sanity_range(tmp_path):
@@ -413,7 +733,7 @@ def test_restore_state_to_rapl_applies_persisted_limit(tmp_path):
 
     assert backend.restore_state_to_rapl() == 30
     assert (domain / "constraint_0_power_limit_uw").read_text() == "30000000"
-    assert (domain / "constraint_1_power_limit_uw").read_text() == "32000000"
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "35000000"
 
 
 def test_restore_state_to_rapl_clamps_legacy_persisted_limit(tmp_path):
@@ -428,7 +748,7 @@ def test_restore_state_to_rapl_clamps_legacy_persisted_limit(tmp_path):
     assert backend.restore_state_to_rapl() == 30
     assert state_file.read_text() == "30"
     assert (domain / "constraint_0_power_limit_uw").read_text() == "30000000"
-    assert (domain / "constraint_1_power_limit_uw").read_text() == "32000000"
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "35000000"
 
 
 def test_restore_state_to_rapl_ignores_missing_or_invalid_state(tmp_path):
@@ -442,6 +762,71 @@ def test_restore_state_to_rapl_ignores_missing_or_invalid_state(tmp_path):
 
     assert backend.restore_state_to_rapl() is None
     assert (domain / "constraint_0_power_limit_uw").read_text() == "37000000"
+
+
+def test_reapply_limit_when_power_source_changes_updates_pl2(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
+    state_file = tmp_path / "state" / "tdp_w"
+    state_file.parent.mkdir()
+    state_file.write_text("17")
+
+    backend = TdpBackend(
+        state_file=state_file,
+        sysfs_root=sysfs_root,
+        tdp_policy_mode=TdpPolicyMode.AUTO,
+        power_source_override=PowerSource.BATTERY,
+    )
+    assert backend.reapply_if_power_source_changed(force=True) == 17
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "25000000"
+
+    backend.power_source_override = PowerSource.AC
+    assert backend.reapply_if_power_source_changed() == 17
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "37000000"
+
+
+def test_reapply_start_policy_when_state_matches_current_rapl_updates_pl2(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(
+        sysfs_root,
+        pl1=30,
+        pl2=35,
+        pl2_tau_us=8_000_000,
+    )
+    state_file = tmp_path / "state" / "tdp_w"
+    state_file.parent.mkdir()
+    state_file.write_text("30")
+
+    backend = TdpBackend(
+        state_file=state_file,
+        sysfs_root=sysfs_root,
+        tdp_policy_mode=TdpPolicyMode.AUTO,
+        power_source_override=PowerSource.AC,
+    )
+
+    assert backend.reapply_policy_if_state_matches_current_rapl() == 30
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "30000000"
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "37000000"
+    assert (domain / "constraint_1_time_window_us").read_text() == "28000000"
+
+
+def test_reapply_start_policy_skips_when_state_differs_from_current_rapl(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=35)
+    state_file = tmp_path / "state" / "tdp_w"
+    state_file.parent.mkdir()
+    state_file.write_text("17")
+
+    backend = TdpBackend(
+        state_file=state_file,
+        sysfs_root=sysfs_root,
+        tdp_policy_mode=TdpPolicyMode.AUTO,
+        power_source_override=PowerSource.AC,
+    )
+
+    assert backend.reapply_policy_if_state_matches_current_rapl() is None
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "30000000"
+    assert (domain / "constraint_1_power_limit_uw").read_text() == "35000000"
 
 
 def test_prepare_mangohud_sensors_makes_package_and_uncore_rapl_energy_readable(tmp_path):

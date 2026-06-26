@@ -7,13 +7,16 @@ if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
 fi
 
 target="$1"
-test_watts="${2:-28}"
+test_watts="${2:-17}"
 restore_watts="${3:-30}"
+verify_tdp_policy_mode="${VERIFY_TDP_POLICY_MODE:-battery-maxq}"
 
-ssh "$target" "TEST_WATTS='$test_watts' RESTORE_WATTS='$restore_watts' bash -s" <<'REMOTE'
+ssh "$target" "TEST_WATTS='$test_watts' RESTORE_WATTS='$restore_watts' VERIFY_TDP_POLICY_MODE='$verify_tdp_policy_mode' bash -s" <<'REMOTE'
 set -euo pipefail
 
 USER_ENV="XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus"
+VERIFY_TDP_POLICY_MODE="${VERIFY_TDP_POLICY_MODE:-battery-maxq}"
+RAPL_TIME_WINDOW_TOLERANCE_US="${RAPL_TIME_WINDOW_TOLERANCE_US:-100000}"
 
 wait_for_service() {
   local service="$1"
@@ -49,11 +52,100 @@ expected_pl1_watts() {
 expected_pl2_watts() {
   local watts
   watts="$(expected_pl1_watts "$1")"
-  local pl2=$((watts + 2))
-  if [ "$pl2" -gt 32 ]; then
-    pl2=32
-  fi
-  echo "$pl2"
+  local mode="${2:-battery-maxq}"
+  case "$mode:$watts" in
+    battery-maxq:8) echo 10 ;;
+    battery-maxq:12) echo 15 ;;
+    battery-maxq:17) echo 25 ;;
+    battery-maxq:18) echo 25 ;;
+    battery-maxq:20) echo 25 ;;
+    battery-maxq:25) echo 30 ;;
+    battery-maxq:30) echo 35 ;;
+    ac-performance:8) echo 18 ;;
+    ac-performance:12) echo 25 ;;
+    ac-performance:17|ac-performance:18|ac-performance:20|ac-performance:25|ac-performance:30) echo 37 ;;
+    *)
+      if [ "$mode" = "battery-maxq" ]; then
+        if [ "$watts" -le 12 ]; then
+          local pl2=$(((watts * 125 + 99) / 100))
+          if [ "$pl2" -lt $((watts + 1)) ]; then
+            pl2=$((watts + 1))
+          fi
+          if [ "$pl2" -gt 15 ]; then
+            pl2=15
+          fi
+          echo "$pl2"
+        elif [ "$watts" -le 18 ]; then
+          local pl2=$(((watts * 145 + 99) / 100))
+          if [ "$pl2" -lt $((watts + 1)) ]; then
+            pl2=$((watts + 1))
+          fi
+          if [ "$pl2" -gt 25 ]; then
+            pl2=25
+          fi
+          echo "$pl2"
+        elif [ "$watts" -le 25 ]; then
+          local pl2=$((watts + 5))
+          if [ "$pl2" -lt 25 ]; then
+            pl2=25
+          fi
+          if [ "$pl2" -gt 30 ]; then
+            pl2=30
+          fi
+          echo "$pl2"
+        else
+          local pl2=$((watts + 5))
+          if [ "$pl2" -gt 35 ]; then
+            pl2=35
+          fi
+          echo "$pl2"
+        fi
+      elif [ "$mode" = "ac-performance" ]; then
+        if [ "$watts" -ge 17 ]; then
+          echo 37
+        elif [ "$watts" -le 8 ]; then
+          echo 18
+        else
+          echo 25
+        fi
+      else
+        echo "unsupported verifier TDP policy mode '$mode' for ${watts}W" >&2
+        return 2
+      fi
+      ;;
+  esac
+}
+
+expected_pl2_tau_us() {
+  local watts
+  watts="$(expected_pl1_watts "$1")"
+  local mode="${2:-battery-maxq}"
+  case "$mode" in
+    battery-maxq)
+      if [ "$watts" -le 8 ]; then
+        echo 2000000
+      elif [ "$watts" -le 12 ]; then
+        echo 3000000
+      elif [ "$watts" -le 20 ]; then
+        echo 5000000
+      else
+        echo 8000000
+      fi
+      ;;
+    ac-performance)
+      if [ "$watts" -le 8 ]; then
+        echo 8000000
+      elif [ "$watts" -lt 17 ]; then
+        echo 10000000
+      else
+        echo 28000000
+      fi
+      ;;
+    *)
+      echo "unsupported verifier TDP policy mode '$mode' for Tau" >&2
+      return 2
+      ;;
+  esac
 }
 
 rapl_constraint_watts() {
@@ -71,6 +163,25 @@ rapl_constraint_watts() {
   awk '{print int($1 / 1000000)}' "$domain/constraint_${fallback_index}_power_limit_uw"
 }
 
+rapl_constraint_time_window_us() {
+  local constraint_name="$1"
+  local fallback_index="$2"
+  local domain="/sys/class/powercap/intel-rapl:0"
+  local name_file
+  for name_file in "$domain"/constraint_*_name; do
+    [ -e "$name_file" ] || continue
+    if [ "$(cat "$name_file")" = "$constraint_name" ]; then
+      local time_window_file="${name_file%_name}_time_window_us"
+      [ -e "$time_window_file" ] || return 1
+      cat "$time_window_file"
+      return 0
+    fi
+  done
+  local fallback_file="$domain/constraint_${fallback_index}_time_window_us"
+  [ -e "$fallback_file" ] || return 1
+  cat "$fallback_file"
+}
+
 assert_equals() {
   local label="$1"
   local expected="$2"
@@ -78,6 +189,32 @@ assert_equals() {
   if [ "$expected" != "$actual" ]; then
     echo "$label expected $expected, got $actual" >&2
     exit 1
+  fi
+}
+
+assert_time_window_close() {
+  local label="$1"
+  local expected="$2"
+  local actual="$3"
+  local diff=$((actual - expected))
+  if [ "$diff" -lt 0 ]; then
+    diff=$((-diff))
+  fi
+  if [ "$diff" -gt "$RAPL_TIME_WINDOW_TOLERANCE_US" ]; then
+    echo "$label expected ${expected}us +/- ${RAPL_TIME_WINDOW_TOLERANCE_US}us, got ${actual}us" >&2
+    exit 1
+  fi
+}
+
+assert_optional_pl2_tau() {
+  local watts="$1"
+  local expected
+  expected="$(expected_pl2_tau_us "$watts" "$VERIFY_TDP_POLICY_MODE")"
+  local actual
+  if actual="$(rapl_constraint_time_window_us short_term 1)"; then
+    assert_time_window_close rapl-pl2-tau-us "$expected" "$actual"
+  else
+    echo "RAPL short-term Tau unavailable: constraint time-window file is not exposed"
   fi
 }
 
@@ -181,6 +318,16 @@ report_mangohud_gpu_temperature_sensor() {
   fi
 }
 
+report_msi_claw_ec_tdp_bytes() {
+  local io="/sys/kernel/debug/ec/ec0/io"
+  if [ ! -r "$io" ]; then
+    echo "MSI EC TDP bytes unavailable: $io is not readable"
+    return 0
+  fi
+  od -An -j 80 -N 2 -t u1 "$io" | awk '{print "MSI EC PL1/PL2 bytes: " $1 "W/" $2 "W"}'
+  od -An -j 210 -N 1 -t x1 "$io" | awk '{print "MSI EC shift byte: 0x" $1}'
+}
+
 wait_for_service steamos-intel-handheld-power-control.service
 verify_mangohud_cpu_power_sensor
 verify_mangohud_gpu_power_sensor
@@ -195,14 +342,18 @@ sleep 2
 assert_equals central "$(expected_pl1_watts "$TEST_WATTS")" "$(central_tdp)"
 assert_equals remote "$(expected_pl1_watts "$TEST_WATTS")" "$(remote_tdp)"
 assert_equals rapl-pl1 "$(expected_pl1_watts "$TEST_WATTS")" "$(rapl_constraint_watts long_term 0)"
-assert_equals rapl-pl2 "$(expected_pl2_watts "$TEST_WATTS")" "$(rapl_constraint_watts short_term 1)"
+assert_equals rapl-pl2 "$(expected_pl2_watts "$TEST_WATTS" "$VERIFY_TDP_POLICY_MODE")" "$(rapl_constraint_watts short_term 1)"
+assert_optional_pl2_tau "$TEST_WATTS"
+report_msi_claw_ec_tdp_bytes
 
 runuser -u deck -- bash -lc "$USER_ENV steamosctl set-tdp-limit $RESTORE_WATTS"
 sleep 2
 assert_equals central "$(expected_pl1_watts "$RESTORE_WATTS")" "$(central_tdp)"
 assert_equals remote "$(expected_pl1_watts "$RESTORE_WATTS")" "$(remote_tdp)"
 assert_equals rapl-pl1 "$(expected_pl1_watts "$RESTORE_WATTS")" "$(rapl_constraint_watts long_term 0)"
-assert_equals rapl-pl2 "$(expected_pl2_watts "$RESTORE_WATTS")" "$(rapl_constraint_watts short_term 1)"
+assert_equals rapl-pl2 "$(expected_pl2_watts "$RESTORE_WATTS" "$VERIFY_TDP_POLICY_MODE")" "$(rapl_constraint_watts short_term 1)"
+assert_optional_pl2_tau "$RESTORE_WATTS"
+report_msi_claw_ec_tdp_bytes
 
 systemctl --failed --no-legend --no-pager | tee /tmp/steamos-intel-handheld-failed-units.txt
 if [ -s /tmp/steamos-intel-handheld-failed-units.txt ]; then

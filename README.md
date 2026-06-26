@@ -38,12 +38,14 @@ Planned target family:
 The harness expects root SSH access to the target SteamOS machine.
 
 ```bash
-scripts/install-on-device.sh root@192.168.128.214
-scripts/verify-on-device.sh root@192.168.128.214
+scripts/install-on-device.sh root@10.100.0.19
+scripts/verify-on-device.sh root@10.100.0.19
 ```
 
-The verifier temporarily sets TDP to 28W, confirms SteamOS Manager, the remote
-service, and RAPL agree, then restores 30W by default.
+The verifier temporarily sets TDP to 17W by default, confirms SteamOS Manager,
+the remote service, RAPL PL1/PL2, and any exposed short-term Tau agree, then
+restores 30W by default. Set `VERIFY_TDP_POLICY_MODE=ac-performance` to verify
+the AC performance PL2 policy instead of the default Battery Max-Q policy.
 
 The installer keeps this project's executable payload under
 `/opt/steamos-intel-handheld`. System configuration remains in the conventional
@@ -66,8 +68,8 @@ like a subtle color or gamma shift in games.
 The workaround uses gamescope's runtime control channel after the session starts:
 
 ```bash
-scripts/configure-gamescope-display-workaround.sh enable root@192.168.128.214
-scripts/configure-gamescope-display-workaround.sh disable root@192.168.128.214
+scripts/configure-gamescope-display-workaround.sh enable root@10.100.0.19
+scripts/configure-gamescope-display-workaround.sh disable root@10.100.0.19
 ```
 
 The native-panel wrapper takes effect after the next gamescope session restart
@@ -107,22 +109,36 @@ SteamOS exposes one `TdpLimit` value through this interface. This project maps
 that value to RAPL as:
 
 - Requested TDP is clamped to the 258V handheld sustained range: 8W to 30W.
-- PL1: the clamped SteamOS `TdpLimit` value.
-- PL2: `min(PL1 + 2W, 32W, short_limit_max_w)`.
+- PL1: the clamped SteamOS `TdpLimit` value, preserving the SteamOS slider as
+  the sustained power contract.
+- PL2: a backend policy derived from the current power source and selected TDP
+  policy mode.
 
 For the Core Ultra 7 258V profile, the UI range is 8W to 30W and the short-term
-hardware ceiling remains 37W. Intel-published Claw 8 AI+ game test points use
-17W/19W and 30W/32W, so the default policy follows that fixed +2W curve instead
-of a generic notebook PL2 multiplier. Future device profiles can override PL2
-with `--pl2-w` when platform thermals require a different burst limit.
+hardware ceiling remains 37W. The default `--tdp-policy auto` resolves to
+Battery Max-Q when the machine is on battery, AC Performance when it is plugged
+in, and Battery Max-Q when the power source is unknown. Battery Max-Q uses
+ceiling-rounded 1.25x/1.45x PL2 ratios at low and mid slider values, maps 17W
+and 18W PL1 to 25W PL2 with a short 5s Tau, and maps 30W PL1 to 35W PL2 with an
+8s Tau. AC Performance maps 9W through 16W PL1 to 25W PL2 with a 10s Tau, then
+maps PL1 values of 17W and higher to the 37W PL2 ceiling with a 28s Tau.
+`--pl2-w` remains an explicit override for device profiles that need a
+different burst limit, and PL2 is still capped by `short_limit_max_w`.
+When PL1 itself reaches the short-term ceiling, the ceiling wins over the
+usual `PL2 >= PL1 + 1W` headroom preference.
+If the kernel does not expose writable `constraint_X_time_window_us` files, Tau
+writes are skipped while PL1/PL2 writes still apply.
 
 On the MSI Claw 8 AI+ A2VM, Windows MSI Center M Manual mode was observed to
 store Manual PL1/PL2 directly in EC offsets `0x50` and `0x51` as watt values.
 The installed service enables `--apply-msi-claw-ec`, which mirrors the same
-PL1/PL2 curve to those EC bytes after strict DMI and EC firmware checks. It
-also switches the MSI EC shift byte `0xd2` from comfort (`0xc1`) to turbo
-(`0xc4`) when TDP rises above 17W, and debounces EC writes so Steam slider
-movement only writes the final settled EC target. It only accepts MSI
+policy PL1/PL2 to those EC bytes after strict DMI and EC firmware checks. The
+installed service keeps the conservative `--msi-claw-ec-shift-policy
+tdp-threshold` default for now: 17W stays in comfort (`0xc1`) and values above
+17W use turbo (`0xc4`). The staged `profile` shift policy can enable turbo for
+Battery Max-Q at 17W, but it should not become the installed default until
+on-device sustained-power validation passes. The service debounces EC writes so
+Steam slider movement only writes the final settled EC target. It only accepts MSI
 `Claw 8 AI+ A2VM`, board `MS-1T52`, and EC firmware strings that start with
 `1T52EMS1.109`; other systems fail closed before any EC write.
 

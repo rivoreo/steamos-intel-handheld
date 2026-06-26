@@ -36,3 +36,35 @@ def test_parser_configures_ec_write_debounce_ms():
     backend = power_control.build_backend(args)
 
     assert backend.ec_write_debounce_ms == 750
+
+
+def test_parser_configures_tdp_policy_mode_and_power_source_override():
+    args = power_control.build_parser().parse_args(
+        [
+            "serve",
+            "--tdp-policy",
+            "battery-maxq",
+            "--power-source-override",
+            "battery",
+        ]
+    )
+    backend = power_control.build_backend(args)
+
+    assert backend.tdp_policy_mode == power_control.TdpPolicyMode.BATTERY_MAXQ
+    assert backend.power_source_override == power_control.PowerSource.BATTERY
+
+
+def test_parser_configures_power_source_poll_interval():
+    args = power_control.build_parser().parse_args(["serve", "--power-source-poll-s", "5"])
+    backend = power_control.build_backend(args)
+
+    assert backend.power_source_poll_s == 5.0
+
+
+def test_parser_configures_msi_claw_ec_shift_policy():
+    args = power_control.build_parser().parse_args(
+        ["serve", "--msi-claw-ec-shift-policy", "profile"]
+    )
+    backend = power_control.build_backend(args)
+
+    assert backend.msi_claw_ec_shift_policy == power_control.MsiClawEcShiftPolicy.PROFILE

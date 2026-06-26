@@ -13,6 +13,7 @@ import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 BUS_NAME = "org.rivoreo.SteamOSManager.PowerControl"
@@ -61,9 +62,42 @@ class TdpLimits:
 
 
 @dataclass(frozen=True)
+class TdpPolicy:
+    pl1_w: int
+    pl2_w: int
+    pl1_tau_us: int | None
+    pl2_tau_us: int | None
+    requested_mode: "TdpPolicyMode"
+    resolved_mode: "TdpPolicyMode"
+    power_source: "PowerSource"
+
+
+class PowerSource(str, Enum):
+    AC = "ac"
+    BATTERY = "battery"
+    UNKNOWN = "unknown"
+
+
+class TdpPolicyMode(str, Enum):
+    AUTO = "auto"
+    BATTERY_LOW_POWER = "battery-low-power"
+    BATTERY_MAXQ = "battery-maxq"
+    AC_QUIET = "ac-quiet"
+    AC_PERFORMANCE = "ac-performance"
+
+
+class MsiClawEcShiftPolicy(str, Enum):
+    TDP_THRESHOLD = "tdp-threshold"
+    PROFILE = "profile"
+
+
+@dataclass(frozen=True)
 class RaplConstraint:
     power_limit_file: Path
     max_power_file: Path | None = None
+    time_window_file: Path | None = None
+    min_time_window_file: Path | None = None
+    max_time_window_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +127,148 @@ def compute_tdp_limits(
     )
 
 
+def resolve_tdp_policy_mode(
+    mode: TdpPolicyMode | str,
+    power_source: PowerSource | str,
+) -> TdpPolicyMode:
+    mode = TdpPolicyMode(mode)
+    power_source = PowerSource(power_source)
+    if mode != TdpPolicyMode.AUTO:
+        return mode
+    if power_source == PowerSource.AC:
+        return TdpPolicyMode.AC_PERFORMANCE
+    return TdpPolicyMode.BATTERY_MAXQ
+
+
+def compute_tdp_policy(
+    watts: int,
+    *,
+    mode: TdpPolicyMode | str = TdpPolicyMode.AUTO,
+    power_source: PowerSource | str = PowerSource.UNKNOWN,
+    short_limit_max_w: int = DEFAULT_SHORT_LIMIT_MAX_W,
+    min_w: int = DEFAULT_MIN_W,
+    max_w: int = DEFAULT_MAX_W,
+) -> TdpPolicy:
+    """Return the profile-aware PL1/PL2/Tau policy for a requested SteamOS TDP."""
+
+    requested_mode = TdpPolicyMode(mode)
+    source = PowerSource(power_source)
+    pl1_w = max(int(min_w), min(int(max_w), int(watts)))
+    resolved_mode = resolve_tdp_policy_mode(requested_mode, source)
+    computed_pl2_w = _compute_policy_pl2_w(pl1_w, resolved_mode)
+    pl2_w = _clamp_policy_pl2_w(pl1_w, computed_pl2_w, int(short_limit_max_w))
+    return TdpPolicy(
+        pl1_w=pl1_w,
+        pl2_w=pl2_w,
+        pl1_tau_us=None,
+        pl2_tau_us=_compute_policy_pl2_tau_us(pl1_w, resolved_mode),
+        requested_mode=requested_mode,
+        resolved_mode=resolved_mode,
+        power_source=source,
+    )
+
+
+def compute_tdp_limits_from_policy(policy: TdpPolicy) -> TdpLimits:
+    return TdpLimits(
+        pl1_uw=policy.pl1_w * MICROWATTS_PER_WATT,
+        pl2_uw=policy.pl2_w * MICROWATTS_PER_WATT,
+    )
+
+
+def _compute_policy_pl2_w(pl1_w: int, mode: TdpPolicyMode) -> int:
+    if mode == TdpPolicyMode.BATTERY_LOW_POWER:
+        return _battery_low_power_pl2_w(pl1_w)
+    if mode == TdpPolicyMode.BATTERY_MAXQ:
+        return _battery_maxq_pl2_w(pl1_w)
+    if mode == TdpPolicyMode.AC_QUIET:
+        return _ac_quiet_pl2_w(pl1_w)
+    if mode == TdpPolicyMode.AC_PERFORMANCE:
+        return _ac_performance_pl2_w(pl1_w)
+    raise ValueError(f"unsupported TDP policy mode: {mode}")
+
+
+def _ceil_percent(watts: int, percent: int) -> int:
+    return (int(watts) * int(percent) + 99) // 100
+
+
+def _clamp_policy_pl2_w(pl1_w: int, computed_pl2_w: int, short_limit_max_w: int) -> int:
+    # Prefer short-term headroom over PL1 when possible; the hardware PL2 ceiling wins.
+    preferred_pl2_w = max(int(pl1_w) + 1, int(computed_pl2_w))
+    return min(int(short_limit_max_w), preferred_pl2_w)
+
+
+def _battery_low_power_pl2_w(pl1_w: int) -> int:
+    if pl1_w <= 8:
+        return pl1_w + 2
+    if pl1_w <= 12:
+        return min(15, pl1_w + 3)
+    if pl1_w <= 18:
+        return min(24, pl1_w + 6)
+    if pl1_w <= 25:
+        return min(28, max(25, pl1_w + 3))
+    return min(33, pl1_w + 3)
+
+
+def _battery_maxq_pl2_w(pl1_w: int) -> int:
+    if pl1_w <= 12:
+        return min(15, max(pl1_w + 1, _ceil_percent(pl1_w, 125)))
+    if pl1_w <= 18:
+        return min(25, max(pl1_w + 1, _ceil_percent(pl1_w, 145)))
+    if pl1_w <= 25:
+        return min(30, max(25, pl1_w + 5))
+    return min(35, pl1_w + 5)
+
+
+def _ac_quiet_pl2_w(pl1_w: int) -> int:
+    if pl1_w <= 8:
+        return 12
+    if pl1_w <= 12:
+        return 18
+    if pl1_w <= 18:
+        return 25
+    if pl1_w <= 25:
+        return 30
+    return 35
+
+
+def _ac_performance_pl2_w(pl1_w: int) -> int:
+    if pl1_w >= 17:
+        return 37
+    if pl1_w <= 8:
+        return 18
+    return 25
+
+
+def _compute_policy_pl2_tau_us(pl1_w: int, mode: TdpPolicyMode) -> int:
+    if mode == TdpPolicyMode.BATTERY_LOW_POWER:
+        if pl1_w <= 8:
+            return 1_000_000
+        if pl1_w <= 12:
+            return 2_000_000
+        return 3_000_000
+    if mode == TdpPolicyMode.BATTERY_MAXQ:
+        if pl1_w <= 8:
+            return 2_000_000
+        if pl1_w <= 12:
+            return 3_000_000
+        if pl1_w <= 20:
+            return 5_000_000
+        return 8_000_000
+    if mode == TdpPolicyMode.AC_QUIET:
+        if pl1_w <= 12:
+            return 5_000_000
+        if pl1_w <= 20:
+            return 8_000_000
+        return 10_000_000
+    if mode == TdpPolicyMode.AC_PERFORMANCE:
+        if pl1_w <= 8:
+            return 8_000_000
+        if pl1_w < 17:
+            return 10_000_000
+        return 28_000_000
+    raise ValueError(f"unsupported TDP policy mode: {mode}")
+
+
 def compute_tdp_watt_limits(
     watts: int,
     short_limit_max_w: int = DEFAULT_SHORT_LIMIT_MAX_W,
@@ -105,6 +281,16 @@ def compute_tdp_watt_limits(
         pl1_w=limits.pl1_uw // MICROWATTS_PER_WATT,
         pl2_w=limits.pl2_uw // MICROWATTS_PER_WATT,
     )
+
+
+def _read_positive_int(path: Path | None) -> int | None:
+    if path is None:
+        return None
+    try:
+        value = int(path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def compute_msi_claw_ec_tdp_watt_limits(
@@ -285,6 +471,12 @@ class TdpBackend:
         debugfs_root: str | Path = "/sys/kernel/debug",
         pl2_w: int | None = None,
         short_limit_max_w: int = DEFAULT_SHORT_LIMIT_MAX_W,
+        tdp_policy_mode: TdpPolicyMode | str = TdpPolicyMode.AUTO,
+        power_source_override: PowerSource | str | None = None,
+        power_source_poll_s: float = 2.0,
+        msi_claw_ec_shift_policy: MsiClawEcShiftPolicy | str = (
+            MsiClawEcShiftPolicy.TDP_THRESHOLD
+        ),
     ) -> None:
         self.min_w = int(min_w)
         self.max_w = int(max_w)
@@ -302,6 +494,13 @@ class TdpBackend:
         self._ec_write_timer: threading.Timer | None = None
         self._ec_write_lock = threading.Lock()
         self.pl2_w = int(pl2_w) if pl2_w is not None else None
+        self.tdp_policy_mode = TdpPolicyMode(tdp_policy_mode)
+        self.power_source_override = (
+            PowerSource(power_source_override) if power_source_override is not None else None
+        )
+        self.power_source_poll_s = max(0.0, float(power_source_poll_s))
+        self.msi_claw_ec_shift_policy = MsiClawEcShiftPolicy(msi_claw_ec_shift_policy)
+        self._last_applied_power_source: PowerSource | None = None
         if self.min_w <= 0 or self.max_w < self.min_w:
             raise ValueError(f"invalid TDP range {self.min_w}-{self.max_w}W")
         if self.short_limit_max_w < self.max_w:
@@ -311,6 +510,32 @@ class TdpBackend:
             )
         if self.pl2_w is not None and self.pl2_w <= 0:
             raise ValueError(f"invalid PL2 wattage {self.pl2_w}; expected > 0")
+
+    def current_power_source(self) -> PowerSource:
+        if self.power_source_override is not None:
+            return self.power_source_override
+
+        power_supply = self.sysfs_root / "class" / "power_supply"
+        if not power_supply.exists():
+            return PowerSource.UNKNOWN
+
+        saw_battery = False
+        for supply in sorted(power_supply.iterdir()):
+            try:
+                supply_type = (supply / "type").read_text().strip().lower()
+            except OSError:
+                continue
+            if supply_type == "battery":
+                saw_battery = True
+                continue
+            if supply_type in {"mains", "usb", "usb-c", "usb_c", "usb_pd", "usb_pd_drp"}:
+                try:
+                    if (supply / "online").read_text().strip() == "1":
+                        return PowerSource.AC
+                except OSError:
+                    continue
+
+        return PowerSource.BATTERY if saw_battery else PowerSource.UNKNOWN
 
     def read_limit_w(self) -> int:
         state_limit = self._read_state_file()
@@ -349,15 +574,44 @@ class TdpBackend:
         self.apply_limit_to_rapl(watts)
         return watts
 
+    def reapply_if_power_source_changed(self, *, force: bool = False) -> int | None:
+        current_source = self.current_power_source()
+        if not force and current_source == self._last_applied_power_source:
+            return None
+
+        watts = self._read_state_file()
+        if watts is None:
+            self._last_applied_power_source = current_source
+            return None
+
+        if self.apply_rapl:
+            self.apply_limit_to_rapl(watts)
+        if self.apply_msi_claw_ec:
+            self.schedule_limit_to_msi_claw_ec(watts)
+        self._last_applied_power_source = current_source
+        return watts
+
+    def reapply_policy_if_state_matches_current_rapl(self) -> int | None:
+        if not self.apply_rapl:
+            return None
+
+        watts = self._read_state_file()
+        if watts is None:
+            return None
+
+        current_rapl_watts = self._read_current_long_term_rapl_watts()
+        if current_rapl_watts != watts:
+            return None
+
+        self.apply_limit_to_rapl(watts)
+        if self.apply_msi_claw_ec:
+            self.schedule_limit_to_msi_claw_ec(watts)
+        return watts
+
     def apply_limit_to_rapl(self, watts: int) -> None:
         watts = self._normalize_requested_watts(watts)
-        limits = compute_tdp_limits(
-            watts,
-            self.short_limit_max_w,
-            self.pl2_w,
-            min_w=self.min_w,
-            max_w=self.max_w,
-        )
+        policy = self._compute_current_policy(watts)
+        limits = compute_tdp_limits_from_policy(policy)
 
         for domain in self.rapl_domains():
             long_term = self._constraint_by_name(domain, "long_term", fallback_index=0)
@@ -369,17 +623,35 @@ class TdpBackend:
             if short_term is not None:
                 pl2_uw = max(pl1_uw, self._limit_for_constraint(limits.pl2_uw, short_term))
                 short_term.power_limit_file.write_text(str(pl2_uw))
+                if short_term.time_window_file is not None and policy.pl2_tau_us is not None:
+                    try:
+                        short_term.time_window_file.write_text(
+                            str(
+                                self._limit_time_window_for_constraint(
+                                    policy.pl2_tau_us,
+                                    short_term,
+                                )
+                            )
+                        )
+                    except OSError as exc:
+                        print(
+                            "failed to write RAPL short-term time window "
+                            f"{short_term.time_window_file}={policy.pl2_tau_us}: {exc}",
+                            file=sys.stderr,
+                        )
+        self._last_applied_power_source = policy.power_source
 
     def apply_limit_to_msi_claw_ec(self, watts: int) -> None:
         watts = self._normalize_requested_watts(watts)
-        limits = compute_msi_claw_ec_tdp_watt_limits(
-            watts,
-            self.short_limit_max_w,
-            self.pl2_w,
-            min_w=self.min_w,
-            max_w=self.max_w,
+        policy = self._compute_current_policy(watts)
+        limits = WattLimits(
+            pl1_w=min(policy.pl1_w, MSI_CLAW_EC_PL1_MAX_W),
+            pl2_w=max(
+                min(policy.pl1_w, MSI_CLAW_EC_PL1_MAX_W),
+                min(policy.pl2_w, self.short_limit_max_w),
+            ),
         )
-        shift_mode = msi_claw_ec_shift_mode_for_tdp(watts)
+        shift_mode = self._msi_claw_ec_shift_mode_for_policy(policy)
         self.ec_controller.apply_limits(limits, shift_mode)
 
     def schedule_limit_to_msi_claw_ec(self, watts: int) -> None:
@@ -470,6 +742,17 @@ class TdpBackend:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state_file.write_text(str(watts))
 
+    def _read_current_long_term_rapl_watts(self) -> int | None:
+        for domain in self.rapl_domains():
+            long_term = self._constraint_by_name(domain, "long_term", fallback_index=0)
+            if long_term is None:
+                continue
+            current_uw = _read_positive_int(long_term.power_limit_file)
+            if current_uw is None:
+                continue
+            return current_uw // MICROWATTS_PER_WATT
+        return None
+
     def _normalize_requested_watts(self, watts: int) -> int:
         watts = int(watts)
         if watts <= 0 or watts > self.short_limit_max_w:
@@ -480,6 +763,43 @@ class TdpBackend:
 
     def _clamp_watts(self, watts: int) -> int:
         return max(self.min_w, min(self.max_w, watts))
+
+    def _compute_current_policy(self, watts: int) -> TdpPolicy:
+        policy = compute_tdp_policy(
+            watts,
+            mode=self.tdp_policy_mode,
+            power_source=self.current_power_source(),
+            short_limit_max_w=self.short_limit_max_w,
+            min_w=self.min_w,
+            max_w=self.max_w,
+        )
+        if self.pl2_w is None:
+            return policy
+
+        override_pl2_w = min(
+            self.short_limit_max_w,
+            max(policy.pl1_w + 1, int(self.pl2_w)),
+        )
+        return TdpPolicy(
+            pl1_w=policy.pl1_w,
+            pl2_w=override_pl2_w,
+            pl1_tau_us=policy.pl1_tau_us,
+            pl2_tau_us=policy.pl2_tau_us,
+            requested_mode=policy.requested_mode,
+            resolved_mode=policy.resolved_mode,
+            power_source=policy.power_source,
+        )
+
+    def _msi_claw_ec_shift_mode_for_policy(self, policy: TdpPolicy) -> int:
+        if self.msi_claw_ec_shift_policy == MsiClawEcShiftPolicy.TDP_THRESHOLD:
+            return msi_claw_ec_shift_mode_for_tdp(policy.pl1_w)
+        if policy.resolved_mode == TdpPolicyMode.BATTERY_LOW_POWER:
+            return MSI_CLAW_EC_SHIFT_MODE_COMFORT
+        if policy.resolved_mode == TdpPolicyMode.AC_QUIET and policy.pl1_w <= 17:
+            return MSI_CLAW_EC_SHIFT_MODE_COMFORT
+        if policy.pl1_w >= 17:
+            return MSI_CLAW_EC_SHIFT_MODE_TURBO
+        return MSI_CLAW_EC_SHIFT_MODE_COMFORT
 
     def _constraint_by_name(
         self,
@@ -501,9 +821,19 @@ class TdpBackend:
             if not power_limit_file.exists():
                 return None
             max_power_file = domain / f"{prefix}_max_power_uw"
+            time_window_file = domain / f"{prefix}_time_window_us"
+            min_time_window_file = domain / f"{prefix}_min_time_window_us"
+            max_time_window_file = domain / f"{prefix}_max_time_window_us"
             return RaplConstraint(
                 power_limit_file=power_limit_file,
                 max_power_file=max_power_file if max_power_file.exists() else None,
+                time_window_file=time_window_file if time_window_file.exists() else None,
+                min_time_window_file=(
+                    min_time_window_file if min_time_window_file.exists() else None
+                ),
+                max_time_window_file=(
+                    max_time_window_file if max_time_window_file.exists() else None
+                ),
             )
 
         if found_named_constraints:
@@ -513,9 +843,15 @@ class TdpBackend:
         if not power_limit_file.exists():
             return None
         max_power_file = domain / f"constraint_{fallback_index}_max_power_uw"
+        time_window_file = domain / f"constraint_{fallback_index}_time_window_us"
+        min_time_window_file = domain / f"constraint_{fallback_index}_min_time_window_us"
+        max_time_window_file = domain / f"constraint_{fallback_index}_max_time_window_us"
         return RaplConstraint(
             power_limit_file=power_limit_file,
             max_power_file=max_power_file if max_power_file.exists() else None,
+            time_window_file=time_window_file if time_window_file.exists() else None,
+            min_time_window_file=min_time_window_file if min_time_window_file.exists() else None,
+            max_time_window_file=max_time_window_file if max_time_window_file.exists() else None,
         )
 
     def _powercap_domain_name(self, domain: Path) -> str | None:
@@ -530,16 +866,22 @@ class TdpBackend:
             return limit_uw
         return min(limit_uw, max_power_uw)
 
+    def _limit_time_window_for_constraint(
+        self,
+        requested_us: int,
+        constraint: RaplConstraint,
+    ) -> int:
+        min_us = _read_positive_int(constraint.min_time_window_file)
+        max_us = _read_positive_int(constraint.max_time_window_file)
+        limited_us = int(requested_us)
+        if min_us is not None:
+            limited_us = max(min_us, limited_us)
+        if max_us is not None:
+            limited_us = min(max_us, limited_us)
+        return limited_us
+
     def _constraint_max_power_uw(self, constraint: RaplConstraint) -> int | None:
-        if constraint.max_power_file is None:
-            return None
-        try:
-            max_power_uw = int(constraint.max_power_file.read_text().strip())
-        except (OSError, ValueError):
-            return None
-        if max_power_uw <= 0:
-            return None
-        return max_power_uw
+        return _read_positive_int(constraint.max_power_file)
 
 
 def wait_for_user_steamos_manager(user: str, timeout_s: int, interval_s: float) -> None:
@@ -592,6 +934,26 @@ def _user_service_active(user: str, runtime_dir: Path, bus_address: str, service
     return result.returncode == 0
 
 
+async def poll_power_source_changes(backend: TdpBackend) -> None:
+    if backend.power_source_poll_s <= 0:
+        return
+    while True:
+        await asyncio.sleep(backend.power_source_poll_s)
+        try:
+            reapplied = backend.reapply_if_power_source_changed()
+        except Exception as exc:
+            print(
+                f"failed to reapply TDP policy after power-source check: {exc}",
+                file=sys.stderr,
+            )
+            continue
+        if reapplied is not None:
+            print(
+                f"reapplied TDP policy for {reapplied}W after power-source change",
+                file=sys.stderr,
+            )
+
+
 async def serve(args: argparse.Namespace) -> None:
     from dbus_next.aio import MessageBus
     from dbus_next.constants import BusType, PropertyAccess
@@ -602,6 +964,14 @@ async def serve(args: argparse.Namespace) -> None:
         restored = backend.restore_state_to_rapl()
         if restored is not None:
             print(f"restored TDP limit to {restored}W", flush=True, file=sys.stderr)
+    elif args.apply_rapl:
+        reapplied = backend.reapply_policy_if_state_matches_current_rapl()
+        if reapplied is not None:
+            print(
+                f"reapplied TDP policy envelope for current {reapplied}W",
+                flush=True,
+                file=sys.stderr,
+            )
 
     class RemoteInterface(ServiceInterface):
         def __init__(self) -> None:
@@ -645,6 +1015,7 @@ async def serve(args: argparse.Namespace) -> None:
     bus.export(OBJ_PATH, RemoteInterface())
     bus.export(OBJ_PATH, TdpLimitInterface(backend))
     await bus.request_name(BUS_NAME)
+    asyncio.create_task(poll_power_source_changes(backend))
     await asyncio.Future()
 
 
@@ -661,6 +1032,10 @@ def build_backend(args: argparse.Namespace) -> TdpBackend:
         debugfs_root=args.debugfs_root,
         pl2_w=args.pl2_w,
         short_limit_max_w=args.short_limit_max_w,
+        tdp_policy_mode=args.tdp_policy,
+        power_source_override=args.power_source_override,
+        power_source_poll_s=args.power_source_poll_s,
+        msi_claw_ec_shift_policy=args.msi_claw_ec_shift_policy,
     )
 
 
@@ -692,8 +1067,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dmi-root", default="/sys/class/dmi/id")
     parser.add_argument("--debugfs-root", default="/sys/kernel/debug")
     parser.add_argument("--pl2-w", type=int)
+    parser.add_argument(
+        "--tdp-policy",
+        choices=[mode.value for mode in TdpPolicyMode],
+        default=TdpPolicyMode.AUTO.value,
+    )
+    parser.add_argument(
+        "--power-source-override",
+        choices=[source.value for source in PowerSource],
+    )
+    parser.add_argument("--power-source-poll-s", type=float, default=2.0)
     parser.add_argument("--apply-rapl", action="store_true")
     parser.add_argument("--apply-msi-claw-ec", action="store_true")
+    parser.add_argument(
+        "--msi-claw-ec-shift-policy",
+        choices=[policy.value for policy in MsiClawEcShiftPolicy],
+        default=MsiClawEcShiftPolicy.TDP_THRESHOLD.value,
+    )
     parser.add_argument("--ec-write-debounce-ms", type=int, default=0)
     parser.add_argument("--prepare-mangohud-sensors", action="store_true")
     parser.add_argument("--restore-on-start", action="store_true")
