@@ -31,6 +31,9 @@ repository artifact; they do not deploy GitHub Pages. Ordinary pushes and pull
 requests validate the repository through CI, but ordinary pushes cannot sign
 packages or deploy GitHub Pages.
 
+Detailed release operator runbook: `docs/release-process.md`. Repo-local agent
+guidance for the same workflow lives in `.codex/skills/arch-release-publisher`.
+
 When the protected release signing secrets are not configured, hidden
 release-candidate runs generate a short-lived candidate signing key so the
 package build, repository metadata, and artifact upload path can still be

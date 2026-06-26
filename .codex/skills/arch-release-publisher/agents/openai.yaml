@@ -1,0 +1,4 @@
+interface:
+  display_name: "Arch Release Publisher"
+  short_description: "Arch package release runbook"
+  default_prompt: "Use $arch-release-publisher to publish or validate this repo Arch package repository release."

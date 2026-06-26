@@ -156,6 +156,8 @@ until the `xe` kernel driver exposes a real DRM hwmon temperature input such as
 - `tests/` - hardware-free unit tests.
 - `docs/` - design notes, hardware notes, upstreaming plan, and AI harness
   guidance.
+- `docs/release-process.md` - operator runbook for hidden Arch release
+  candidates and stable repository publication.
 - `packaging/arch/` - Arch/SteamOS package draft.
 
 See `docs/references.md` for the power-management references behind the default
