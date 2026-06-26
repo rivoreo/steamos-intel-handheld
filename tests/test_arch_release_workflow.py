@@ -97,6 +97,18 @@ def test_arch_release_workflow_installs_git_before_container_checkout() -> None:
     assert build_repo_line < dependency_line < checkout_line
 
 
+def test_arch_release_workflow_can_use_ephemeral_candidate_signing_key_without_secrets() -> None:
+    workflow = WORKFLOW.read_text()
+
+    assert "PUBLISH_PAGES: ${{ needs.validate.outputs.publish_pages }}" in workflow
+    assert 'if [ "$PUBLISH_PAGES" = "true" ]; then' in workflow
+    assert "Missing Arch release signing secrets" in workflow
+    assert "Rivoreo candidate signing key" in workflow
+    assert "quick-generate-key" in workflow
+    assert 'ARCH_REPO_GPG_KEY_ID=$imported' in workflow
+    assert 'GPGKEY=$imported' in workflow
+
+
 def test_ordinary_pages_workflow_cannot_overwrite_release_repository() -> None:
     workflow = PAGES_WORKFLOW.read_text()
 
@@ -213,4 +225,6 @@ def test_package_repository_docs_describe_github_actions_release_publisher() -> 
     assert "vX.Y.Z-rc.N" in docs
     assert "do not deploy GitHub Pages" in docs
     assert "signed repository artifact" in docs
+    assert "short-lived candidate signing key" in docs
+    assert "stable releases require the protected signing secrets" in docs
     assert "ordinary pushes" in docs

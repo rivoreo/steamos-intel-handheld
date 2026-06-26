@@ -31,6 +31,11 @@ repository artifact; they do not deploy GitHub Pages. Ordinary pushes and pull
 requests validate the repository through CI, but ordinary pushes cannot sign
 packages or deploy GitHub Pages.
 
+When the protected release signing secrets are not configured, hidden
+release-candidate runs generate a short-lived candidate signing key so the
+package build, repository metadata, and artifact upload path can still be
+validated; stable releases require the protected signing secrets.
+
 Required GitHub secrets:
 
 - `ARCH_REPO_GPG_PRIVATE_KEY`: ASCII-armored private key for the Rivoreo package
