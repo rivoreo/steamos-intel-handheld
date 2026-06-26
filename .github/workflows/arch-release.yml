@@ -73,6 +73,11 @@ jobs:
       GPGKEY: ${{ secrets.ARCH_REPO_GPG_KEY_ID }}
       KEY_OUT: ${{ github.workspace }}/.cache/arch-release/public/rivoreo-steamos/key
     steps:
+      - name: Install checkout dependencies
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm git
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}

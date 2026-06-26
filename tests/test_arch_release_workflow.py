@@ -39,6 +39,14 @@ def _line_index_containing(text: str, *needles: str) -> int:
     raise AssertionError(f"Could not find line containing: {needles}")
 
 
+def _line_indices_containing(text: str, *needles: str) -> list[int]:
+    return [
+        index
+        for index, line in enumerate(_logical_shell_lines(text))
+        if all(needle in line for needle in needles)
+    ]
+
+
 def test_arch_release_workflow_is_tag_only_and_uses_recursive_checkout() -> None:
     workflow = WORKFLOW.read_text()
 
@@ -73,6 +81,20 @@ def test_arch_release_workflow_keeps_prerelease_tags_hidden_from_pages() -> None
     assert 'echo "publish_pages=false" >> "$GITHUB_OUTPUT"' in workflow
     assert "needs.validate.outputs.publish_pages == 'true'" in workflow
     assert "needs: [validate, build-repo]" in workflow
+
+
+def test_arch_release_workflow_installs_git_before_container_checkout() -> None:
+    workflow = WORKFLOW.read_text()
+    build_repo_line = _line_index_containing(workflow, "build-repo:")
+    dependency_line = _line_index_containing(workflow, "Install checkout dependencies")
+    checkout_line = next(
+        index
+        for index in _line_indices_containing(workflow, "uses: actions/checkout@v4")
+        if index > build_repo_line
+    )
+
+    assert "pacman -S --noconfirm git" in workflow
+    assert build_repo_line < dependency_line < checkout_line
 
 
 def test_ordinary_pages_workflow_cannot_overwrite_release_repository() -> None:
