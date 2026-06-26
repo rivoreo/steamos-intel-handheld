@@ -1,6 +1,6 @@
 # Maintainer: JohnnySun <bmy001@gmail.com>
 pkgname=steamos-intel-handheld
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="SteamOS support layer for Intel handheld PCs"
 arch=("any")
@@ -27,4 +27,11 @@ package() {
   install -Dm0644 data/steamos-manager/remotes.d/99-rivoreo-power-control.toml \
     "$pkgdir/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
   install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  decky_src="decky/steamos-intel-handheld-ec"
+  decky_dst="$pkgdir/home/deck/homebrew/plugins/steamos-intel-handheld-ec"
+  install -Dm0644 "$decky_src/plugin.json" "$decky_dst/plugin.json"
+  install -Dm0644 "$decky_src/main.py" "$decky_dst/main.py"
+  install -Dm0644 "$decky_src/dist/index.js" "$decky_dst/dist/index.js"
+  install -Dm0644 "$decky_src/README.md" "$decky_dst/README.md"
 }

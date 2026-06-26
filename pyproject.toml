@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "steamos-intel-handheld"
-version = "0.1.0"
+version = "0.2.0"
 description = "SteamOS support layer for Intel handheld PCs"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,6 +24,7 @@ dev = [
 
 [project.scripts]
 steamos-intel-handheld-power-control = "steamos_intel_handheld.power_control:main"
+steamos-intel-handheld-ec-control = "steamos_intel_handheld.ec_charge_control:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

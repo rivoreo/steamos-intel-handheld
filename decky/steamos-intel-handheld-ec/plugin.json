@@ -1,0 +1,10 @@
+{
+  "name": "Charge Limit",
+  "author": "Rivoreo",
+  "api_version": 1,
+  "flags": ["root"],
+  "publish": {
+    "tags": ["utility", "battery", "charge-limit"]
+  },
+  "main": "dist/index.js"
+}

@@ -1,6 +1,6 @@
 # Maintainer: JohnnySun <bmy001@gmail.com>
 pkgname=steamos-intel-handheld-mangoapp
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Patched SteamOS mangoapp for Intel handheld MangoHud sensor support"
 arch=("x86_64")

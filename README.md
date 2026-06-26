@@ -15,6 +15,8 @@ when the interfaces settle.
 - Own the system bus name `org.rivoreo.SteamOSManager.PowerControl`.
 - Apply TDP requests to Intel RAPL PL1 and PL2 limits.
 - Optionally mirror TDP requests to guarded MSI Claw 8 AI+ EC PL1/PL2 bytes.
+- Expose the validated MSI Claw 8 AI+ battery charge-limit EC byte through a
+  Decky Loader plugin and a guarded CLI for 60/80/100 percent presets.
 - Prepare package and uncore RAPL `energy_uj` access so MangoHud can report
   CPU power and Intel integrated GPU power from real kernel counters.
 - Provide install and verification harnesses for real SteamOS devices.
@@ -166,6 +168,7 @@ until the `xe` kernel driver exposes a real DRM hwmon temperature input such as
 - `src/steamos_intel_handheld/` - Python service code.
 - `data/` - systemd, D-Bus, SteamOS Manager, and optional gamescope integration
   files.
+- `decky/` - Decky Loader plugin assets packaged for the charge-limit UI.
 - `external/MangoHud/` - MangoHud fork branch used for the Intel RAPL GPU
   power patch; keep `upstream` pointed at flightlessmango for mainline merges.
 - `scripts/` - real-device install, verification, and inventory harness.

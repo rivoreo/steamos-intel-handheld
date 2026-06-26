@@ -148,6 +148,9 @@ def test_arch_release_workflow_verifies_repository_artifact_before_pages_deploy(
     assert "gpg --batch --verify" in workflow
     assert "opt/steamos-intel-handheld/bin/mangoapp" in workflow
     assert "usr/bin/steamos-intel-handheld-power-control" in workflow
+    assert "usr/bin/steamos-intel-handheld-ec-control" in workflow
+    assert "home/deck/homebrew/plugins/steamos-intel-handheld-ec/plugin.json" in workflow
+    assert "home/deck/homebrew/plugins/steamos-intel-handheld-ec/dist/index.js" in workflow
 
 
 def test_arch_release_workflow_installs_git_before_container_checkout() -> None:

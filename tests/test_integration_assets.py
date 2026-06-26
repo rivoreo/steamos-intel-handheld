@@ -27,6 +27,23 @@ def test_systemd_unit_waits_for_steamos_manager_before_serving():
     assert "StateDirectory=steamos-intel-handheld" in unit
 
 
+def test_manual_installer_installs_ec_control_wrapper():
+    script = (ROOT / "scripts/install-on-device.sh").read_text()
+
+    assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-ec-control" in script
+    assert r"python3 -m steamos_intel_handheld.ec_charge_control \"\$@\"" in script
+
+
+def test_manual_installer_installs_decky_charge_limit_plugin():
+    script = (ROOT / "scripts/install-on-device.sh").read_text()
+
+    assert "decky/steamos-intel-handheld-ec/plugin.json" in script
+    assert "/home/deck/homebrew/plugins/steamos-intel-handheld-ec" in script
+    assert "install -m 0644" in script
+    assert "decky_src/plugin.json" in script
+    assert "decky_src/dist/index.js" in script
+
+
 def test_gamescope_display_helper_sets_runtime_composite_force():
     helper = (ROOT / "data/bin/steamos-intel-handheld-gamescope-display").read_text()
 

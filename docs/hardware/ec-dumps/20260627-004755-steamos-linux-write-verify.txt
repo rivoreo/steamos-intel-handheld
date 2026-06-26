@@ -1,0 +1,45 @@
+# SteamOS Linux EC charge-limit write verification
+captured_at=2026-06-27T00:48:18+08:00
+cmd=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-ec-control
+
+## initial status
+{"address": 215, "address_hex": "0xd7", "end_threshold": 100, "raw_hex": "0xe4", "raw_value": 228, "restart_explanation": "100% mode restarts charging below 90%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 90, "writes_enabled": true}
+ec[0xd7]=0xe4/228
+BAT1 status=Charging
+BAT1 capacity=87
+BAT1 charge_now=5953000
+BAT1 current_now=3230000
+BAT1 voltage_now=13159000
+
+## apply 60
+{"applied": {"address": 215, "address_hex": "0xd7", "end_threshold": 60, "raw_hex": "0xbc", "raw_value": 188, "restart_explanation": "60% mode restarts charging below 50%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 50, "writes_enabled": true}, "current": {"address": 215, "address_hex": "0xd7", "end_threshold": 100, "raw_hex": "0xe4", "raw_value": 228, "restart_explanation": "100% mode restarts charging below 90%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 90, "writes_enabled": true}, "safety": "wrote validated MSI Claw charge-limit byte 0xd7", "target": {"address": 215, "address_hex": "0xd7", "end_threshold": 60, "raw_hex": "0xbc", "raw_value": 188, "restart_explanation": "60% mode restarts charging below 50%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 50, "writes_enabled": true}, "wrote": true}
+## status after 60
+{"address": 215, "address_hex": "0xd7", "end_threshold": 60, "raw_hex": "0xbc", "raw_value": 188, "restart_explanation": "60% mode restarts charging below 50%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 50, "writes_enabled": true}
+ec[0xd7]=0xbc/188
+BAT1 status=Not charging
+BAT1 capacity=87
+BAT1 charge_now=5956000
+BAT1 current_now=0
+BAT1 voltage_now=13159000
+
+## apply 80
+{"applied": {"address": 215, "address_hex": "0xd7", "end_threshold": 80, "raw_hex": "0xd0", "raw_value": 208, "restart_explanation": "80% mode restarts charging below 70%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 70, "writes_enabled": true}, "current": {"address": 215, "address_hex": "0xd7", "end_threshold": 60, "raw_hex": "0xbc", "raw_value": 188, "restart_explanation": "60% mode restarts charging below 50%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 50, "writes_enabled": true}, "safety": "wrote validated MSI Claw charge-limit byte 0xd7", "target": {"address": 215, "address_hex": "0xd7", "end_threshold": 80, "raw_hex": "0xd0", "raw_value": 208, "restart_explanation": "80% mode restarts charging below 70%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 70, "writes_enabled": true}, "wrote": true}
+## status after 80
+{"address": 215, "address_hex": "0xd7", "end_threshold": 80, "raw_hex": "0xd0", "raw_value": 208, "restart_explanation": "80% mode restarts charging below 70%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 70, "writes_enabled": true}
+ec[0xd7]=0xd0/208
+BAT1 status=Not charging
+BAT1 capacity=87
+BAT1 charge_now=5956000
+BAT1 current_now=0
+BAT1 voltage_now=12990000
+
+## apply 100
+{"applied": {"address": 215, "address_hex": "0xd7", "end_threshold": 100, "raw_hex": "0xe4", "raw_value": 228, "restart_explanation": "100% mode restarts charging below 90%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 90, "writes_enabled": true}, "current": {"address": 215, "address_hex": "0xd7", "end_threshold": 80, "raw_hex": "0xd0", "raw_value": 208, "restart_explanation": "80% mode restarts charging below 70%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 70, "writes_enabled": true}, "safety": "wrote validated MSI Claw charge-limit byte 0xd7", "target": {"address": 215, "address_hex": "0xd7", "end_threshold": 100, "raw_hex": "0xe4", "raw_value": 228, "restart_explanation": "100% mode restarts charging below 90%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 90, "writes_enabled": true}, "wrote": true}
+## status after 100
+{"address": 215, "address_hex": "0xd7", "end_threshold": 100, "raw_hex": "0xe4", "raw_value": 228, "restart_explanation": "100% mode restarts charging below 90%", "source": "msi-claw-8-ai-plus-validated", "start_threshold": 90, "writes_enabled": true}
+ec[0xd7]=0xe4/228
+BAT1 status=Charging
+BAT1 capacity=87
+BAT1 charge_now=5956000
+BAT1 current_now=0
+BAT1 voltage_now=12977000

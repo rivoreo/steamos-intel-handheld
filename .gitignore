@@ -2,8 +2,12 @@
 .ruff_cache/
 __pycache__/
 *.egg-info/
+node_modules/
 build/
 dist/
+!decky/steamos-intel-handheld-ec/dist/
+!decky/steamos-intel-handheld-ec/dist/index.js
+decky/steamos-intel-handheld-ec/dist/*.map
 .venv/
 .DS_Store
 .cache/

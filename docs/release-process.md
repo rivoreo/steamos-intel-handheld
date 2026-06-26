@@ -54,6 +54,10 @@ builds:
 - `rivoreo-keyring`
 - `rivoreo-steamos-repo`
 
+The main `steamos-intel-handheld` package includes the TDP service, the
+`steamos-intel-handheld-ec-control` CLI, and the Decky Loader charge-limit
+plugin runtime under `/home/deck/homebrew/plugins/steamos-intel-handheld-ec`.
+
 The release build script also creates signed `rivoreo-steamos` repository
 metadata, and package versions derive from `pyproject.toml`; before building the
 main package, CI syncs `packaging/arch/PKGBUILD` to that version and refreshes

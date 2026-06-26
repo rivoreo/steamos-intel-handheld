@@ -64,6 +64,11 @@ Release flow:
    the signed repository artifact attached to the workflow run for inspection.
 7. GitHub Pages serves stable results from `https://rivoreo.github.io/steamos-intel-handheld/`.
 
+The main `steamos-intel-handheld` package also ships the battery charge-limit
+CLI and the Decky Loader plugin runtime under
+`/home/deck/homebrew/plugins/steamos-intel-handheld-ec`, so pacman updates carry
+the Steam UI entry point as well as the backend.
+
 GitLab CI remains the build path for validation artifacts:
 
 - `python:test` runs the repository's local harness.

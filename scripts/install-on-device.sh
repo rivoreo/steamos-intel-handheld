@@ -10,7 +10,16 @@ target="$1"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 remote_tmp="/tmp/steamos-intel-handheld-install.$$"
 
-tar -C "$repo_root" -czf - src data pyproject.toml README.md | ssh "$target" "
+tar -C "$repo_root" -czf - \
+  src \
+  data \
+  pyproject.toml \
+  README.md \
+  decky/steamos-intel-handheld-ec/README.md \
+  decky/steamos-intel-handheld-ec/dist/index.js \
+  decky/steamos-intel-handheld-ec/main.py \
+  decky/steamos-intel-handheld-ec/plugin.json \
+  | ssh "$target" "
   set -euo pipefail
   rm -rf '$remote_tmp'
   mkdir -p '$remote_tmp'
@@ -30,11 +39,28 @@ export PYTHONPATH=/opt/steamos-intel-handheld/src
 exec /usr/bin/python3 -m steamos_intel_handheld.power_control \"\$@\"
 WRAPPER
   chmod 0755 /opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control
+  cat >/opt/steamos-intel-handheld/bin/steamos-intel-handheld-ec-control <<'WRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+export PYTHONPATH=/opt/steamos-intel-handheld/src
+exec /usr/bin/python3 -m steamos_intel_handheld.ec_charge_control \"\$@\"
+WRAPPER
+  chmod 0755 /opt/steamos-intel-handheld/bin/steamos-intel-handheld-ec-control
   rm -f /opt/rivoreo/bin/steamos-intel-handheld-power-control
+  rm -f /opt/rivoreo/bin/steamos-intel-handheld-ec-control
   rm -rf /opt/rivoreo/steamos-intel-handheld
   rmdir --ignore-fail-on-non-empty /opt/rivoreo/bin /opt/rivoreo 2>/dev/null || true
   rm -f /etc/rivoreo/bin/steamos-intel-handheld-power-control
+  rm -f /etc/rivoreo/bin/steamos-intel-handheld-ec-control
   rm -rf /etc/rivoreo/steamos-intel-handheld
+
+  decky_src='$remote_tmp/decky/steamos-intel-handheld-ec'
+  decky_dst=/home/deck/homebrew/plugins/steamos-intel-handheld-ec
+  install -d -m 0755 \"\$decky_dst/dist\"
+  install -m 0644 \"\$decky_src/plugin.json\" \"\$decky_dst/plugin.json\"
+  install -m 0644 \"\$decky_src/main.py\" \"\$decky_dst/main.py\"
+  install -m 0644 \"\$decky_src/dist/index.js\" \"\$decky_dst/dist/index.js\"
+  install -m 0644 \"\$decky_src/README.md\" \"\$decky_dst/README.md\"
 
   install -d -m 0755 /etc/dbus-1/system.d /etc/steamos-manager/remotes.d /etc/systemd/system
   install -m 0644 '$remote_tmp/data/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf' /etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf

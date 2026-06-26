@@ -245,9 +245,13 @@ jobs:
           pkginfo_has "$main_pkg" "pkgver = ${pkgver}-1"
           pkginfo_has "$main_pkg" "arch = any"
           contains "$main_pkg" "usr/bin/steamos-intel-handheld-power-control"
+          contains "$main_pkg" "usr/bin/steamos-intel-handheld-ec-control"
           contains "$main_pkg" "usr/lib/systemd/system/steamos-intel-handheld-power-control.service"
           contains "$main_pkg" "etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf"
           contains "$main_pkg" "etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+          contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-ec/plugin.json"
+          contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-ec/main.py"
+          contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-ec/dist/index.js"
 
           pkginfo_has "$mango_pkg" "pkgname = steamos-intel-handheld-mangoapp"
           pkginfo_has "$mango_pkg" "pkgver = ${pkgver}-1"
