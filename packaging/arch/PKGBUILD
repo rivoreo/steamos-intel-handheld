@@ -1,6 +1,6 @@
 # Maintainer: JohnnySun <bmy001@gmail.com>
 pkgname=steamos-intel-handheld
-pkgver=0.2.0
+pkgver=0.2.1
 pkgrel=1
 pkgdesc="SteamOS support layer for Intel handheld PCs"
 arch=("any")
