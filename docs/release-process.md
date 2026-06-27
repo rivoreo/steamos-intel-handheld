@@ -134,6 +134,19 @@ Expected candidate result:
 - `deploy-pages`: skipped
 - `signed-pacman-repository`: uploaded artifact
 
+## GitLab Validation Artifact Dry Run
+
+When a GitLab pipeline is used for package validation, download the
+`arch:repository` artifact and run:
+
+```bash
+scripts/verify-gitlab-pacman-artifact.sh /path/to/downloaded/artifact
+```
+
+This verifies repository aliases and main package contents. It does not replace
+the signed GitHub release artifact gate because GitLab artifacts are
+validation-only and unsigned.
+
 Check the artifact exists:
 
 ```bash

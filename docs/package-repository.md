@@ -88,6 +88,15 @@ Those validation artifacts prove that package and repository metadata can be
 generated for a given commit. They are not the public release path and do not
 use signing secrets.
 
+After you download the GitLab CI artifact, run:
+
+```bash
+scripts/verify-gitlab-pacman-artifact.sh /path/to/downloaded/artifact
+```
+
+GitLab CI artifacts are validation-only and unsigned. Passing this dry run proves
+package and repository shape, not public release trust.
+
 The Pages artifact does not ship a `CNAME` file. Keep the public install path on
 GitHub Pages' HTTPS project URL unless a custom domain has a valid HTTPS
 certificate and redirects only to HTTPS.

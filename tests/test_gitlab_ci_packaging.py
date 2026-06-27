@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GITLAB_CI = ROOT / ".gitlab-ci.yml"
 PACKAGE_DOCS = ROOT / "docs/package-repository.md"
+DRY_RUN_SCRIPT = ROOT / "scripts/verify-gitlab-pacman-artifact.sh"
 SOURCE_ARCHIVE_RE = re.compile(
     r"steamos-intel-handheld-[0-9]+[.][0-9]+[.][0-9]+(?:[-.][A-Za-z0-9._]+)?[.]tar[.]gz"
 )
@@ -101,3 +102,29 @@ def test_package_repository_docs_describe_gitlab_ci_artifacts() -> None:
     assert "arch:repository" in docs
     assert ".pkg.tar.zst" in docs
     assert "repo-add" in docs
+
+
+def test_gitlab_artifact_dry_run_script_checks_package_and_repo_shape() -> None:
+    script = DRY_RUN_SCRIPT.read_text()
+
+    assert "rivoreo-steamos/os/x86_64" in script
+    assert "for pkg in \"$repo\"/*.pkg.tar.zst" in script
+    assert "pkgname = steamos-intel-handheld" in script
+    assert 'main_pkg=""' in script
+    assert "rivoreo-steamos.db" in script
+    assert "rivoreo-steamos.files" in script
+    assert "test ! -L" in script
+    assert "tar -tf" in script
+    assert "home/deck/homebrew/plugins/steamos-intel-handheld-ec/plugin.json" in script
+    assert ".INSTALL" in script
+    assert "Decky Loader not detected" in script
+    assert "usr/bin/steamos-intel-handheld-power-control" in script
+    assert "usr/bin/steamos-intel-handheld-ec-control" in script
+
+
+def test_package_repository_docs_describe_gitlab_ci_dry_run() -> None:
+    docs = PACKAGE_DOCS.read_text()
+
+    assert "scripts/verify-gitlab-pacman-artifact.sh" in docs
+    assert "download the GitLab CI artifact" in docs
+    assert "validation-only and unsigned" in docs
