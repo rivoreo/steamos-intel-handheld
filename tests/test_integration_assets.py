@@ -42,6 +42,9 @@ def test_manual_installer_installs_decky_charge_limit_plugin():
     assert "install -m 0644" in script
     assert "decky_src/plugin.json" in script
     assert "decky_src/dist/index.js" in script
+    assert "report_decky_loader_status" in script
+    assert "/home/deck/homebrew/services/PluginLoader" in script
+    assert "Decky Loader not detected" in script
 
 
 def test_gamescope_display_helper_sets_runtime_composite_force():

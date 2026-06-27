@@ -69,6 +69,11 @@ CLI and the Decky Loader plugin runtime under
 `/home/deck/homebrew/plugins/steamos-intel-handheld-ec`, so pacman updates carry
 the Steam UI entry point as well as the backend.
 
+Decky Loader is optional for the backend service and CLI. The Steam UI Charge Limit panel requires Decky Loader because Decky is the runtime that loads the
+plugin from `/home/deck/homebrew/plugins/steamos-intel-handheld-ec`. The
+installer reports whether Decky Loader was detected; missing Decky Loader does
+not fail package installation.
+
 GitLab CI remains the build path for validation artifacts:
 
 - `python:test` runs the repository's local harness.

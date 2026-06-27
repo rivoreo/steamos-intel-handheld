@@ -72,6 +72,16 @@ def test_release_process_runbook_includes_build_scope_and_install_path() -> None
     assert "Users should not install from hidden release-candidate artifacts" in docs
 
 
+def test_release_docs_explain_decky_loader_is_optional_ui_dependency() -> None:
+    package_docs = PACKAGE_DOCS.read_text()
+    release_docs = RELEASE_DOCS.read_text()
+
+    for docs in (package_docs, release_docs):
+        assert "Decky Loader is optional for the backend service and CLI" in docs
+        assert "Steam UI Charge Limit panel requires Decky Loader" in docs
+        assert "installer reports whether Decky Loader was detected" in docs
+
+
 def test_release_process_runbook_matches_published_key_artifact_name() -> None:
     docs = RELEASE_DOCS.read_text()
 

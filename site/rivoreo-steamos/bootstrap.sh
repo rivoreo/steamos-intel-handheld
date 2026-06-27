@@ -23,6 +23,21 @@ need_command() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+report_decky_loader_status() {
+  local plugin_loader=/home/deck/homebrew/services/PluginLoader
+  local plugin_dir=/home/deck/homebrew/plugins/steamos-intel-handheld-ec
+
+  if [ -x "$plugin_loader" ]; then
+    echo "Decky Loader detected. Charge Limit plugin files are installed at $plugin_dir."
+    echo "If the panel is not visible, restart Steam or Decky Loader."
+  else
+    echo "Decky Loader not detected. Backend service and CLI are installed." >&2
+    echo "Steam UI Charge Limit panel requires Decky Loader; install Decky Loader first, then rerun this bootstrap or reinstall the package." >&2
+  fi
+
+  return 0
+}
+
 need_command curl
 need_command gpg
 need_command pacman
@@ -70,6 +85,7 @@ fi
 
 pacman -Sy
 pacman -S --needed rivoreo-keyring rivoreo-steamos-repo steamos-intel-handheld steamos-intel-handheld-mangoapp
+report_decky_loader_status || true
 
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true

@@ -58,6 +58,9 @@ The main `steamos-intel-handheld` package includes the TDP service, the
 `steamos-intel-handheld-ec-control` CLI, and the Decky Loader charge-limit
 plugin runtime under `/home/deck/homebrew/plugins/steamos-intel-handheld-ec`.
 
+Decky Loader is optional for the backend service and CLI. The Steam UI Charge Limit panel requires Decky Loader, and the installer reports whether Decky Loader was detected. Missing Decky Loader must remain a warning, not a package
+installation failure.
+
 The release build script also creates signed `rivoreo-steamos` repository
 metadata, and package versions derive from `pyproject.toml`; before building the
 main package, CI syncs `packaging/arch/PKGBUILD` to that version and refreshes

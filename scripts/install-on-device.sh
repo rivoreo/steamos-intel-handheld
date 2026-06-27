@@ -54,6 +54,21 @@ WRAPPER
   rm -f /etc/rivoreo/bin/steamos-intel-handheld-ec-control
   rm -rf /etc/rivoreo/steamos-intel-handheld
 
+  report_decky_loader_status() {
+    plugin_loader=/home/deck/homebrew/services/PluginLoader
+    plugin_dir=/home/deck/homebrew/plugins/steamos-intel-handheld-ec
+
+    if [ -x \"\$plugin_loader\" ]; then
+      echo \"Decky Loader detected. Charge Limit plugin files are installed at \$plugin_dir.\"
+      echo \"If the panel is not visible, restart Steam or Decky Loader.\"
+    else
+      echo \"Decky Loader not detected. Backend service and CLI are installed.\" >&2
+      echo \"Steam UI Charge Limit panel requires Decky Loader; install Decky Loader first, then rerun scripts/install-on-device.sh.\" >&2
+    fi
+
+    return 0
+  }
+
   decky_src='$remote_tmp/decky/steamos-intel-handheld-ec'
   decky_dst=/home/deck/homebrew/plugins/steamos-intel-handheld-ec
   install -d -m 0755 \"\$decky_dst/dist\"
@@ -61,6 +76,7 @@ WRAPPER
   install -m 0644 \"\$decky_src/main.py\" \"\$decky_dst/main.py\"
   install -m 0644 \"\$decky_src/dist/index.js\" \"\$decky_dst/dist/index.js\"
   install -m 0644 \"\$decky_src/README.md\" \"\$decky_dst/README.md\"
+  report_decky_loader_status || true
 
   install -d -m 0755 /etc/dbus-1/system.d /etc/steamos-manager/remotes.d /etc/systemd/system
   install -m 0644 '$remote_tmp/data/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf' /etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf

@@ -252,6 +252,8 @@ jobs:
           contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-ec/plugin.json"
           contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-ec/main.py"
           contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-ec/dist/index.js"
+          contains "$main_pkg" ".INSTALL"
+          tar -xOf "$main_pkg" .INSTALL | grep -F "Decky Loader not detected" >/dev/null
 
           pkginfo_has "$mango_pkg" "pkgname = steamos-intel-handheld-mangoapp"
           pkginfo_has "$mango_pkg" "pkgver = ${pkgver}-1"

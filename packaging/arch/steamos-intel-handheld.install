@@ -1,0 +1,22 @@
+_steamos_intel_handheld_decky_notice() {
+  local plugin_loader=/home/deck/homebrew/services/PluginLoader
+  local plugin_dir=/home/deck/homebrew/plugins/steamos-intel-handheld-ec
+
+  if [ -x "$plugin_loader" ]; then
+    echo "Decky Loader detected. Charge Limit plugin files are installed at $plugin_dir."
+    echo "If the panel is not visible, restart Steam or Decky Loader."
+  else
+    echo "Decky Loader not detected. Backend service and CLI are installed."
+    echo "Steam UI Charge Limit panel requires Decky Loader; install Decky Loader first, then reinstall steamos-intel-handheld or rerun the bootstrap."
+  fi
+
+  return 0
+}
+
+post_install() {
+  _steamos_intel_handheld_decky_notice || true
+}
+
+post_upgrade() {
+  _steamos_intel_handheld_decky_notice || true
+}

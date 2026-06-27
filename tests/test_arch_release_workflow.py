@@ -321,6 +321,41 @@ def test_active_bootstrap_is_fingerprint_pinned_and_secure() -> None:
     assert "steamos-readonly disable" in bootstrap
 
 
+def test_bootstrap_reports_decky_loader_status_without_blocking_install() -> None:
+    bootstrap = BOOTSTRAP.read_text()
+
+    assert "report_decky_loader_status" in bootstrap
+    assert "/home/deck/homebrew/services/PluginLoader" in bootstrap
+    assert "Decky Loader detected" in bootstrap
+    assert "Decky Loader not detected" in bootstrap
+    assert "Steam UI Charge Limit panel requires Decky Loader" in bootstrap
+    assert "report_decky_loader_status || true" in bootstrap
+    assert BOOTSTRAP_INSTALL_COMMAND in bootstrap
+
+
+def test_main_pkgbuild_runs_install_hook_for_decky_loader_notice() -> None:
+    pkgbuild = MAIN_PKGBUILD.read_text()
+    install_hook = ROOT / "packaging/arch/steamos-intel-handheld.install"
+
+    assert 'install="$pkgname.install"' in pkgbuild
+    assert install_hook.exists()
+    hook = install_hook.read_text()
+    assert "post_install()" in hook
+    assert "post_upgrade()" in hook
+    assert "Decky Loader detected" in hook
+    assert "Decky Loader not detected" in hook
+    assert "/home/deck/homebrew/services/PluginLoader" in hook
+    assert "return 0" in hook
+
+
+def test_release_artifact_verification_checks_install_hook_payload() -> None:
+    workflow = WORKFLOW.read_text()
+
+    assert 'contains "$main_pkg" ".INSTALL"' in workflow
+    assert 'tar -xOf "$main_pkg" .INSTALL' in workflow
+    assert "Decky Loader not detected" in workflow
+
+
 def test_release_public_urls_are_https_only_project_pages_urls() -> None:
     active_paths = [
         ROOT / "site/index.html",
