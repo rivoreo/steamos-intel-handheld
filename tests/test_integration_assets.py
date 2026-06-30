@@ -11,14 +11,23 @@ def test_steamos_manager_remote_config_uses_rivoreo_bus_name():
     assert "[TdpLimit1]" in config
     assert 'bus_name = "org.rivoreo.SteamOSManager.PowerControl"' in config
     assert 'object_path = "/org/rivoreo/SteamOSManager/PowerControl"' in config
+    assert "/com/steampowered/SteamOSManager1" not in config
 
 
-def test_systemd_unit_waits_for_steamos_manager_before_serving():
+def test_power_control_exports_steamos_manager_canonical_object_path():
+    source = (ROOT / "src/steamos_intel_handheld/power_control.py").read_text()
+
+    assert 'STEAMOS_MANAGER_OBJ_PATH = "/com/steampowered/SteamOSManager1"' in source
+    assert "for object_path in (OBJ_PATH, STEAMOS_MANAGER_OBJ_PATH):" in source
+
+
+def test_systemd_unit_waits_for_user_steamos_manager_before_serving_remote():
     unit = (ROOT / "data/systemd/steamos-intel-handheld-power-control.service").read_text()
 
     assert "Wants=steamos-intel-handheld-restore.service" in unit
     assert "After=steamos-intel-handheld-restore.service" in unit
-    assert "wait-and-serve" in unit
+    assert " wait-and-serve " in unit
+    assert " serve " not in unit
     assert "ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control" in unit
     assert "PATH=/etc/rivoreo/bin" not in unit
     assert "--user deck" in unit
@@ -51,11 +60,12 @@ def test_restore_manifest_lists_main_package_artifacts_without_mangoapp_dropin()
         'destination = "/etc/dbus-1/system.d/'
         'org.rivoreo.SteamOSManager.PowerControl.conf"'
     ) in manifest
-    assert "/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" not in manifest
+    assert "/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" in manifest
     assert (
         'destination = "/etc/systemd/system/'
         'steamos-intel-handheld-power-control.service"'
     ) in manifest
+    assert "steamos-intel-handheld-steamos-manager-remote.service" not in manifest
     assert (
         'destination = "/etc/systemd/user/gamescope-session.service.d/'
         '20-native-panel-resolution.conf"'
@@ -81,13 +91,17 @@ def test_restore_manifest_lists_main_package_artifacts_without_mangoapp_dropin()
     assert "/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf" not in manifest
 
 
-def test_restore_manifest_does_not_manage_incompatible_steamos_manager_remote():
+def test_restore_manifest_manages_steamos_manager_remote_without_bridge():
     payload = tomllib.loads((ROOT / "data/restore/manifest.toml").read_text())
-    destinations = {item["destination"] for item in payload["artifact"]}
+    artifacts = {item["destination"]: item for item in payload["artifact"]}
 
+    remote = artifacts["/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"]
+    assert remote["source"] == "steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+    assert remote["actions"] == []
+    assert "service_restarts" not in remote
     assert (
-        "/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
-        not in destinations
+        "/etc/systemd/system/steamos-intel-handheld-steamos-manager-remote.service"
+        not in artifacts
     )
 
 
@@ -108,10 +122,15 @@ def test_mangoapp_restore_fragment_owns_only_mangoapp_dropin():
 
 def test_networkmanager_dispatcher_is_packaged_as_executable_source():
     dispatcher = ROOT / "data/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
+    script = dispatcher.read_text()
 
-    assert dispatcher.read_text().startswith("#!/usr/bin/env bash\n")
+    assert script.startswith("#!/usr/bin/env bash\n")
     assert dispatcher.stat().st_mode & 0o111
-    assert "rncn-steamdeck" in dispatcher.read_text()
+    assert "rncn-steamdeck" in script
+    assert 'systemctl restart "$service"' not in script
+    assert 'systemctl is-active --quiet "$service"' in script
+    assert 'systemctl reset-failed "$service"' in script
+    assert 'systemctl start "$service"' in script
 
 
 def test_manual_installer_installs_ec_control_wrapper():
@@ -126,20 +145,43 @@ def test_manual_installer_installs_restore_service_and_canonical_artifacts():
 
     assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-restore-etc" in script
     assert r"python3 -m steamos_intel_handheld.restore_etc \"\$@\"" in script
+    assert "steamos-intel-handheld-steamos-manager-remote" in script
+    assert (
+        "rm -f /opt/steamos-intel-handheld/bin/"
+        "steamos-intel-handheld-steamos-manager-remote"
+    ) in script
     assert "artifact_root=/opt/steamos-intel-handheld/share/etc-artifacts" in script
     assert "/opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in script
     assert "\\$artifact_root/dbus-1/system.d" in script
-    assert "rm -f /etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" in script
+    assert "\\$artifact_root/steamos-manager/remotes.d" in script
+    assert "rm -f /etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" not in script
     assert (
         "install -m 0644 '$remote_tmp/data/steamos-manager/remotes.d/"
         "99-rivoreo-power-control.toml'"
+    in script
+    )
+    assert (
+        "install -m 0644 '$remote_tmp/data/steamos-manager/remotes.d/"
+        "99-rivoreo-power-control.toml' /etc/steamos-manager/remotes.d/"
+        "99-rivoreo-power-control.toml"
         not in script
     )
     assert "\\$artifact_root/systemd/system" in script
     assert "\\$artifact_root/NetworkManager/dispatcher.d" in script
     assert "/etc/systemd/system/steamos-intel-handheld-restore.service" in script
+    assert (
+        "rm -f /etc/systemd/system/"
+        "steamos-intel-handheld-steamos-manager-remote.service"
+    ) in script
     assert "systemctl enable --now steamos-intel-handheld-restore.service" in script
     assert "steamos-intel-handheld-restore-etc --apply" in script
+    assert "restart_user_steamos_manager_without_provider" in script
+    assert "systemctl stop steamos-intel-handheld-power-control.service" in script
+    assert (
+        "systemctl enable --now steamos-intel-handheld-steamos-manager-remote.service"
+        not in script
+    )
+    assert "systemctl disable steamos-intel-handheld-steamos-manager-remote.service" in script
 
 
 def test_manual_installer_installs_decky_charge_limit_plugin():
@@ -279,6 +321,10 @@ def test_device_verifier_reports_mangohud_gpu_memory_fdinfo():
 def test_device_verifier_checks_profile_aware_tdp_policy_and_tau():
     script = (ROOT / "scripts/verify-on-device.sh").read_text()
 
+    assert "steamosctl_user" in script
+    assert "provider_tdp" in script
+    assert "set_provider_tdp" in script
+    assert "SteamOS Manager TDP remote works" in script
     assert 'VERIFY_TDP_POLICY_MODE="${VERIFY_TDP_POLICY_MODE:-battery-maxq}"' in script
     assert "battery-maxq:17) echo 25" in script
     assert "battery-maxq:18) echo 25" in script
@@ -381,10 +427,35 @@ def test_arch_pkgbuild_installs_restore_payload_and_durable_units():
     assert "$pkgdir/usr/lib/systemd/system/steamos-intel-handheld-restore.service" in pkgbuild
     assert "$pkgdir/etc/systemd/system/steamos-intel-handheld-restore.service" in pkgbuild
     assert "$pkgdir/etc/systemd/system/steamos-intel-handheld-power-control.service" in pkgbuild
+    assert "steamos-intel-handheld-steamos-manager-remote.service" not in pkgbuild
+    assert "steamos-intel-handheld-steamos-manager-remote" not in pkgbuild
     assert "$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in pkgbuild
     assert 'artifact_root="$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts"' in pkgbuild
     assert "$pkgdir/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" not in pkgbuild
-    assert "rm -f /etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" in install_script
+    assert (
+        "$artifact_root/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+        in pkgbuild
+    )
+    assert (
+        "rm -f /etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+        not in install_script
+    )
+    assert "systemctl start steamos-intel-handheld-power-control.service" in install_script
+    assert "systemctl stop steamos-intel-handheld-power-control.service" in install_script
+    assert "_steamos_intel_handheld_restart_user_manager_without_provider" in install_script
+    assert "systemctl --user restart --no-block steamos-manager.service" not in install_script
+    assert (
+        "systemctl enable steamos-intel-handheld-steamos-manager-remote.service"
+        not in install_script
+    )
+    assert (
+        "systemctl start steamos-intel-handheld-steamos-manager-remote.service"
+        not in install_script
+    )
+    assert (
+        "systemctl disable steamos-intel-handheld-steamos-manager-remote.service"
+        in install_script
+    )
     assert (
         "$artifact_root/"
         "NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"

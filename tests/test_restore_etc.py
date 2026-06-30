@@ -165,7 +165,7 @@ actions = ["networkmanager-dispatcher"]
     assert restored.stat().st_mode & 0o777 == 0o755
 
 
-def test_apply_replaces_managed_drift(tmp_path):
+def test_apply_restores_steamos_manager_remote_without_restarting_user_manager(tmp_path):
     root = artifact_root(tmp_path)
     etc_root = tmp_path / "etc"
     write_file(root / "steamos-manager/remotes.d/99-rivoreo-power-control.toml", "canonical\n")
@@ -181,8 +181,7 @@ policy = "managed"
 mode = "0644"
 owner = "root"
 group = "root"
-actions = ["systemd-user"]
-service_restarts = ["steamos-manager.service"]
+actions = []
 """,
     )
 
@@ -198,21 +197,8 @@ service_restarts = ["steamos-manager.service"]
     assert (etc_root / "steamos-manager/remotes.d/99-rivoreo-power-control.toml").read_text() == (
         "canonical\n"
     )
-    assert "systemd-user" in result.actions
-    assert [
-        "runuser",
-        "-u",
-        "deck",
-        "--",
-        "env",
-        "XDG_RUNTIME_DIR=/run/user/1000",
-        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
-        "systemctl",
-        "--user",
-        "--no-block",
-        "try-restart",
-        "steamos-manager.service",
-    ] in runner.commands
+    assert result.actions == []
+    assert not runner.commands
 
 
 def test_apply_repairs_symlink_artifact(tmp_path):

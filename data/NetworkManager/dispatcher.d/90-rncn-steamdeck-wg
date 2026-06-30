@@ -8,7 +8,10 @@ service="wg-quick@rncn-steamdeck.service"
 case "$action" in
   up|vpn-up|connectivity-change|dhcp4-change|dhcp6-change)
     if systemctl is-enabled --quiet "$service"; then
-      systemctl restart "$service" || true
+      if ! systemctl is-active --quiet "$service"; then
+        systemctl reset-failed "$service" || true
+        systemctl start "$service" || true
+      fi
     fi
     ;;
 esac

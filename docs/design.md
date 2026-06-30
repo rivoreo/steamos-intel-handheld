@@ -10,13 +10,23 @@ through SteamOS Manager's remote interface support.
 
 `steamos-intel-handheld-power-control` runs as root on the system bus and owns
 `org.rivoreo.SteamOSManager.PowerControl`. It exports the SteamOS Manager
-`TdpLimit1` interface at `/org/rivoreo/SteamOSManager/PowerControl`.
+`TdpLimit1` interface at both `/org/rivoreo/SteamOSManager/PowerControl` and
+SteamOS Manager's canonical `/com/steampowered/SteamOSManager1` object path.
 
-SteamOS Manager discovers that provider through a static config file in
-`/etc/steamos-manager/remotes.d`. The service intentionally waits for the deck
-user's `steamos-manager` user service before owning the bus name. This avoids a
-startup ordering problem where SteamOS Manager can block while trying to proxy a
-remote before its internal TDP manager task is ready.
+SteamOS Manager discovers third-party providers through static files in
+`/etc/steamos-manager/remotes.d`. On the first MSI Claw 8 AI+ test device,
+SteamOS `3.8.11 (20260620.1)` and `3.8.12 (20260629.1)` both shipped the same
+`steamos-manager 26.2.1-1` binary and MSI Claw device metadata. The regression
+surface is the startup ordering around the static remote: SteamOS Manager can
+time out during user-service startup if the remote provider already owns its
+system bus name while the user service is discovering `TdpLimit1`.
+
+The installed service avoids that boot race by using `wait-and-serve --user
+deck`. The restore service puts the remote shim in `/etc` early, SteamOS
+Manager starts while the provider is still absent, and the provider only claims
+`org.rivoreo.SteamOSManager.PowerControl` after the user service is active.
+Package install and the development installer use the same ordering when they
+need the Steam UI TDP slider to appear immediately after deployment.
 
 The backend writes Intel RAPL:
 

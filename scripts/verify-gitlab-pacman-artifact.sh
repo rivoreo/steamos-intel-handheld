@@ -43,17 +43,29 @@ if [ -z "$main_pkg" ]; then
   exit 2
 fi
 
+reject_member() {
+  if tar -tf "$1" | grep -Fx "$2" >/dev/null; then
+    echo "Unexpected package member: $2" >&2
+    exit 2
+  fi
+}
+
 tar -xOf "$main_pkg" .PKGINFO | grep -Fx "pkgname = steamos-intel-handheld" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "usr/bin/steamos-intel-handheld-power-control" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "usr/bin/steamos-intel-handheld-ec-control" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "usr/bin/steamos-intel-handheld-restore-etc" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "usr/lib/systemd/system/steamos-intel-handheld-restore.service" >/dev/null
+reject_member "$main_pkg" "usr/lib/systemd/system/steamos-intel-handheld-steamos-manager-remote.service"
 tar -tf "$main_pkg" | grep -Fx "etc/systemd/system/steamos-intel-handheld-restore.service" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "etc/systemd/system/steamos-intel-handheld-power-control.service" >/dev/null
+reject_member "$main_pkg" "etc/systemd/system/steamos-intel-handheld-steamos-manager-remote.service"
 tar -tf "$main_pkg" | grep -Fx "opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" >/dev/null
+tar -tf "$main_pkg" | grep -Fx "opt/steamos-intel-handheld/share/etc-artifacts/steamos-manager/remotes.d/99-rivoreo-power-control.toml" >/dev/null
+reject_member "$main_pkg" "etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
 tar -tf "$main_pkg" | grep -Fx "opt/steamos-intel-handheld/share/etc-artifacts/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "opt/steamos-intel-handheld/bin/gamescope" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display" >/dev/null
+reject_member "$main_pkg" "opt/steamos-intel-handheld/bin/steamos-intel-handheld-steamos-manager-remote"
 tar -tf "$main_pkg" | grep -Fx "etc/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "etc/systemd/user/steamos-intel-handheld-gamescope-display.service" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "etc/systemd/user/gamescope-session.service.wants/steamos-intel-handheld-gamescope-display.service" >/dev/null

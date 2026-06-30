@@ -237,6 +237,12 @@ jobs:
           contains() {
             tar -tf "$1" | grep -Fx "$2" >/dev/null
           }
+          not_contains() {
+            if contains "$1" "$2"; then
+              echo "Unexpected package member: $2" >&2
+              exit 2
+            fi
+          }
           pkginfo_has() {
             tar -xOf "$1" .PKGINFO | grep -Fx "$2" >/dev/null
           }
@@ -249,16 +255,22 @@ jobs:
           contains "$main_pkg" "usr/bin/steamos-intel-handheld-restore-etc"
           contains "$main_pkg" "usr/lib/systemd/system/steamos-intel-handheld-restore.service"
           contains "$main_pkg" "usr/lib/systemd/system/steamos-intel-handheld-power-control.service"
+          not_contains "$main_pkg" "usr/lib/systemd/system/steamos-intel-handheld-steamos-manager-remote.service"
           contains "$main_pkg" "etc/systemd/system/steamos-intel-handheld-restore.service"
           contains "$main_pkg" "etc/systemd/system/steamos-intel-handheld-power-control.service"
+          not_contains "$main_pkg" "etc/systemd/system/steamos-intel-handheld-steamos-manager-remote.service"
           contains "$main_pkg" "opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml"
           contains "$main_pkg" "opt/steamos-intel-handheld/share/etc-artifacts/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf"
+          contains "$main_pkg" "opt/steamos-intel-handheld/share/etc-artifacts/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
           contains "$main_pkg" "opt/steamos-intel-handheld/share/etc-artifacts/systemd/system/steamos-intel-handheld-power-control.service"
+          not_contains "$main_pkg" "opt/steamos-intel-handheld/share/etc-artifacts/systemd/system/steamos-intel-handheld-steamos-manager-remote.service"
           contains "$main_pkg" "opt/steamos-intel-handheld/share/etc-artifacts/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
           contains "$main_pkg" "etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf"
+          not_contains "$main_pkg" "etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
           contains "$main_pkg" "etc/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
           contains "$main_pkg" "opt/steamos-intel-handheld/bin/gamescope"
           contains "$main_pkg" "opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display"
+          not_contains "$main_pkg" "opt/steamos-intel-handheld/bin/steamos-intel-handheld-steamos-manager-remote"
           contains "$main_pkg" "opt/steamos-intel-handheld/share/etc-artifacts/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf"
           contains "$main_pkg" "opt/steamos-intel-handheld/share/etc-artifacts/systemd/user/steamos-intel-handheld-gamescope-display.service"
           contains "$main_pkg" "opt/steamos-intel-handheld/share/etc-artifacts/gamescope/scripts/00-steamos-intel-handheld/displays/msi.claw-8-ai-plus.lcd.lua"

@@ -14,9 +14,17 @@ Initial target for this project.
 
 ## Verified behavior
 
-On the first test device, SteamOS Manager accepted a remote `TdpLimit1`
-provider through `/etc/steamos-manager/remotes.d`. Setting 28W through
-`steamosctl set-tdp-limit 28` updated:
+On the first test device, SteamOS Manager accepts a remote `TdpLimit1` provider
+when the remote shim exists in `/etc/steamos-manager/remotes.d` before the user
+`steamos-manager.service` starts, and the provider waits until that user service
+is active before owning `org.rivoreo.SteamOSManager.PowerControl`. SteamOS
+`3.8.11 (20260620.1)` and `3.8.12 (20260629.1)` were verified to contain
+bit-identical `steamos-manager 26.2.1-1` binaries, `steamosctl`, MSI Claw
+device TOML, and D-Bus interface XML. The observed failure mode after update was
+not a 3.8.12-only binary diff; it was a combination of `/etc` migration gaps
+and a boot race when the provider was already active during remote discovery.
+
+Setting 28W through `steamosctl set-tdp-limit 28` updated:
 
 - SteamOS Manager central `TdpLimit`
 - remote provider `TdpLimit`

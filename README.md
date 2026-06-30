@@ -10,8 +10,10 @@ when the interfaces settle.
 
 ## Current scope
 
-- Own the system bus name `org.rivoreo.SteamOSManager.PowerControl` and expose
-  `com.steampowered.SteamOSManager1.TdpLimit1` there.
+- Own the system bus name `org.rivoreo.SteamOSManager.PowerControl`, expose
+  `com.steampowered.SteamOSManager1.TdpLimit1` there, and bridge that provider
+  into SteamOS Manager through a `remotes.d` fragment so Steam's performance UI
+  can drive it.
 - Apply TDP requests to Intel RAPL PL1 and PL2 limits.
 - Optionally mirror TDP requests to guarded MSI Claw 8 AI+ EC PL1/PL2 bytes.
 - Expose the validated MSI Claw 8 AI+ A2VM battery charge-limit EC byte through
@@ -115,7 +117,7 @@ scripts/check-local.sh
 
 ## TDP integration
 
-The supported TDP provider is currently registered on the system bus:
+The TDP backend is registered on the system bus:
 
 ```bash
 busctl --system set-property \
@@ -125,12 +127,19 @@ busctl --system set-property \
   TdpLimit u 17
 ```
 
-Older builds also installed a SteamOS Manager `remotes.d` shim at
-`/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml`. SteamOS Manager
-26.2.1 times out when the user daemon starts with that shim on the tested MSI
-Claw 8 AI+ system, so the package now removes that file and does not restore it
-after SteamOS updates. The file remains in the repository as a legacy reference
-while the newer SteamOS Manager remote contract is investigated.
+The package restores the SteamOS Manager remote shim into
+`/etc/steamos-manager/remotes.d` from the canonical payload under
+`/opt/steamos-intel-handheld/share/etc-artifacts/steamos-manager/remotes.d/`.
+On the first MSI Claw 8 AI+ test device, SteamOS `3.8.11 (20260620.1)` and
+`3.8.12 (20260629.1)` both contain bit-identical `steamos-manager 26.2.1-1`
+binaries and device metadata. The fragile part is startup ordering: the user
+`steamos-manager.service` can time out if the remote provider already owns its
+system bus name while SteamOS Manager is discovering the static remote. The
+installed unit therefore uses `wait-and-serve`: the remote file is restored
+first, SteamOS Manager starts without the provider present, and the provider
+only claims `org.rivoreo.SteamOSManager.PowerControl` after the user service is
+active. The verifier checks both the project-owned system-bus provider and the
+SteamOS Manager `steamosctl` path.
 
 This project maps the provider's `TdpLimit` value to RAPL as:
 

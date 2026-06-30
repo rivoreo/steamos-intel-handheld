@@ -29,12 +29,30 @@ wait_for_service() {
   return 1
 }
 
-remote_tdp() {
-  busctl --system get-property org.rivoreo.SteamOSManager.PowerControl /org/rivoreo/SteamOSManager/PowerControl com.steampowered.SteamOSManager1.TdpLimit1 TdpLimit | awk '{print $2}'
+provider_tdp() {
+  busctl --system get-property \
+    org.rivoreo.SteamOSManager.PowerControl \
+    /org/rivoreo/SteamOSManager/PowerControl \
+    com.steampowered.SteamOSManager1.TdpLimit1 \
+    TdpLimit | awk '{print $2}'
 }
 
-set_remote_tdp() {
-  busctl --system set-property org.rivoreo.SteamOSManager.PowerControl /org/rivoreo/SteamOSManager/PowerControl com.steampowered.SteamOSManager1.TdpLimit1 TdpLimit u "$1"
+set_provider_tdp() {
+  busctl --system set-property \
+    org.rivoreo.SteamOSManager.PowerControl \
+    /org/rivoreo/SteamOSManager/PowerControl \
+    com.steampowered.SteamOSManager1.TdpLimit1 \
+    TdpLimit u "$1"
+}
+
+steamosctl_user() {
+  local uid runtime_dir
+  uid="$(id -u deck)"
+  runtime_dir="/run/user/$uid"
+  runuser -u deck -- env \
+    XDG_RUNTIME_DIR="$runtime_dir" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
+    steamosctl get-tdp-limit | awk '/TDP limit:/ {print $3}'
 }
 
 expected_pl1_watts() {
@@ -334,18 +352,21 @@ report_mangohud_gpu_memory_fdinfo
 report_mangohud_gpu_temperature_sensor
 
 busctl --system get-property org.rivoreo.SteamOSManager.PowerControl /org/rivoreo/SteamOSManager/PowerControl com.steampowered.SteamOSManager1.RemoteInterface1 RemoteInterfaces | grep -F "com.steampowered.SteamOSManager1.TdpLimit1"
+busctl --system get-property org.rivoreo.SteamOSManager.PowerControl /org/rivoreo/SteamOSManager/PowerControl com.steampowered.SteamOSManager1.TdpLimit1 TdpLimitMin >/dev/null
+busctl --system get-property org.rivoreo.SteamOSManager.PowerControl /org/rivoreo/SteamOSManager/PowerControl com.steampowered.SteamOSManager1.TdpLimit1 TdpLimitMax >/dev/null
 
-set_remote_tdp "$TEST_WATTS"
+set_provider_tdp "$TEST_WATTS"
 sleep 2
-assert_equals remote "$(expected_pl1_watts "$TEST_WATTS")" "$(remote_tdp)"
+assert_equals provider "$(expected_pl1_watts "$TEST_WATTS")" "$(provider_tdp)"
 assert_equals rapl-pl1 "$(expected_pl1_watts "$TEST_WATTS")" "$(rapl_constraint_watts long_term 0)"
 assert_equals rapl-pl2 "$(expected_pl2_watts "$TEST_WATTS" "$VERIFY_TDP_POLICY_MODE")" "$(rapl_constraint_watts short_term 1)"
 assert_optional_pl2_tau "$TEST_WATTS"
 report_msi_claw_ec_tdp_bytes
 
-set_remote_tdp "$RESTORE_WATTS"
+set_provider_tdp "$RESTORE_WATTS"
 sleep 2
-assert_equals remote "$(expected_pl1_watts "$RESTORE_WATTS")" "$(remote_tdp)"
+assert_equals provider "$(expected_pl1_watts "$RESTORE_WATTS")" "$(provider_tdp)"
+assert_equals steamosctl "$(expected_pl1_watts "$RESTORE_WATTS")" "$(steamosctl_user)"
 assert_equals rapl-pl1 "$(expected_pl1_watts "$RESTORE_WATTS")" "$(rapl_constraint_watts long_term 0)"
 assert_equals rapl-pl2 "$(expected_pl2_watts "$RESTORE_WATTS" "$VERIFY_TDP_POLICY_MODE")" "$(rapl_constraint_watts short_term 1)"
 assert_optional_pl2_tau "$RESTORE_WATTS"
@@ -357,5 +378,5 @@ if [ -s /tmp/steamos-intel-handheld-failed-units.txt ]; then
   exit 1
 fi
 
-echo "OK: system bus TDP provider works and restored ${RESTORE_WATTS}W"
+echo "OK: SteamOS Manager TDP remote works and restored ${RESTORE_WATTS}W"
 REMOTE

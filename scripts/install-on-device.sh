@@ -53,6 +53,7 @@ export PYTHONPATH=/opt/steamos-intel-handheld/src
 exec /usr/bin/python3 -m steamos_intel_handheld.restore_etc \"\$@\"
 WRAPPER
   chmod 0755 /opt/steamos-intel-handheld/bin/steamos-intel-handheld-restore-etc
+  rm -f /opt/steamos-intel-handheld/bin/steamos-intel-handheld-steamos-manager-remote
   rm -f /opt/rivoreo/bin/steamos-intel-handheld-power-control
   rm -f /opt/rivoreo/bin/steamos-intel-handheld-ec-control
   rm -f /opt/rivoreo/bin/steamos-intel-handheld-restore-etc
@@ -77,6 +78,23 @@ WRAPPER
     return 0
   }
 
+  restart_user_steamos_manager_without_provider() {
+    uid=\"\$(id -u deck 2>/dev/null || true)\"
+    if [ -z \"\$uid\" ]; then
+      return 0
+    fi
+
+    runtime_dir=\"/run/user/\$uid\"
+    if [ ! -S \"\$runtime_dir/bus\" ]; then
+      return 0
+    fi
+
+    timeout 45 runuser -u deck -- env \
+      XDG_RUNTIME_DIR=\"\$runtime_dir\" \
+      DBUS_SESSION_BUS_ADDRESS=\"unix:path=\$runtime_dir/bus\" \
+      systemctl --user restart steamos-manager.service || true
+  }
+
   decky_src='$remote_tmp/decky/steamos-intel-handheld-ec'
   decky_dst=/home/deck/homebrew/plugins/steamos-intel-handheld-ec
   install -d -m 0755 \"\$decky_dst/dist\"
@@ -89,6 +107,7 @@ WRAPPER
   artifact_root=/opt/steamos-intel-handheld/share/etc-artifacts
   install -d -m 0755 \
     \"\$artifact_root/dbus-1/system.d\" \
+    \"\$artifact_root/steamos-manager/remotes.d\" \
     \"\$artifact_root/systemd/system\" \
     \"\$artifact_root/systemd/user/gamescope-session.service.d\" \
     \"\$artifact_root/systemd/user\" \
@@ -103,12 +122,13 @@ WRAPPER
   install -m 0644 '$remote_tmp/data/restore/manifest.toml' /opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml
   install -m 0644 '$remote_tmp/data/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf' /etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf
   install -m 0644 '$remote_tmp/data/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf' \"\$artifact_root/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf\"
-  rm -f /etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml
-  rm -f \"\$artifact_root/steamos-manager/remotes.d/99-rivoreo-power-control.toml\"
+  install -m 0644 '$remote_tmp/data/steamos-manager/remotes.d/99-rivoreo-power-control.toml' \"\$artifact_root/steamos-manager/remotes.d/99-rivoreo-power-control.toml\"
   install -m 0644 '$remote_tmp/data/systemd/steamos-intel-handheld-restore.service' /etc/systemd/system/steamos-intel-handheld-restore.service
   install -m 0644 '$remote_tmp/data/systemd/steamos-intel-handheld-restore.service' \"\$artifact_root/systemd/system/steamos-intel-handheld-restore.service\"
   install -m 0644 '$remote_tmp/data/systemd/steamos-intel-handheld-power-control.service' /etc/systemd/system/steamos-intel-handheld-power-control.service
   install -m 0644 '$remote_tmp/data/systemd/steamos-intel-handheld-power-control.service' \"\$artifact_root/systemd/system/steamos-intel-handheld-power-control.service\"
+  rm -f /etc/systemd/system/steamos-intel-handheld-steamos-manager-remote.service
+  rm -f \"\$artifact_root/systemd/system/steamos-intel-handheld-steamos-manager-remote.service\"
   install -m 0644 '$remote_tmp/data/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf' /etc/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf
   install -m 0644 '$remote_tmp/data/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf' \"\$artifact_root/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf\"
   install -m 0644 '$remote_tmp/data/systemd/user/steamos-intel-handheld-gamescope-display.service' /etc/systemd/user/steamos-intel-handheld-gamescope-display.service
@@ -127,17 +147,15 @@ WRAPPER
   systemctl stop rivoreo-steamos-manager-power-control.service 2>/dev/null || true
   systemctl disable rivoreo-steamos-manager-power-control.service 2>/dev/null || true
   systemctl stop steamos-intel-handheld-power-control.service 2>/dev/null || true
+  systemctl stop steamos-intel-handheld-steamos-manager-remote.service 2>/dev/null || true
+  systemctl disable steamos-intel-handheld-steamos-manager-remote.service 2>/dev/null || true
   busctl call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig || true
   systemctl daemon-reload
   systemctl enable --now steamos-intel-handheld-restore.service
   /opt/steamos-intel-handheld/bin/steamos-intel-handheld-restore-etc --apply
-
-  if [ -S /run/user/1000/bus ]; then
-    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user reset-failed steamos-manager.service || true
-    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user start --no-block steamos-manager.service || true
-  fi
-
+  restart_user_steamos_manager_without_provider
   systemctl enable --now steamos-intel-handheld-power-control.service
+
   rm -rf '$remote_tmp'
 "
 

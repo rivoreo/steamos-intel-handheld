@@ -151,16 +151,35 @@ def test_arch_release_workflow_verifies_repository_artifact_before_pages_deploy(
     assert "usr/bin/steamos-intel-handheld-power-control" in workflow
     assert "usr/bin/steamos-intel-handheld-ec-control" in workflow
     assert "usr/lib/systemd/system/steamos-intel-handheld-restore.service" in workflow
+    assert (
+        'not_contains "$main_pkg" "usr/lib/systemd/system/'
+        "steamos-intel-handheld-steamos-manager-remote.service"
+    ) in workflow
     assert "opt/steamos-intel-handheld/bin/gamescope" in workflow
     assert "opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display" in workflow
+    assert (
+        'not_contains "$main_pkg" "opt/steamos-intel-handheld/bin/'
+        "steamos-intel-handheld-steamos-manager-remote"
+    ) in workflow
     assert "etc/systemd/system/steamos-intel-handheld-restore.service" in workflow
     assert "etc/systemd/system/steamos-intel-handheld-power-control.service" in workflow
+    assert (
+        'not_contains "$main_pkg" "etc/systemd/system/'
+        "steamos-intel-handheld-steamos-manager-remote.service"
+    ) in workflow
     assert "opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in workflow
-    assert "etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" not in workflow
+    assert (
+        'not_contains "$main_pkg" "etc/steamos-manager/remotes.d/'
+        '99-rivoreo-power-control.toml"'
+    ) in workflow
+    assert (
+        '\n          contains "$main_pkg" "etc/steamos-manager/remotes.d/'
+        '99-rivoreo-power-control.toml"'
+    ) not in workflow
     assert (
         "opt/steamos-intel-handheld/share/etc-artifacts/steamos-manager/"
         "remotes.d/99-rivoreo-power-control.toml"
-        not in workflow
+        in workflow
     )
     assert (
         "opt/steamos-intel-handheld/share/etc-artifacts/NetworkManager/"
@@ -354,6 +373,12 @@ def test_main_pkgbuild_packages_restore_service_and_canonical_artifacts() -> Non
     assert "/etc/systemd/system/steamos-intel-handheld-power-control.service" in pkgbuild
     assert "data/restore/manifest.toml" in pkgbuild
     assert "/opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in pkgbuild
+    assert "data/steamos-manager/remotes.d/99-rivoreo-power-control.toml" in pkgbuild
+    assert "/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" not in pkgbuild
+    assert (
+        "$artifact_root/steamos-manager/"
+        "remotes.d/99-rivoreo-power-control.toml"
+    ) in pkgbuild
     assert "data/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg" in pkgbuild
     assert 'artifact_root="$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts"' in pkgbuild
     assert (

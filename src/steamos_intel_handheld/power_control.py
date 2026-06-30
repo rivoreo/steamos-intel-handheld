@@ -18,6 +18,7 @@ from pathlib import Path
 
 BUS_NAME = "org.rivoreo.SteamOSManager.PowerControl"
 OBJ_PATH = "/org/rivoreo/SteamOSManager/PowerControl"
+STEAMOS_MANAGER_OBJ_PATH = "/com/steampowered/SteamOSManager1"
 IFACE_REMOTE = "com.steampowered.SteamOSManager1.RemoteInterface1"
 IFACE_TDP = "com.steampowered.SteamOSManager1.TdpLimit1"
 
@@ -1012,8 +1013,9 @@ async def serve(args: argparse.Namespace) -> None:
 
     bus_type = BusType.SYSTEM if args.bus == "system" else BusType.SESSION
     bus = await MessageBus(bus_type=bus_type).connect()
-    bus.export(OBJ_PATH, RemoteInterface())
-    bus.export(OBJ_PATH, TdpLimitInterface(backend))
+    for object_path in (OBJ_PATH, STEAMOS_MANAGER_OBJ_PATH):
+        bus.export(object_path, RemoteInterface())
+        bus.export(object_path, TdpLimitInterface(backend))
     await bus.request_name(BUS_NAME)
     asyncio.create_task(poll_power_source_changes(backend))
     await asyncio.Future()

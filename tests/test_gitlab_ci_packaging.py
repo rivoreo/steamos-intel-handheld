@@ -117,9 +117,29 @@ def test_gitlab_artifact_dry_run_script_checks_package_and_repo_shape() -> None:
     assert "tar -tf" in script
     assert "usr/bin/steamos-intel-handheld-restore-etc" in script
     assert "usr/lib/systemd/system/steamos-intel-handheld-restore.service" in script
+    assert (
+        'reject_member "$main_pkg" "usr/lib/systemd/system/'
+        "steamos-intel-handheld-steamos-manager-remote.service"
+    ) in script
+    assert (
+        'reject_member "$main_pkg" "opt/steamos-intel-handheld/bin/'
+        "steamos-intel-handheld-steamos-manager-remote"
+    ) in script
     assert "etc/systemd/system/steamos-intel-handheld-restore.service" in script
     assert "etc/systemd/system/steamos-intel-handheld-power-control.service" in script
+    assert (
+        'reject_member "$main_pkg" "etc/systemd/system/'
+        "steamos-intel-handheld-steamos-manager-remote.service"
+    ) in script
     assert "opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in script
+    assert (
+        "opt/steamos-intel-handheld/share/etc-artifacts/"
+        "steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+    ) in script
+    assert (
+        'reject_member "$main_pkg" '
+        '"etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"'
+    ) in script
     assert (
         "opt/steamos-intel-handheld/share/etc-artifacts/"
         "NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
