@@ -55,8 +55,12 @@ After=steamos-intel-handheld-restore.service
 ```
 
 The restore service is installed as a root system service and enabled for
-`multi-user.target`. This makes it a boot-level administrator service, matching
-the class of systemd units SteamOS migrated during the observed update.
+`multi-user.target`. The package may carry the unit under `/usr/lib/systemd`,
+but the installer and package hook must also place a durable copy in
+`/etc/systemd/system/steamos-intel-handheld-restore.service`, because the
+observed SteamOS update migrated full system units from `/etc/systemd/system`
+while switching the system image under `/usr`. This `/etc` unit is the durable
+anchor; `/usr/lib/systemd` is package metadata, not the recovery anchor.
 
 ## Restore Policy
 
@@ -64,10 +68,11 @@ Use a hybrid restore policy.
 
 Managed files are restored when missing or when their checksum differs from the
 canonical copy. These files are project-owned and should remain package
-authoritative:
+authoritative when their owning package has installed a manifest entry:
 
 - `/etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf`
 - `/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml`
+- `/etc/systemd/system/steamos-intel-handheld-power-control.service`
 - `/etc/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf`
 - `/etc/systemd/user/steamos-intel-handheld-gamescope-display.service`
 - `/etc/systemd/user/gamescope-session.service.wants/steamos-intel-handheld-gamescope-display.service`
@@ -75,41 +80,78 @@ authoritative:
 - `/etc/gamescope/scripts/00-steamos-intel-handheld/displays/msi.claw-8-ai-plus.lcd.lua`
 - `/etc/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg`
 
-Local or secret-bearing files are restored only when missing. If present but
-different, the CLI reports drift and leaves the file untouched:
+Local or secret-bearing files are not restored from package canonical payloads.
+The CLI reports whether they are present and whether dependent services are
+active, but it does not create or overwrite them:
 
 - `/etc/wireguard/rncn-steamdeck.conf`
 
-This preserves WireGuard private keys and local endpoint adjustments while still
-allowing the restore service to flag unexpected drift.
+This avoids packaging or duplicating WireGuard private keys. If this file is
+missing, the restore report instructs the operator to re-enroll the tunnel
+instead of attempting to synthesize a config.
 
 ## Manifest
 
-The manifest lives in the package source tree at:
+The primary manifest lives in the package source tree at:
 
 ```text
 data/restore/manifest.toml
 ```
 
-The package installs it to:
+The main package installs it to:
 
 ```text
 /opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml
 ```
 
+Additional packages may install manifest fragments under:
+
+```text
+/opt/steamos-intel-handheld/share/etc-artifacts/manifest.d/*.toml
+```
+
+The restore CLI merges the primary manifest and all fragment manifests in
+lexical order. Duplicate destinations are fatal. This keeps the main package
+from owning `steamos-intel-handheld-mangoapp` artifacts while still letting the
+single restore service repair files installed by companion packages.
+
 Each entry records:
 
 - destination path under `/etc`
 - source path under `/opt/steamos-intel-handheld/share/etc-artifacts`
-- restore policy: `managed` or `missing-only`
+- restore policy: `managed` or `health-check`
 - file mode
 - owner and group, both `root:root`
 - post-restore action tags such as `systemd-system`, `dbus-system`,
   `systemd-user`, `networkmanager-dispatcher`, and `service-restart`
+- optional health-check metadata for local files that must be present but are
+  not restored, such as WireGuard config paths
 
 The CLI validates the manifest before applying changes. Invalid absolute source
 paths, paths escaping `/etc`, duplicate destinations, unsupported policies, and
 unsupported modes are fatal errors.
+
+## Package Boundaries
+
+The main `steamos-intel-handheld` package owns and restores:
+
+- DBus policy
+- SteamOS Manager remote configuration
+- power-control system service anchor under
+  `/etc/systemd/system/steamos-intel-handheld-power-control.service`
+- gamescope native-panel wrapper, known-display profile, and display workaround
+  user service hooks
+- NetworkManager dispatcher for the known `rncn-steamdeck` tunnel, when that
+  dispatcher is installed through this package
+
+The `steamos-intel-handheld-mangoapp` package owns and restores:
+
+- `/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf`
+- `/opt/steamos-intel-handheld/bin/mangoapp`
+
+The restore service exists in the main package but reads manifest fragments
+from all installed companion packages. If the MangoHud package is absent, no
+mangoapp drop-in is restored and no mangoapp restart is attempted.
 
 ## Reload And Restart Behavior
 
@@ -137,6 +179,16 @@ unnecessarily:
 - `gamescope-mangoapp.service`
 - `steamos-intel-handheld-gamescope-display.service`
 
+Action failure handling:
+
+- copy failures for managed files are fatal
+- manifest validation failures are fatal
+- `systemctl daemon-reload` is fatal when any systemd unit or drop-in changed
+- DBus `ReloadConfig` is fatal when DBus policy changed
+- deck user `daemon-reload` and user service `try-restart` failures are
+  reported as warnings because the deck user bus may be absent during early boot
+- warning-level action failures appear in JSON output and journal logs
+
 The restore service does not automatically restart:
 
 - `gamescope-session.service`
@@ -149,10 +201,10 @@ The runtime display workaround can be re-applied immediately through
 still waits for a gamescope session restart or reboot.
 
 WireGuard behavior is conservative. The restore service may reload systemd after
-restoring dispatcher files, but it does not restart `wg-quick@rncn-steamdeck`
-when the tunnel is already active. If the WireGuard service is inactive and the
-config exists, the CLI reports the inactive service and leaves network repair to
-manual operator action. The command never starts inactive tunnels.
+restoring dispatcher files, but it never starts or restarts
+`wg-quick@rncn-steamdeck`. If the WireGuard service is inactive, or
+`/etc/wireguard/rncn-steamdeck.conf` is missing, the CLI reports that state and
+leaves network repair to manual operator action.
 
 ## CLI Modes
 
@@ -165,10 +217,10 @@ steamos-intel-handheld-restore-etc --json --check
 steamos-intel-handheld-restore-etc --json --apply
 ```
 
-`--check` reports missing files, managed drift, local drift, and planned reloads
-without writing. `--apply` restores files and runs reload/restart actions.
-`--json` emits a stable machine-readable summary for tests and diagnostic
-tooling.
+`--check` reports missing files, managed drift, health-check warnings, and
+planned reloads without writing. `--apply` restores files and runs
+reload/restart actions. `--json` emits a stable machine-readable summary for
+tests and diagnostic tooling.
 
 Exit status:
 
@@ -176,7 +228,8 @@ Exit status:
 - `1`: restore failed or required artifacts remain missing
 - `2`: invalid manifest or invalid CLI arguments
 
-Local drift on `missing-only` files is reported but does not make `--check` or
+Missing `health-check` files, absent deck user bus, inactive WireGuard, and
+failed optional user-service restarts are reported but do not make `--check` or
 `--apply` fail.
 
 ## Packaging
@@ -184,9 +237,17 @@ Local drift on `missing-only` files is reported but does not make `--check` or
 The main `steamos-intel-handheld` package installs:
 
 - the restore CLI wrapper under `/opt/steamos-intel-handheld/bin/`
-- the restore systemd unit under `/usr/lib/systemd/system/`
-- canonical restore artifacts under `/opt/steamos-intel-handheld/share/etc-artifacts/`
+- the restore systemd unit under `/usr/lib/systemd/system/` and a durable copy
+  under `/etc/systemd/system/`
+- the power-control systemd unit under `/usr/lib/systemd/system/` and a durable
+  copy under `/etc/systemd/system/`
+- canonical restore artifacts owned by the main package under
+  `/opt/steamos-intel-handheld/share/etc-artifacts/`
 - managed runtime copies under `/etc` through the package payload
+
+The `steamos-intel-handheld-mangoapp` package installs its canonical artifacts
+and manifest fragment under the same `/opt/steamos-intel-handheld/share`
+namespace, without adding its files to the main package manifest.
 
 The package install hook enables the restore service and the power-control
 service. The hook may run the restore CLI once after install or upgrade, but the
@@ -200,20 +261,26 @@ package installs exercise the same source-of-truth structure.
 Unit tests cover:
 
 - manifest parsing and path validation
+- manifest fragment merge behavior and duplicate destination rejection
 - missing managed files are restored
 - managed drift is overwritten
-- missing-only files are restored when absent
-- missing-only drift is reported without overwrite
+- local health-check files are reported without restore
+- absent companion package fragments are ignored without restoring companion
+  package files
 - generated action plan includes DBus, systemd system, and systemd user reloads
+- user-bus action failures are warnings while system reload failures are fatal
 - JSON output stays stable
 
 Integration asset tests cover:
 
 - package contains restore CLI, system service, manifest, and canonical
   artifacts
+- package installs a durable restore service unit under `/etc/systemd/system`
 - package verification script checks the restore payload
 - `steamos-intel-handheld-power-control.service` depends on
   `steamos-intel-handheld-restore.service`
+- `steamos-intel-handheld-mangoapp` contributes its own manifest fragment
+  instead of being listed in the main package manifest
 
 Real-device verification covers:
 
@@ -223,6 +290,7 @@ Real-device verification covers:
 - verify `gamescope-mangoapp.service` points to
   `/opt/steamos-intel-handheld/bin/mangoapp`
 - verify WireGuard dispatcher is restored and executable
+- verify WireGuard config presence is reported but never overwritten
 - verify no failed systemd units remain
 
 The real-device simulation must avoid deleting WireGuard private configuration
