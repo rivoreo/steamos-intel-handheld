@@ -156,6 +156,12 @@ def test_arch_release_workflow_verifies_repository_artifact_before_pages_deploy(
     assert "etc/systemd/system/steamos-intel-handheld-restore.service" in workflow
     assert "etc/systemd/system/steamos-intel-handheld-power-control.service" in workflow
     assert "opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in workflow
+    assert "etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" not in workflow
+    assert (
+        "opt/steamos-intel-handheld/share/etc-artifacts/steamos-manager/"
+        "remotes.d/99-rivoreo-power-control.toml"
+        not in workflow
+    )
     assert (
         "opt/steamos-intel-handheld/share/etc-artifacts/NetworkManager/"
         "dispatcher.d/90-rncn-steamdeck-wg"
