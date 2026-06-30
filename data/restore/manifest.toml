@@ -1,0 +1,90 @@
+[[artifact]]
+destination = "/etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf"
+source = "dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf"
+type = "file"
+policy = "managed"
+mode = "0644"
+owner = "root"
+group = "root"
+actions = ["dbus-system"]
+
+[[artifact]]
+destination = "/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+source = "steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+type = "file"
+policy = "managed"
+mode = "0644"
+owner = "root"
+group = "root"
+actions = ["systemd-user"]
+service_restarts = ["steamos-manager.service"]
+
+[[artifact]]
+destination = "/etc/systemd/system/steamos-intel-handheld-power-control.service"
+source = "systemd/system/steamos-intel-handheld-power-control.service"
+type = "file"
+policy = "managed"
+mode = "0644"
+owner = "root"
+group = "root"
+actions = ["systemd-system"]
+
+[[artifact]]
+destination = "/etc/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf"
+source = "systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf"
+type = "file"
+policy = "managed"
+mode = "0644"
+owner = "root"
+group = "root"
+actions = ["systemd-user"]
+
+[[artifact]]
+destination = "/etc/systemd/user/steamos-intel-handheld-gamescope-display.service"
+source = "systemd/user/steamos-intel-handheld-gamescope-display.service"
+type = "file"
+policy = "managed"
+mode = "0644"
+owner = "root"
+group = "root"
+actions = ["systemd-user"]
+service_restarts = ["steamos-intel-handheld-gamescope-display.service"]
+
+[[artifact]]
+destination = "/etc/systemd/user/gamescope-session.service.wants/steamos-intel-handheld-gamescope-display.service"
+target = "../steamos-intel-handheld-gamescope-display.service"
+type = "symlink"
+policy = "managed"
+owner = "root"
+group = "root"
+actions = ["systemd-user"]
+service_restarts = ["steamos-intel-handheld-gamescope-display.service"]
+
+[[artifact]]
+destination = "/etc/gamescope/scripts/00-steamos-intel-handheld/displays/msi.claw-8-ai-plus.lcd.lua"
+source = "gamescope/scripts/00-steamos-intel-handheld/displays/msi.claw-8-ai-plus.lcd.lua"
+type = "file"
+policy = "managed"
+mode = "0644"
+owner = "root"
+group = "root"
+actions = ["systemd-user"]
+
+[[artifact]]
+destination = "/etc/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
+source = "NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
+type = "file"
+policy = "managed"
+mode = "0755"
+owner = "root"
+group = "root"
+actions = ["networkmanager-dispatcher"]
+
+[[artifact]]
+destination = "/etc/wireguard/rncn-steamdeck.conf"
+type = "file"
+policy = "health-check"
+owner = "root"
+group = "root"
+actions = []
+health_services = ["wg-quick@rncn-steamdeck.service"]

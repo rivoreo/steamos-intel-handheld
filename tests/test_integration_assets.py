@@ -14,6 +14,8 @@ def test_steamos_manager_remote_config_uses_rivoreo_bus_name():
 def test_systemd_unit_waits_for_steamos_manager_before_serving():
     unit = (ROOT / "data/systemd/steamos-intel-handheld-power-control.service").read_text()
 
+    assert "Wants=steamos-intel-handheld-restore.service" in unit
+    assert "After=steamos-intel-handheld-restore.service" in unit
     assert "wait-and-serve" in unit
     assert "ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control" in unit
     assert "PATH=/etc/rivoreo/bin" not in unit
@@ -27,11 +29,102 @@ def test_systemd_unit_waits_for_steamos_manager_before_serving():
     assert "StateDirectory=steamos-intel-handheld" in unit
 
 
+def test_restore_service_unit_runs_restore_cli_before_power_control():
+    unit = (ROOT / "data/systemd/steamos-intel-handheld-restore.service").read_text()
+
+    assert "Description=Restore steamos-intel-handheld /etc integration files" in unit
+    assert "DefaultDependencies=no" in unit
+    assert "Before=multi-user.target" in unit
+    assert (
+        "ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-restore-etc --apply"
+        in unit
+    )
+    assert "WantedBy=multi-user.target" in unit
+
+
+def test_restore_manifest_lists_main_package_artifacts_without_mangoapp_dropin():
+    manifest = (ROOT / "data/restore/manifest.toml").read_text()
+
+    assert (
+        'destination = "/etc/dbus-1/system.d/'
+        'org.rivoreo.SteamOSManager.PowerControl.conf"'
+    ) in manifest
+    assert (
+        'destination = "/etc/steamos-manager/remotes.d/'
+        '99-rivoreo-power-control.toml"'
+    ) in manifest
+    assert (
+        'destination = "/etc/systemd/system/'
+        'steamos-intel-handheld-power-control.service"'
+    ) in manifest
+    assert (
+        'destination = "/etc/systemd/user/gamescope-session.service.d/'
+        '20-native-panel-resolution.conf"'
+    ) in manifest
+    assert (
+        'destination = "/etc/systemd/user/gamescope-session.service.wants/'
+        'steamos-intel-handheld-gamescope-display.service"'
+    ) in manifest
+    assert (
+        'target = "../steamos-intel-handheld-gamescope-display.service"'
+        in manifest
+    )
+    assert (
+        'destination = "/etc/gamescope/scripts/00-steamos-intel-handheld/displays/'
+        'msi.claw-8-ai-plus.lcd.lua"'
+    ) in manifest
+    assert (
+        'destination = "/etc/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"'
+        in manifest
+    )
+    assert 'destination = "/etc/wireguard/rncn-steamdeck.conf"' in manifest
+    assert 'policy = "health-check"' in manifest
+    assert "/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf" not in manifest
+
+
+def test_mangoapp_restore_fragment_owns_only_mangoapp_dropin():
+    fragment = (ROOT / "data/restore/manifest.d/10-mangoapp.toml").read_text()
+
+    assert (
+        'destination = "/etc/systemd/user/gamescope-mangoapp.service.d/'
+        '10-rivoreo-mangoapp.conf"'
+    ) in fragment
+    assert (
+        'source = "systemd/user/gamescope-mangoapp.service.d/'
+        '10-rivoreo-mangoapp.conf"'
+    ) in fragment
+    assert 'service_restarts = ["gamescope-mangoapp.service"]' in fragment
+    assert "rncn-steamdeck" not in fragment
+
+
+def test_networkmanager_dispatcher_is_packaged_as_executable_source():
+    dispatcher = ROOT / "data/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
+
+    assert dispatcher.read_text().startswith("#!/usr/bin/env bash\n")
+    assert dispatcher.stat().st_mode & 0o111
+    assert "rncn-steamdeck" in dispatcher.read_text()
+
+
 def test_manual_installer_installs_ec_control_wrapper():
     script = (ROOT / "scripts/install-on-device.sh").read_text()
 
     assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-ec-control" in script
     assert r"python3 -m steamos_intel_handheld.ec_charge_control \"\$@\"" in script
+
+
+def test_manual_installer_installs_restore_service_and_canonical_artifacts():
+    script = (ROOT / "scripts/install-on-device.sh").read_text()
+
+    assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-restore-etc" in script
+    assert r"python3 -m steamos_intel_handheld.restore_etc \"\$@\"" in script
+    assert "artifact_root=/opt/steamos-intel-handheld/share/etc-artifacts" in script
+    assert "/opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in script
+    assert "\\$artifact_root/dbus-1/system.d" in script
+    assert "\\$artifact_root/systemd/system" in script
+    assert "\\$artifact_root/NetworkManager/dispatcher.d" in script
+    assert "/etc/systemd/system/steamos-intel-handheld-restore.service" in script
+    assert "systemctl enable --now steamos-intel-handheld-restore.service" in script
+    assert "steamos-intel-handheld-restore-etc --apply" in script
 
 
 def test_manual_installer_installs_decky_charge_limit_plugin():
@@ -88,6 +181,47 @@ def test_gamescope_session_prefers_native_panel_resolution_wrapper():
     assert "Environment=PATH=/opt/steamos-intel-handheld/bin:" in dropin
     assert "/opt/steamos-intel-handheld/bin/gamescope" in script
     assert "20-native-panel-resolution.conf" in script
+
+
+def test_msi_claw_gamescope_known_display_profile_matches_internal_panel():
+    profile = (
+        ROOT
+        / "data/gamescope/scripts/00-steamos-intel-handheld/displays/msi.claw-8-ai-plus.lcd.lua"
+    ).read_text()
+
+    assert "gamescope.config.known_displays.msi_claw_8_ai_plus_lcd" in profile
+    assert 'pretty_name = "MSI Claw 8 AI+ LCD"' in profile
+    assert "supported = false" in profile
+    assert "48, 49, 50" in profile
+    assert "118, 119, 120" in profile
+    assert "gamescope.modegen.set_resolution(mode, 1920, 1200)" in profile
+    assert "gamescope.modegen.set_h_timings(mode, 48, 32, 80)" in profile
+    assert "gamescope.modegen.set_v_timings(mode, 54, 6, 4)" in profile
+    assert '{ vendor = "CSW", model = "PN8007QB1-2", product = 0x0801 }' in profile
+
+
+def test_gamescope_workaround_installs_msi_claw_known_display_profile():
+    script = (ROOT / "scripts/configure-gamescope-display-workaround.sh").read_text()
+
+    assert (
+        "data/gamescope/scripts/00-steamos-intel-handheld/displays/"
+        "msi.claw-8-ai-plus.lcd.lua"
+    ) in script
+    assert (
+        "remote_gamescope_profile="
+        '"/etc/gamescope/scripts/00-steamos-intel-handheld/displays/'
+        'msi.claw-8-ai-plus.lcd.lua"'
+    ) in script
+    assert (
+        "install -d -m 0755 /opt/steamos-intel-handheld/bin /etc/systemd/user "
+        "/etc/systemd/user/gamescope-session.service.d "
+        "/etc/systemd/user/gamescope-session.service.wants "
+        "/etc/gamescope/scripts/00-steamos-intel-handheld/displays"
+    ) in script
+    assert "'$remote_gamescope_profile'" in script
+    assert "rm -f '$remote_gamescope_profile'" in script
+    assert "/opt/steamos-intel-handheld/share/etc-artifacts" in script
+    assert "systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf" in script
 
 
 def test_device_verifier_checks_mangohud_cpu_power_sensor_access():
@@ -165,16 +299,28 @@ def test_gamescope_workaround_harness_can_enable_and_disable():
     assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display" in script
     assert 'remote_helper="/etc/rivoreo/bin/steamos-intel-handheld-gamescope-display"' not in script
     assert "/etc/systemd/user/steamos-intel-handheld-gamescope-display.service" in script
+    assert (
+        "/etc/systemd/user/gamescope-session.service.wants/"
+        "steamos-intel-handheld-gamescope-display.service"
+        in script
+    )
+    assert (
+        "/home/deck/.config/systemd/user/gamescope-session.service.wants/"
+        "steamos-intel-handheld-gamescope-display.service"
+        in script
+    )
+    assert "ln -sfn ../'$remote_service_name' '$remote_service_wants'" in script
+    assert "rm -f '$deck_user_service_wants'" in script
     assert "gamescope-force-composition-wrapper" in script
     assert "gamescope-session.service.d/10-force-composition.conf" in script
     assert "systemctl --user daemon-reload" in script
-    assert (
-        "systemctl --user disable --now steamos-intel-handheld-gamescope-display.service"
-        in enable_block
-    )
-    assert "systemctl --user enable steamos-intel-handheld-gamescope-display.service" in script
+    assert "systemctl --user enable steamos-intel-handheld-gamescope-display.service" not in script
     assert (
         "systemctl --user restart --no-block steamos-intel-handheld-gamescope-display.service"
+        not in script
+    )
+    assert (
+        "systemctl --user restart --no-block '$remote_service_name'"
         in script
     )
     assert (
@@ -183,6 +329,10 @@ def test_gamescope_workaround_harness_can_enable_and_disable():
     )
     assert (
         "systemctl --user disable --now steamos-intel-handheld-gamescope-display.service"
+        not in script
+    )
+    assert (
+        "systemctl --user stop '$remote_service_name'"
         in script
     )
 
@@ -201,6 +351,30 @@ def test_mangoapp_dropin_harness_installs_custom_binary_without_replacing_system
     assert "systemctl --user restart gamescope-mangoapp.service" in script
     assert "ExecStart=" in dropin
     assert "ExecStart=/opt/steamos-intel-handheld/bin/mangoapp" in dropin
+    assert "/opt/steamos-intel-handheld/share/etc-artifacts/manifest.d" in script
+    assert "10-mangoapp.toml" in script
+
+
+def test_arch_pkgbuild_installs_restore_payload_and_durable_units():
+    pkgbuild = (ROOT / "packaging/arch/PKGBUILD").read_text()
+    install_script = (ROOT / "packaging/arch/steamos-intel-handheld.install").read_text()
+    mangoapp_pkgbuild = (
+        ROOT / "packaging/arch/steamos-intel-handheld-mangoapp/PKGBUILD"
+    ).read_text()
+
+    assert "steamos-intel-handheld-restore.service" in pkgbuild
+    assert "$pkgdir/usr/lib/systemd/system/steamos-intel-handheld-restore.service" in pkgbuild
+    assert "$pkgdir/etc/systemd/system/steamos-intel-handheld-restore.service" in pkgbuild
+    assert "$pkgdir/etc/systemd/system/steamos-intel-handheld-power-control.service" in pkgbuild
+    assert "$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in pkgbuild
+    assert 'artifact_root="$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts"' in pkgbuild
+    assert (
+        "$artifact_root/"
+        "NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
+    ) in pkgbuild
+    assert "systemctl enable steamos-intel-handheld-restore.service" in install_script
+    assert "steamos-intel-handheld-restore-etc --apply" in install_script
+    assert "manifest.d/10-mangoapp.toml" in mangoapp_pkgbuild
 
 
 def test_local_check_does_not_lint_external_submodules():

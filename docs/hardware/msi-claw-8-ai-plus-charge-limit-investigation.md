@@ -29,7 +29,7 @@ unproven EC field meanings.
 5. The user has previously unplugged and replugged at 77%-78% while charging to
    80%, and charging continued. The sticky bad state appears after hitting 80%.
 
-## Known EC writes from this project
+## Known EC writes from this project at investigation start
 
 The installed `steamos-intel-handheld-power-control.service` was running with:
 
@@ -43,8 +43,9 @@ The service only writes these MSI Claw EC offsets:
 - `0x51`: TDP PL2 in watts.
 - `0xd2`: MSI shift/user-scenario byte, `0xc1` for <=17 W and `0xc4` for >17 W.
 
-No current repo code writes battery charge limit, charge-start threshold,
-charge-stop threshold, charger enable, or AC adapter state.
+At the time of the initial stuck-charge snapshots, no repo code wrote battery
+charge limit, charge-start threshold, charge-stop threshold, charger enable, or
+AC adapter state.
 
 ## Snapshot A: charger attached, bypass / pending-charge
 
@@ -361,9 +362,11 @@ Evidence files:
 - `docs/hardware/ec-dumps/20260627-004115-steamos-after-windows-100.txt`
 - `docs/hardware/ec-dumps/20260627-004115-steamos-after-windows-100-vs-before.diff.txt`
 
-Conclusion: for the MSI Claw 8 AI+ firmware observed here, the SteamOS control
-path may write only EC offset `0xd7` and only the validated preset values
-`0xbc`, `0xd0`, and `0xe4`.
+Conclusion: for the MSI Claw 8 AI+ A2VM / board `MS-1T52` product profile
+observed here, the SteamOS control path may write only EC offset `0xd7` and
+only the validated preset values `0xbc`, `0xd0`, and `0xe4`. The
+implementation must fail closed unless DMI reports MSI `Claw 8 AI+ A2VM` on
+board `MS-1T52`.
 
 Also collect two state-transition dumps:
 
@@ -373,4 +376,5 @@ Also collect two state-transition dumps:
    bypass.
 
 Do not write unknown EC battery-control offsets from Linux. The validated write
-surface is limited to `0xd7` with the known 60/80/100 preset values.
+surface is limited to `0xd7` with the known 60/80/100 preset values on the
+matched DMI product and board profile.

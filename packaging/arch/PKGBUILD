@@ -21,12 +21,51 @@ package() {
   cd "$pkgname-$pkgver"
   python -m installer --destdir="$pkgdir" dist/*.whl
 
+  install -Dm0644 data/restore/manifest.toml \
+    "$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml"
+  artifact_root="$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts"
+
+  install -Dm0644 data/systemd/steamos-intel-handheld-restore.service \
+    "$pkgdir/usr/lib/systemd/system/steamos-intel-handheld-restore.service"
+  install -Dm0644 data/systemd/steamos-intel-handheld-restore.service \
+    "$pkgdir/etc/systemd/system/steamos-intel-handheld-restore.service"
   install -Dm0644 data/systemd/steamos-intel-handheld-power-control.service \
     "$pkgdir/usr/lib/systemd/system/steamos-intel-handheld-power-control.service"
+  install -Dm0644 data/systemd/steamos-intel-handheld-power-control.service \
+    "$pkgdir/etc/systemd/system/steamos-intel-handheld-power-control.service"
+  install -Dm0644 data/systemd/steamos-intel-handheld-power-control.service \
+    "$artifact_root/systemd/system/steamos-intel-handheld-power-control.service"
   install -Dm0644 data/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf \
     "$pkgdir/etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf"
+  install -Dm0644 data/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf \
+    "$artifact_root/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf"
   install -Dm0644 data/steamos-manager/remotes.d/99-rivoreo-power-control.toml \
     "$pkgdir/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+  install -Dm0644 data/steamos-manager/remotes.d/99-rivoreo-power-control.toml \
+    "$artifact_root/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+  install -Dm0755 data/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg \
+    "$pkgdir/etc/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
+  install -Dm0755 data/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg \
+    "$artifact_root/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
+  install -Dm0755 data/bin/gamescope \
+    "$pkgdir/opt/steamos-intel-handheld/bin/gamescope"
+  install -Dm0755 data/bin/steamos-intel-handheld-gamescope-display \
+    "$pkgdir/opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display"
+  install -Dm0644 data/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf \
+    "$pkgdir/etc/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf"
+  install -Dm0644 data/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf \
+    "$artifact_root/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf"
+  install -Dm0644 data/systemd/user/steamos-intel-handheld-gamescope-display.service \
+    "$pkgdir/etc/systemd/user/steamos-intel-handheld-gamescope-display.service"
+  install -Dm0644 data/systemd/user/steamos-intel-handheld-gamescope-display.service \
+    "$artifact_root/systemd/user/steamos-intel-handheld-gamescope-display.service"
+  install -Dm0644 data/gamescope/scripts/00-steamos-intel-handheld/displays/msi.claw-8-ai-plus.lcd.lua \
+    "$pkgdir/etc/gamescope/scripts/00-steamos-intel-handheld/displays/msi.claw-8-ai-plus.lcd.lua"
+  install -Dm0644 data/gamescope/scripts/00-steamos-intel-handheld/displays/msi.claw-8-ai-plus.lcd.lua \
+    "$artifact_root/gamescope/scripts/00-steamos-intel-handheld/displays/msi.claw-8-ai-plus.lcd.lua"
+  install -d -m 0755 "$pkgdir/etc/systemd/user/gamescope-session.service.wants"
+  ln -s ../steamos-intel-handheld-gamescope-display.service \
+    "$pkgdir/etc/systemd/user/gamescope-session.service.wants/steamos-intel-handheld-gamescope-display.service"
   install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
   decky_src="decky/steamos-intel-handheld-ec"

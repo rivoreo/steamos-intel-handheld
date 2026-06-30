@@ -65,9 +65,24 @@ Release flow:
 7. GitHub Pages serves stable results from `https://rivoreo.github.io/steamos-intel-handheld/`.
 
 The main `steamos-intel-handheld` package also ships the battery charge-limit
-CLI and the Decky Loader plugin runtime under
+CLI, the MSI Claw 8 AI+ gamescope display profile and session hooks, and the
+Decky Loader plugin runtime under
 `/home/deck/homebrew/plugins/steamos-intel-handheld-ec`, so pacman updates carry
-the Steam UI entry point as well as the backend.
+the Steam UI entry point, gamescope panel adaptation, and backend.
+
+The main package also installs `steamos-intel-handheld-restore.service`, a
+durable `/etc/systemd/system` copy of that unit, and canonical restore payloads
+under `/opt/steamos-intel-handheld/share/etc-artifacts`. The service repairs
+managed systemd, D-Bus, SteamOS Manager, gamescope, and NetworkManager
+dispatcher files after SteamOS updates rotate the active `/etc` overlay. The
+WireGuard tunnel config remains local state: the package health-checks
+`/etc/wireguard/rncn-steamdeck.conf` but does not ship or recreate private keys.
+
+The gamescope payload installs the MSI Claw 8 AI+ known-display Lua profile
+under `/etc/gamescope/scripts/00-steamos-intel-handheld/displays/`, a native
+panel gamescope wrapper under `/opt/steamos-intel-handheld/bin/`, and a
+`gamescope-session.service` user hook. The session hook takes effect after the
+next gamescope session restart or reboot.
 
 Decky Loader is optional for the backend service and CLI. The Steam UI Charge Limit panel requires Decky Loader because Decky is the runtime that loads the
 plugin from `/home/deck/homebrew/plugins/steamos-intel-handheld-ec`. The
@@ -95,7 +110,8 @@ scripts/verify-gitlab-pacman-artifact.sh /path/to/downloaded/artifact
 ```
 
 GitLab CI artifacts are validation-only and unsigned. Passing this dry run proves
-package and repository shape, not public release trust.
+package and repository shape, including the restore service payload, not public
+release trust.
 
 The Pages artifact does not ship a `CNAME` file. Keep the public install path on
 GitHub Pages' HTTPS project URL unless a custom domain has a valid HTTPS

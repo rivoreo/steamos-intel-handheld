@@ -13,10 +13,36 @@ _steamos_intel_handheld_decky_notice() {
   return 0
 }
 
+_steamos_intel_handheld_gamescope_notice() {
+  echo "MSI Claw 8 AI+ gamescope display profile and session hooks are installed."
+  echo "Restart the gamescope session or reboot for the display profile and native-panel wrapper to take effect."
+  return 0
+}
+
+_steamos_intel_handheld_enable_services() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 0
+  fi
+
+  systemctl daemon-reload || true
+  systemctl enable steamos-intel-handheld-restore.service || true
+  systemctl enable steamos-intel-handheld-power-control.service || true
+
+  if [ -x /usr/bin/steamos-intel-handheld-restore-etc ]; then
+    /usr/bin/steamos-intel-handheld-restore-etc --apply || true
+  fi
+
+  return 0
+}
+
 post_install() {
+  _steamos_intel_handheld_enable_services || true
   _steamos_intel_handheld_decky_notice || true
+  _steamos_intel_handheld_gamescope_notice || true
 }
 
 post_upgrade() {
+  _steamos_intel_handheld_enable_services || true
   _steamos_intel_handheld_decky_notice || true
+  _steamos_intel_handheld_gamescope_notice || true
 }

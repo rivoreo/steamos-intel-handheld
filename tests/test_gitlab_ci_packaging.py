@@ -115,9 +115,34 @@ def test_gitlab_artifact_dry_run_script_checks_package_and_repo_shape() -> None:
     assert "rivoreo-steamos.files" in script
     assert "test ! -L" in script
     assert "tar -tf" in script
+    assert "usr/bin/steamos-intel-handheld-restore-etc" in script
+    assert "usr/lib/systemd/system/steamos-intel-handheld-restore.service" in script
+    assert "etc/systemd/system/steamos-intel-handheld-restore.service" in script
+    assert "etc/systemd/system/steamos-intel-handheld-power-control.service" in script
+    assert "opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in script
+    assert (
+        "opt/steamos-intel-handheld/share/etc-artifacts/"
+        "NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
+    ) in script
+    assert "opt/steamos-intel-handheld/bin/gamescope" in script
+    assert "opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display" in script
+    assert (
+        "etc/systemd/user/gamescope-session.service.d/"
+        "20-native-panel-resolution.conf"
+    ) in script
+    assert "etc/systemd/user/steamos-intel-handheld-gamescope-display.service" in script
+    assert (
+        "etc/systemd/user/gamescope-session.service.wants/"
+        "steamos-intel-handheld-gamescope-display.service"
+    ) in script
+    assert (
+        "etc/gamescope/scripts/00-steamos-intel-handheld/displays/"
+        "msi.claw-8-ai-plus.lcd.lua"
+    ) in script
     assert "home/deck/homebrew/plugins/steamos-intel-handheld-ec/plugin.json" in script
     assert ".INSTALL" in script
     assert "Decky Loader not detected" in script
+    assert "gamescope display profile and session hooks are installed" in script
     assert "usr/bin/steamos-intel-handheld-power-control" in script
     assert "usr/bin/steamos-intel-handheld-ec-control" in script
 

@@ -81,6 +81,8 @@ prepare_mangoapp_package_inputs() {
   install -Dm0644 \
     data/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf \
     "$mangoapp_pkgdir/10-rivoreo-mangoapp.conf"
+  install -Dm0644 data/restore/manifest.d/10-mangoapp.toml \
+    "$mangoapp_pkgdir/10-mangoapp.toml"
   install -Dm0644 external/MangoHud/LICENSE "$mangoapp_pkgdir/MangoHud-LICENSE"
 }
 

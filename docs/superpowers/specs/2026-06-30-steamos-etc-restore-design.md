@@ -117,8 +117,11 @@ single restore service repair files installed by companion packages.
 
 Each entry records:
 
+- artifact type: `file` or `symlink`
 - destination path under `/etc`
 - source path under `/opt/steamos-intel-handheld/share/etc-artifacts`
+  for file artifacts
+- symlink target for symlink artifacts
 - restore policy: `managed` or `health-check`
 - file mode
 - owner and group, both `root:root`
@@ -128,8 +131,9 @@ Each entry records:
   not restored, such as WireGuard config paths
 
 The CLI validates the manifest before applying changes. Invalid absolute source
-paths, paths escaping `/etc`, duplicate destinations, unsupported policies, and
-unsupported modes are fatal errors.
+paths, paths escaping `/etc`, duplicate destinations, unsupported artifact
+types, unsupported policies, unsupported modes, and symlink targets that are
+absolute or escape the destination directory are fatal errors.
 
 ## Package Boundaries
 

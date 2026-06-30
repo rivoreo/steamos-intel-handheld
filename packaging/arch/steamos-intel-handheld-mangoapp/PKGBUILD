@@ -7,8 +7,9 @@ arch=("x86_64")
 url="https://github.com/rivoreo/steamos-intel-handheld"
 license=("MIT")
 depends=("glibc")
-source=("mangoapp" "10-rivoreo-mangoapp.conf" "MangoHud-LICENSE")
+source=("mangoapp" "10-rivoreo-mangoapp.conf" "10-mangoapp.toml" "MangoHud-LICENSE")
 sha256sums=(
+  "0000000000000000000000000000000000000000000000000000000000000000"
   "0000000000000000000000000000000000000000000000000000000000000000"
   "0000000000000000000000000000000000000000000000000000000000000000"
   "0000000000000000000000000000000000000000000000000000000000000000"
@@ -18,6 +19,10 @@ package() {
   install -Dm0755 mangoapp "$pkgdir/opt/steamos-intel-handheld/bin/mangoapp"
   install -Dm0644 10-rivoreo-mangoapp.conf \
     "$pkgdir/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
+  install -Dm0644 10-rivoreo-mangoapp.conf \
+    "$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
+  install -Dm0644 10-mangoapp.toml \
+    "$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts/manifest.d/10-mangoapp.toml"
   install -Dm0644 MangoHud-LICENSE \
     "$pkgdir/usr/share/licenses/$pkgname/MangoHud-LICENSE"
 }

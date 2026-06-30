@@ -1,0 +1,10 @@
+[[artifact]]
+destination = "/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
+source = "systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
+type = "file"
+policy = "managed"
+mode = "0644"
+owner = "root"
+group = "root"
+actions = ["systemd-user"]
+service_restarts = ["gamescope-mangoapp.service"]

@@ -146,9 +146,33 @@ def test_arch_release_workflow_verifies_repository_artifact_before_pages_deploy(
     assert "steamos-intel-handheld-mangoapp-${pkgver}-1-x86_64.pkg.tar.zst" in workflow
     assert "gpg --batch --import" in workflow
     assert "gpg --batch --verify" in workflow
+    assert "usr/bin/steamos-intel-handheld-restore-etc" in workflow
     assert "opt/steamos-intel-handheld/bin/mangoapp" in workflow
     assert "usr/bin/steamos-intel-handheld-power-control" in workflow
     assert "usr/bin/steamos-intel-handheld-ec-control" in workflow
+    assert "usr/lib/systemd/system/steamos-intel-handheld-restore.service" in workflow
+    assert "opt/steamos-intel-handheld/bin/gamescope" in workflow
+    assert "opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display" in workflow
+    assert "etc/systemd/system/steamos-intel-handheld-restore.service" in workflow
+    assert "etc/systemd/system/steamos-intel-handheld-power-control.service" in workflow
+    assert "opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in workflow
+    assert (
+        "opt/steamos-intel-handheld/share/etc-artifacts/NetworkManager/"
+        "dispatcher.d/90-rncn-steamdeck-wg"
+    ) in workflow
+    assert (
+        "etc/systemd/user/gamescope-session.service.d/"
+        "20-native-panel-resolution.conf"
+    ) in workflow
+    assert "etc/systemd/user/steamos-intel-handheld-gamescope-display.service" in workflow
+    assert (
+        "etc/systemd/user/gamescope-session.service.wants/"
+        "steamos-intel-handheld-gamescope-display.service"
+    ) in workflow
+    assert (
+        "etc/gamescope/scripts/00-steamos-intel-handheld/displays/"
+        "msi.claw-8-ai-plus.lcd.lua"
+    ) in workflow
     assert "home/deck/homebrew/plugins/steamos-intel-handheld-ec/plugin.json" in workflow
     assert "home/deck/homebrew/plugins/steamos-intel-handheld-ec/dist/index.js" in workflow
 
@@ -244,6 +268,7 @@ def test_release_build_script_builds_all_release_packages_including_mangoapp() -
     assert "MANGOAPP_BINARY" in script
     assert "external/MangoHud/LICENSE" in script
     assert "10-rivoreo-mangoapp.conf" in script
+    assert "10-mangoapp.toml" in script
     assert "build_pkg packaging/arch/steamos-intel-handheld-mangoapp" in script
 
 
@@ -284,12 +309,20 @@ def test_release_packages_are_defined_for_keyring_and_repo_config() -> None:
     assert f"Server = {PUBLIC_REPO_BASE}/os/$arch" in repo_conf
     assert "pkgname=steamos-intel-handheld-mangoapp" in mangoapp
     assert 'arch=("x86_64")' in mangoapp
-    assert 'source=("mangoapp" "10-rivoreo-mangoapp.conf" "MangoHud-LICENSE")' in mangoapp
+    assert (
+        'source=("mangoapp" "10-rivoreo-mangoapp.conf" '
+        '"10-mangoapp.toml" "MangoHud-LICENSE")'
+    ) in mangoapp
     assert "/opt/steamos-intel-handheld/bin/mangoapp" in mangoapp
     assert (
         "/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
         in mangoapp
     )
+    assert "/opt/steamos-intel-handheld/share/etc-artifacts/manifest.d/10-mangoapp.toml" in mangoapp
+    assert (
+        "/opt/steamos-intel-handheld/share/etc-artifacts/systemd/user/"
+        "gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
+    ) in mangoapp
     assert "/usr/share/licenses/$pkgname/MangoHud-LICENSE" in mangoapp
 
 
@@ -304,6 +337,55 @@ def test_main_pkgbuild_declares_python_build_backend_dependency() -> None:
     pkgbuild = MAIN_PKGBUILD.read_text()
 
     assert '"python-setuptools"' in pkgbuild
+
+
+def test_main_pkgbuild_packages_restore_service_and_canonical_artifacts() -> None:
+    pkgbuild = MAIN_PKGBUILD.read_text()
+
+    assert "data/systemd/steamos-intel-handheld-restore.service" in pkgbuild
+    assert "/usr/lib/systemd/system/steamos-intel-handheld-restore.service" in pkgbuild
+    assert "/etc/systemd/system/steamos-intel-handheld-restore.service" in pkgbuild
+    assert "/etc/systemd/system/steamos-intel-handheld-power-control.service" in pkgbuild
+    assert "data/restore/manifest.toml" in pkgbuild
+    assert "/opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in pkgbuild
+    assert "data/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg" in pkgbuild
+    assert 'artifact_root="$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts"' in pkgbuild
+    assert (
+        "$artifact_root/NetworkManager/"
+        "dispatcher.d/90-rncn-steamdeck-wg"
+    ) in pkgbuild
+
+
+def test_main_pkgbuild_packages_gamescope_display_profile_and_session_hooks() -> None:
+    pkgbuild = MAIN_PKGBUILD.read_text()
+
+    assert "data/bin/gamescope" in pkgbuild
+    assert "data/bin/steamos-intel-handheld-gamescope-display" in pkgbuild
+    assert "/opt/steamos-intel-handheld/bin/gamescope" in pkgbuild
+    assert (
+        "/opt/steamos-intel-handheld/bin/"
+        "steamos-intel-handheld-gamescope-display"
+    ) in pkgbuild
+    assert (
+        "data/systemd/user/gamescope-session.service.d/"
+        "20-native-panel-resolution.conf"
+    ) in pkgbuild
+    assert (
+        "/etc/systemd/user/gamescope-session.service.d/"
+        "20-native-panel-resolution.conf"
+    ) in pkgbuild
+    assert "data/systemd/user/steamos-intel-handheld-gamescope-display.service" in pkgbuild
+    assert "/etc/systemd/user/steamos-intel-handheld-gamescope-display.service" in pkgbuild
+    assert (
+        "data/gamescope/scripts/00-steamos-intel-handheld/displays/"
+        "msi.claw-8-ai-plus.lcd.lua"
+    ) in pkgbuild
+    assert (
+        "/etc/gamescope/scripts/00-steamos-intel-handheld/displays/"
+        "msi.claw-8-ai-plus.lcd.lua"
+    ) in pkgbuild
+    assert "gamescope-session.service.wants" in pkgbuild
+    assert "ln -s ../steamos-intel-handheld-gamescope-display.service" in pkgbuild
 
 
 def test_active_bootstrap_is_fingerprint_pinned_and_secure() -> None:
@@ -345,6 +427,8 @@ def test_main_pkgbuild_runs_install_hook_for_decky_loader_notice() -> None:
     assert "Decky Loader detected" in hook
     assert "Decky Loader not detected" in hook
     assert "/home/deck/homebrew/services/PluginLoader" in hook
+    assert "gamescope display profile and session hooks are installed" in hook
+    assert "Restart the gamescope session or reboot" in hook
     assert "return 0" in hook
 
 
@@ -354,6 +438,7 @@ def test_release_artifact_verification_checks_install_hook_payload() -> None:
     assert 'contains "$main_pkg" ".INSTALL"' in workflow
     assert 'tar -xOf "$main_pkg" .INSTALL' in workflow
     assert "Decky Loader not detected" in workflow
+    assert "gamescope display profile and session hooks are installed" in workflow
 
 
 def test_release_public_urls_are_https_only_project_pages_urls() -> None:

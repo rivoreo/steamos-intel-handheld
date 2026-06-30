@@ -15,13 +15,16 @@ when the interfaces settle.
 - Own the system bus name `org.rivoreo.SteamOSManager.PowerControl`.
 - Apply TDP requests to Intel RAPL PL1 and PL2 limits.
 - Optionally mirror TDP requests to guarded MSI Claw 8 AI+ EC PL1/PL2 bytes.
-- Expose the validated MSI Claw 8 AI+ battery charge-limit EC byte through a
-  Decky Loader plugin and a guarded CLI for 60/80/100 percent presets.
+- Expose the validated MSI Claw 8 AI+ A2VM battery charge-limit EC byte through
+  a Decky Loader plugin and a guarded CLI for 60/80/100 percent presets.
 - Prepare package and uncore RAPL `energy_uj` access so MangoHud can report
   CPU power and Intel integrated GPU power from real kernel counters.
 - Provide install and verification harnesses for real SteamOS devices.
 - Provide an optional gamescope display workaround for color pipeline
   instability on Intel handhelds.
+- Restore package-owned `/etc` integration files from canonical
+  `/opt/steamos-intel-handheld/share/etc-artifacts` payloads after SteamOS
+  updates rotate the active `/etc` overlay.
 - Keep unit tests independent from D-Bus and physical hardware by using a fake
   sysfs powercap tree.
 
@@ -44,6 +47,11 @@ scripts/install-on-device.sh root@10.100.0.19
 scripts/verify-on-device.sh root@10.100.0.19
 ```
 
+The development installer does not require Docker on the target device. Docker
+or an equivalent container runner is only relevant for local package-build
+workflows; the published package repository is built in GitHub Actions, and the
+installed SteamOS service does not call Docker.
+
 The verifier temporarily sets TDP to 17W by default, confirms SteamOS Manager,
 the remote service, RAPL PL1/PL2, and any exposed short-term Tau agree, then
 restores 30W by default. Set `VERIFY_TDP_POLICY_MODE=ac-performance` to verify
@@ -53,6 +61,14 @@ The installer keeps this project's executable payload under
 `/opt/steamos-intel-handheld`. System configuration remains in the conventional
 locations under `/etc`, including systemd units, D-Bus policy, and SteamOS
 Manager remote definitions.
+
+The installer also enables `steamos-intel-handheld-restore.service`. That
+oneshot service runs before the TDP service and repairs managed `/etc` files
+from `/opt/steamos-intel-handheld/share/etc-artifacts` when SteamOS switches to
+a fresh `/etc` overlay after an OS update. It restores project-owned systemd,
+D-Bus, SteamOS Manager, gamescope, MangoHud drop-in, and NetworkManager
+dispatcher files. It only health-checks `/etc/wireguard/rncn-steamdeck.conf` and
+never packages, copies, or regenerates WireGuard private keys.
 
 ## Optional display workaround
 
@@ -66,6 +82,12 @@ should then be chosen inside each game instead of by shrinking gamescope.
 The same test device can also switch the primary DRM framebuffer between
 `XR30` and `XB24` paths when the Steam cursor/overlay disappears. That can look
 like a subtle color or gamma shift in games.
+
+The workaround also installs a gamescope known-display Lua profile for the
+MSI Claw 8 AI+ internal `CSW` `PN8007QB1-2` panel. That lets gamescope identify
+the panel as a 1920x1200 non-HDR internal display with a 48-120Hz dynamic
+refresh range instead of treating it as an unknown display with only the EDID's
+60Hz and 120Hz modes.
 
 The workaround uses gamescope's runtime control channel after the session starts:
 
@@ -143,6 +165,11 @@ on-device sustained-power validation passes. The service debounces EC writes so
 Steam slider movement only writes the final settled EC target. It only accepts MSI
 `Claw 8 AI+ A2VM`, board `MS-1T52`, and EC firmware strings that start with
 `1T52EMS1.109`; other systems fail closed before any EC write.
+
+The battery charge-limit plugin has its own matching guard. It only reads or
+writes the validated `0xd7` charge-limit byte when DMI reports MSI
+`Claw 8 AI+ A2VM` on board `MS-1T52`. CPU family alone is not treated as
+sufficient.
 
 The same root service also prepares MangoHud sensor paths. On the tested
 SteamOS 3.8.11 Claw 8 AI+ system, MangoHud runs as `deck` and needs read access

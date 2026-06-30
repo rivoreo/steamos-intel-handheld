@@ -1,6 +1,7 @@
 [Unit]
 Description=SteamOS Intel Handheld Power Control
-After=dbus.service systemd-user-sessions.service
+Wants=steamos-intel-handheld-restore.service
+After=steamos-intel-handheld-restore.service dbus.service systemd-user-sessions.service
 
 [Service]
 Type=simple

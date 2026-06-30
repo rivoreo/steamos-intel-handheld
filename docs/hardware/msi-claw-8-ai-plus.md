@@ -173,6 +173,12 @@ connected `eDP-1` mode from `/sys/class/drm` and rewrites gamescope's `-w` and
 That keeps gamescope's canvas 1:1 with the panel while leaving per-game render
 resolution decisions to each game.
 
+The optional workaround also installs a gamescope known-display Lua profile for
+the `CSW` `PN8007QB1-2` internal panel observed on the test device. The profile
+matches EDID product `0x0801`, marks the panel as non-HDR, and exposes the
+48-120Hz dynamic refresh range with 1920x1200 timings so gamescope no longer
+falls back to an unknown-display view of only the EDID's 60Hz and 120Hz modes.
+
 The repository keeps this as an optional workaround in
 `scripts/configure-gamescope-display-workaround.sh enable root@host`. The
 script installs the native-panel wrapper and a user service that waits for

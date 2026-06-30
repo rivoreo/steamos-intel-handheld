@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+interface="${1:-}"
+action="${2:-}"
+service="wg-quick@rncn-steamdeck.service"
+
+case "$action" in
+  up|vpn-up|connectivity-change|dhcp4-change|dhcp6-change)
+    if systemctl is-enabled --quiet "$service"; then
+      systemctl restart "$service" || true
+    fi
+    ;;
+esac
+
+exit 0

@@ -19,6 +19,8 @@ remote_tmp="/tmp/steamos-intel-handheld-mangoapp.$$"
 remote_mangoapp="/opt/steamos-intel-handheld/bin/mangoapp"
 remote_dropin="/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
 remote_dropin_dir="$(dirname "$remote_dropin")"
+remote_artifact_root="/opt/steamos-intel-handheld/share/etc-artifacts"
+remote_manifest_dir="/opt/steamos-intel-handheld/share/etc-artifacts/manifest.d"
 export COPYFILE_DISABLE=1
 
 reload_and_restart='
@@ -51,6 +53,7 @@ if [ "$action" = "enable" ]; then
 
   scp "$local_mangoapp" "$target:$remote_tmp/mangoapp"
   tar --no-xattrs -C "$repo_root" -czf - \
+    data/restore/manifest.d/10-mangoapp.toml \
     data/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf |
     ssh "$target" "
       set -euo pipefail
@@ -59,9 +62,11 @@ if [ "$action" = "enable" ]; then
 
   ssh "$target" "
     set -euo pipefail
-    install -d -m 0755 /opt/steamos-intel-handheld/bin '$remote_dropin_dir'
+    install -d -m 0755 /opt/steamos-intel-handheld/bin '$remote_dropin_dir' '$remote_manifest_dir' '$remote_artifact_root/systemd/user/gamescope-mangoapp.service.d'
     install -m 0755 '$remote_tmp/mangoapp' '$remote_mangoapp'
     install -m 0644 '$remote_tmp/data/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf' '$remote_dropin'
+    install -m 0644 '$remote_tmp/data/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf' '$remote_artifact_root/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf'
+    install -m 0644 '$remote_tmp/data/restore/manifest.d/10-mangoapp.toml' '$remote_manifest_dir/10-mangoapp.toml'
     rm -f /opt/rivoreo/bin/mangoapp
     rm -f /etc/rivoreo/bin/mangoapp
     rm -rf '$remote_tmp'

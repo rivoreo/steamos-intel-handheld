@@ -55,8 +55,17 @@ builds:
 - `rivoreo-steamos-repo`
 
 The main `steamos-intel-handheld` package includes the TDP service, the
-`steamos-intel-handheld-ec-control` CLI, and the Decky Loader charge-limit
-plugin runtime under `/home/deck/homebrew/plugins/steamos-intel-handheld-ec`.
+`steamos-intel-handheld-ec-control` CLI, the restore CLI and restore systemd
+service, the MSI Claw 8 AI+ gamescope display profile and session hooks, and the
+Decky Loader charge-limit plugin runtime under
+`/home/deck/homebrew/plugins/steamos-intel-handheld-ec`.
+
+The restore payload includes canonical managed artifacts under
+`/opt/steamos-intel-handheld/share/etc-artifacts`, a durable
+`/etc/systemd/system/steamos-intel-handheld-restore.service` anchor, and a
+durable power-control unit copy. It repairs project-owned `/etc` files after
+SteamOS overlay rotations. It does not package WireGuard private configuration;
+`/etc/wireguard/rncn-steamdeck.conf` is a health-check-only artifact.
 
 Decky Loader is optional for the backend service and CLI. The Steam UI Charge Limit panel requires Decky Loader, and the installer reports whether Decky Loader was detected. Missing Decky Loader must remain a warning, not a package
 installation failure.
@@ -80,8 +89,9 @@ The `verify-repo-artifact` job downloads the generated
 `signed-pacman-repository` artifact before any Pages deployment. It verifies the
 repo database aliases, package and database signature pairs, published signing
 key fingerprint, package metadata, expected package contents, HTTPS-only repo
-configuration, and `mangoapp` payload path. It imports the artifact public key
-and runs `gpg --batch --verify` for every generated `.sig` file.
+configuration, restore service payload, and `mangoapp` payload path. It imports
+the artifact public key and runs `gpg --batch --verify` for every generated
+`.sig` file.
 
 ## Before Tagging
 
@@ -174,6 +184,15 @@ Expected files include:
 - `rivoreo-steamos/os/x86_64/steamos-intel-handheld-mangoapp-*.pkg.tar.zst.sig`
 - `rivoreo-steamos/os/x86_64/steamos-intel-handheld-mangoapp-debug-*.pkg.tar.zst`
 - `rivoreo-steamos/os/x86_64/steamos-intel-handheld-mangoapp-debug-*.pkg.tar.zst.sig`
+- the main `steamos-intel-handheld` package contains
+  `/etc/gamescope/scripts/00-steamos-intel-handheld/displays/msi.claw-8-ai-plus.lcd.lua`
+  and the matching `gamescope-session.service` user hooks
+- the main `steamos-intel-handheld` package contains
+  `/usr/bin/steamos-intel-handheld-restore-etc`,
+  `/etc/systemd/system/steamos-intel-handheld-restore.service`, and
+  `/opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml`
+- the `steamos-intel-handheld-mangoapp` package contains
+  `/opt/steamos-intel-handheld/share/etc-artifacts/manifest.d/10-mangoapp.toml`
 - `rivoreo-steamos/os/x86_64/rivoreo-steamos.db`
 - `rivoreo-steamos/os/x86_64/rivoreo-steamos.db.sig`
 - `rivoreo-steamos/os/x86_64/rivoreo-steamos.files`
