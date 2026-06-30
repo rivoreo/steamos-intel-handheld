@@ -209,6 +209,7 @@ service_restarts = ["steamos-manager.service"]
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
         "systemctl",
         "--user",
+        "--no-block",
         "try-restart",
         "steamos-manager.service",
     ] in runner.commands
@@ -332,7 +333,7 @@ service_restarts = ["example.service"]
     warning_root = tmp_path / "warning"
     warning_runner = restore_etc.RecordingRunner(
         user_bus_exists=True,
-        fail_commands={"systemctl --user daemon-reload", "systemctl --user try-restart"},
+        fail_commands={"systemctl --user daemon-reload", "systemctl --user --no-block try-restart"},
     )
 
     warning = restore_etc.restore(
@@ -344,4 +345,53 @@ service_restarts = ["example.service"]
 
     assert warning.failures == []
     assert any("systemctl --user daemon-reload" in item for item in warning.warnings)
-    assert any("systemctl --user try-restart example.service" in item for item in warning.warnings)
+    assert any(
+        "systemctl --user --no-block try-restart example.service" in item
+        for item in warning.warnings
+    )
+
+
+def test_user_systemd_actions_are_bounded_and_restart_without_waiting(tmp_path):
+    root = artifact_root(tmp_path)
+    etc_root = tmp_path / "etc"
+    write_file(root / "systemd/user/example.service", "[Service]\nExecStart=/bin/true\n")
+    write_manifest(
+        root,
+        """
+[[artifact]]
+destination = "/etc/systemd/user/example.service"
+source = "systemd/user/example.service"
+type = "file"
+policy = "managed"
+mode = "0644"
+owner = "root"
+group = "root"
+actions = ["systemd-user"]
+service_restarts = ["example.service"]
+""",
+    )
+    runner = restore_etc.RecordingRunner(user_bus_exists=True)
+
+    result = restore_etc.restore(
+        etc_root=etc_root,
+        artifact_root=root,
+        apply=True,
+        runner=runner,
+    )
+
+    assert result.failures == []
+    assert [
+        "runuser",
+        "-u",
+        "deck",
+        "--",
+        "env",
+        "XDG_RUNTIME_DIR=/run/user/1000",
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+        "systemctl",
+        "--user",
+        "--no-block",
+        "try-restart",
+        "example.service",
+    ] in runner.commands
+    assert all(timeout is not None for timeout in runner.command_timeouts[-2:])

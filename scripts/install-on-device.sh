@@ -89,14 +89,12 @@ WRAPPER
   artifact_root=/opt/steamos-intel-handheld/share/etc-artifacts
   install -d -m 0755 \
     \"\$artifact_root/dbus-1/system.d\" \
-    \"\$artifact_root/steamos-manager/remotes.d\" \
     \"\$artifact_root/systemd/system\" \
     \"\$artifact_root/systemd/user/gamescope-session.service.d\" \
     \"\$artifact_root/systemd/user\" \
     \"\$artifact_root/gamescope/scripts/00-steamos-intel-handheld/displays\" \
     \"\$artifact_root/NetworkManager/dispatcher.d\" \
     /etc/dbus-1/system.d \
-    /etc/steamos-manager/remotes.d \
     /etc/systemd/system \
     /etc/systemd/user/gamescope-session.service.d \
     /etc/systemd/user/gamescope-session.service.wants \
@@ -105,8 +103,8 @@ WRAPPER
   install -m 0644 '$remote_tmp/data/restore/manifest.toml' /opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml
   install -m 0644 '$remote_tmp/data/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf' /etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf
   install -m 0644 '$remote_tmp/data/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf' \"\$artifact_root/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf\"
-  install -m 0644 '$remote_tmp/data/steamos-manager/remotes.d/99-rivoreo-power-control.toml' /etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml
-  install -m 0644 '$remote_tmp/data/steamos-manager/remotes.d/99-rivoreo-power-control.toml' \"\$artifact_root/steamos-manager/remotes.d/99-rivoreo-power-control.toml\"
+  rm -f /etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml
+  rm -f \"\$artifact_root/steamos-manager/remotes.d/99-rivoreo-power-control.toml\"
   install -m 0644 '$remote_tmp/data/systemd/steamos-intel-handheld-restore.service' /etc/systemd/system/steamos-intel-handheld-restore.service
   install -m 0644 '$remote_tmp/data/systemd/steamos-intel-handheld-restore.service' \"\$artifact_root/systemd/system/steamos-intel-handheld-restore.service\"
   install -m 0644 '$remote_tmp/data/systemd/steamos-intel-handheld-power-control.service' /etc/systemd/system/steamos-intel-handheld-power-control.service
@@ -135,7 +133,8 @@ WRAPPER
   /opt/steamos-intel-handheld/bin/steamos-intel-handheld-restore-etc --apply
 
   if [ -S /run/user/1000/bus ]; then
-    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user restart steamos-manager || true
+    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user reset-failed steamos-manager.service || true
+    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user start --no-block steamos-manager.service || true
   fi
 
   systemctl enable --now steamos-intel-handheld-power-control.service

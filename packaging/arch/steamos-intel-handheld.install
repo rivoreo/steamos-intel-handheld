@@ -24,12 +24,20 @@ _steamos_intel_handheld_enable_services() {
     return 0
   fi
 
+  rm -f /etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml
+  rm -f /opt/steamos-intel-handheld/share/etc-artifacts/steamos-manager/remotes.d/99-rivoreo-power-control.toml
+
   systemctl daemon-reload || true
   systemctl enable steamos-intel-handheld-restore.service || true
   systemctl enable steamos-intel-handheld-power-control.service || true
 
   if [ -x /usr/bin/steamos-intel-handheld-restore-etc ]; then
     /usr/bin/steamos-intel-handheld-restore-etc --apply || true
+  fi
+
+  if [ -S /run/user/1000/bus ]; then
+    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user reset-failed steamos-manager.service || true
+    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user start --no-block steamos-manager.service || true
   fi
 
   return 0

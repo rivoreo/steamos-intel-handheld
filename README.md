@@ -1,8 +1,8 @@
 # SteamOS Intel Handheld
 
 SteamOS support layer for Intel handheld PCs, starting with the MSI Claw 8 AI+
-A2VM. The first production feature is a SteamOS Manager remote TDP provider
-backed by Intel RAPL powercap controls.
+A2VM. The first production feature is a system D-Bus TDP provider backed by
+Intel RAPL powercap controls.
 
 The project is intentionally structured so it can grow from a field-tested
 overlay into an Arch/SteamOS package, and so pieces can be proposed upstream
@@ -10,9 +10,8 @@ when the interfaces settle.
 
 ## Current scope
 
-- Expose `com.steampowered.SteamOSManager1.TdpLimit1` through the SteamOS
-  Manager remote interface mechanism.
-- Own the system bus name `org.rivoreo.SteamOSManager.PowerControl`.
+- Own the system bus name `org.rivoreo.SteamOSManager.PowerControl` and expose
+  `com.steampowered.SteamOSManager1.TdpLimit1` there.
 - Apply TDP requests to Intel RAPL PL1 and PL2 limits.
 - Optionally mirror TDP requests to guarded MSI Claw 8 AI+ EC PL1/PL2 bytes.
 - Expose the validated MSI Claw 8 AI+ A2VM battery charge-limit EC byte through
@@ -114,27 +113,30 @@ display path can keep a consistent color pipeline by default.
 scripts/check-local.sh
 ```
 
-## SteamOS Manager integration
+## TDP integration
 
-The remote is registered through:
+The supported TDP provider is currently registered on the system bus:
 
-```toml
-[TdpLimit1]
-bus_name = "org.rivoreo.SteamOSManager.PowerControl"
-object_path = "/org/rivoreo/SteamOSManager/PowerControl"
+```bash
+busctl --system set-property \
+  org.rivoreo.SteamOSManager.PowerControl \
+  /org/rivoreo/SteamOSManager/PowerControl \
+  com.steampowered.SteamOSManager1.TdpLimit1 \
+  TdpLimit u 17
 ```
 
-The service waits until the deck user's `steamos-manager` user service is
-active before owning the D-Bus name. That preserves SteamOS Manager startup
-ordering and avoids the startup deadlock seen when a remote is already present
-while the user manager is still registering its own services.
+Older builds also installed a SteamOS Manager `remotes.d` shim at
+`/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml`. SteamOS Manager
+26.2.1 times out when the user daemon starts with that shim on the tested MSI
+Claw 8 AI+ system, so the package now removes that file and does not restore it
+after SteamOS updates. The file remains in the repository as a legacy reference
+while the newer SteamOS Manager remote contract is investigated.
 
-SteamOS exposes one `TdpLimit` value through this interface. This project maps
-that value to RAPL as:
+This project maps the provider's `TdpLimit` value to RAPL as:
 
 - Requested TDP is clamped to the 258V handheld sustained range: 8W to 30W.
-- PL1: the clamped SteamOS `TdpLimit` value, preserving the SteamOS slider as
-  the sustained power contract.
+- PL1: the clamped `TdpLimit` value, preserving a single sustained power
+  contract.
 - PL2: a backend policy derived from the current power source and selected TDP
   policy mode.
 

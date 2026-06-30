@@ -9,17 +9,6 @@ group = "root"
 actions = ["dbus-system"]
 
 [[artifact]]
-destination = "/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
-source = "steamos-manager/remotes.d/99-rivoreo-power-control.toml"
-type = "file"
-policy = "managed"
-mode = "0644"
-owner = "root"
-group = "root"
-actions = ["systemd-user"]
-service_restarts = ["steamos-manager.service"]
-
-[[artifact]]
 destination = "/etc/systemd/system/steamos-intel-handheld-power-control.service"
 source = "systemd/system/steamos-intel-handheld-power-control.service"
 type = "file"

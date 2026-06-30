@@ -27,6 +27,7 @@ USER_BUS_ENV = [
     "XDG_RUNTIME_DIR=/run/user/1000",
     "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
 ]
+WARNING_ACTION_TIMEOUT_S = 10.0
 
 
 class ManifestError(ValueError):
@@ -79,7 +80,7 @@ class CommandRunner:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
 
-    def run(self, args: list[str]) -> CommandResult:
+    def run(self, args: list[str], *, timeout_s: float | None = None) -> CommandResult:
         raise NotImplementedError
 
     def user_bus_exists(self) -> bool:
@@ -91,14 +92,35 @@ class CommandRunner:
 
 
 class SubprocessRunner(CommandRunner):
-    def run(self, args: list[str]) -> CommandResult:
+    def run(self, args: list[str], *, timeout_s: float | None = None) -> CommandResult:
         self.commands.append(list(args))
-        completed = subprocess.run(args, check=False, capture_output=True, text=True)
+        try:
+            completed = subprocess.run(
+                args,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return CommandResult(
+                returncode=124,
+                stdout=_timeout_output(exc.stdout),
+                stderr=f"timed out after {timeout_s:g}s",
+            )
         return CommandResult(
             returncode=completed.returncode,
             stdout=completed.stdout,
             stderr=completed.stderr,
         )
+
+
+def _timeout_output(output: str | bytes | None) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode(errors="replace")
+    return output
 
 
 class RecordingRunner(CommandRunner):
@@ -110,12 +132,14 @@ class RecordingRunner(CommandRunner):
         active_services: set[str] | None = None,
     ) -> None:
         super().__init__()
+        self.command_timeouts: list[float | None] = []
         self._user_bus_exists = user_bus_exists
         self.fail_commands = fail_commands or set()
         self.active_services = active_services
 
-    def run(self, args: list[str]) -> CommandResult:
+    def run(self, args: list[str], *, timeout_s: float | None = None) -> CommandResult:
         self.commands.append(list(args))
+        self.command_timeouts.append(timeout_s)
         command = command_to_string(args)
         for needle in self.fail_commands:
             if needle in command:
@@ -603,6 +627,7 @@ def _run_user_actions(
                 *USER_BUS_ENV,
                 "systemctl",
                 "--user",
+                "--no-block",
                 "try-restart",
                 service,
             ],
@@ -613,7 +638,7 @@ def _run_user_actions(
 
 def _run_warning(args: list[str], runner: CommandRunner, result: RestoreResult) -> None:
     command = command_to_string(args)
-    completed = runner.run(args)
+    completed = runner.run(args, timeout_s=WARNING_ACTION_TIMEOUT_S)
     if not completed.ok:
         result.warnings.append(f"{command} failed: {completed.stderr or completed.stdout}".strip())
 

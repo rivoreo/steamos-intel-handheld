@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import tomllib
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -49,10 +51,7 @@ def test_restore_manifest_lists_main_package_artifacts_without_mangoapp_dropin()
         'destination = "/etc/dbus-1/system.d/'
         'org.rivoreo.SteamOSManager.PowerControl.conf"'
     ) in manifest
-    assert (
-        'destination = "/etc/steamos-manager/remotes.d/'
-        '99-rivoreo-power-control.toml"'
-    ) in manifest
+    assert "/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" not in manifest
     assert (
         'destination = "/etc/systemd/system/'
         'steamos-intel-handheld-power-control.service"'
@@ -80,6 +79,16 @@ def test_restore_manifest_lists_main_package_artifacts_without_mangoapp_dropin()
     assert 'destination = "/etc/wireguard/rncn-steamdeck.conf"' in manifest
     assert 'policy = "health-check"' in manifest
     assert "/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf" not in manifest
+
+
+def test_restore_manifest_does_not_manage_incompatible_steamos_manager_remote():
+    payload = tomllib.loads((ROOT / "data/restore/manifest.toml").read_text())
+    destinations = {item["destination"] for item in payload["artifact"]}
+
+    assert (
+        "/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+        not in destinations
+    )
 
 
 def test_mangoapp_restore_fragment_owns_only_mangoapp_dropin():
@@ -120,6 +129,12 @@ def test_manual_installer_installs_restore_service_and_canonical_artifacts():
     assert "artifact_root=/opt/steamos-intel-handheld/share/etc-artifacts" in script
     assert "/opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in script
     assert "\\$artifact_root/dbus-1/system.d" in script
+    assert "rm -f /etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" in script
+    assert (
+        "install -m 0644 '$remote_tmp/data/steamos-manager/remotes.d/"
+        "99-rivoreo-power-control.toml'"
+        not in script
+    )
     assert "\\$artifact_root/systemd/system" in script
     assert "\\$artifact_root/NetworkManager/dispatcher.d" in script
     assert "/etc/systemd/system/steamos-intel-handheld-restore.service" in script
@@ -368,6 +383,8 @@ def test_arch_pkgbuild_installs_restore_payload_and_durable_units():
     assert "$pkgdir/etc/systemd/system/steamos-intel-handheld-power-control.service" in pkgbuild
     assert "$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in pkgbuild
     assert 'artifact_root="$pkgdir/opt/steamos-intel-handheld/share/etc-artifacts"' in pkgbuild
+    assert "$pkgdir/etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" not in pkgbuild
+    assert "rm -f /etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" in install_script
     assert (
         "$artifact_root/"
         "NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
