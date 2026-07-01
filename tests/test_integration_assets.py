@@ -223,7 +223,10 @@ def test_gamescope_display_user_service_runs_after_gamescope_session():
         "ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display apply"
         in service
     )
-    assert "TimeoutStartSec=360" in service
+    assert "Type=simple" in service
+    assert "Type=oneshot" not in service
+    assert "RemainAfterExit=" not in service
+    assert "TimeoutStartSec=" not in service
     assert "WantedBy=gamescope-session.service" in service
     assert "WantedBy=gamescope-session.target" not in service
 

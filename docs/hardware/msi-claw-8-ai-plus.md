@@ -194,7 +194,7 @@ gamescope's environment file and runs `gamescopectl composite_force 1` after
 each gamescope session service start. The wrapper takes effect after the next
 gamescope session restart or reboot. The unit is bound to
 `gamescope-session.service` so gamescope service restarts re-apply the convar
-instead of leaving an already-active oneshot behind. The helper re-sends the
+instead of leaving an old helper process behind. The helper re-sends the
 convar during the early startup window because the Steam
 client and gamescope WSI can create the game swapchain after the user service
 first starts; a single early send was observed to leave the active DRM state on

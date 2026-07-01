@@ -6,10 +6,8 @@ PartOf=gamescope-session.service
 ConditionPathExists=/usr/bin/gamescopectl
 
 [Service]
-Type=oneshot
+Type=simple
 ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-gamescope-display apply
-RemainAfterExit=yes
-TimeoutStartSec=360
 
 [Install]
 WantedBy=gamescope-session.service

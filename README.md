@@ -102,7 +102,7 @@ or reboot. The enabled user service waits for SteamOS to write
 `/run/user/1000/gamescope-environment`, then runs
 `gamescopectl composite_force 1`. The service is bound to
 `gamescope-session.service`, so a gamescope session restart stops and re-runs
-the workaround instead of leaving the previous oneshot active. It sends the
+the workaround instead of leaving the previous helper process active. It sends the
 runtime convar repeatedly for a short startup window because Steam and
 gamescope WSI can rebuild the game surface after the user service first starts.
 This is intentionally optional because forcing gamescope composition can cost
