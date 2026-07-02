@@ -152,9 +152,9 @@ Deploy the locally built binary to the target handheld from the host:
 
 ```bash
 scripts/configure-mangoapp-dropin.sh \
-  enable root@192.168.128.214 \
+  enable root@<host> \
   .cache/steamos-qemu/mangoapp
-scripts/verify-on-device.sh root@192.168.128.214
+scripts/verify-on-device.sh root@<host>
 ```
 
 ## Notes

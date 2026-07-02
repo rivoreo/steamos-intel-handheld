@@ -1,6 +1,8 @@
 # AI Development Harness
 
 This repository is arranged so AI agents can make changes with tight feedback.
+Root `AGENTS.md` is the short agent entry point, and `harness.toml` is the
+machine-readable map of local, device, release, and QEMU checks.
 
 ## Local loop
 
@@ -15,7 +17,8 @@ root privileges or SteamOS host is needed for backend behavior.
 
 `scripts/check-local.sh` runs:
 
-- `ruff check .`
+- `ruff check src tests scripts`
+- `bash -n scripts/*.sh`
 - `pytest`
 - `compileall`
 
@@ -40,10 +43,10 @@ evidence using `.github/pull_request_template.md`.
 Use the scripts against a root SSH target:
 
 ```bash
-scripts/collect-device-info.sh root@192.168.128.214
-scripts/install-on-device.sh root@192.168.128.214
-scripts/verify-on-device.sh root@192.168.128.214
-scripts/configure-gamescope-display-workaround.sh enable root@192.168.128.214
+scripts/collect-device-info.sh root@10.100.0.19
+scripts/install-on-device.sh root@10.100.0.19
+scripts/verify-on-device.sh root@10.100.0.19
+scripts/configure-gamescope-display-workaround.sh enable root@10.100.0.19
 ```
 
 The verifier checks:

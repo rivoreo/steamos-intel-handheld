@@ -40,7 +40,7 @@ behavior, or hardware profiles, also run the device harness against a root SSH
 target:
 
 ```bash
-scripts/verify-on-device.sh root@192.168.128.214
+scripts/verify-on-device.sh root@10.100.0.19
 ```
 
 ## Pull request evidence

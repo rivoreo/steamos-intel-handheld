@@ -1,0 +1,37 @@
+version = 1
+
+[[checks]]
+id = "local"
+description = "Fast hardware-free repository gate for agents and CI."
+command = "PYTHON=.venv/bin/python scripts/check-local.sh"
+requires = []
+safe_for_agents = true
+expected_duration = "under 5 seconds"
+evidence = "Complete command output or CI job summary."
+
+[[checks]]
+id = "device-full"
+description = "Real handheld verification for SteamOS Manager, RAPL, MangoHud sensors, EC bytes, and failed units."
+command = "scripts/verify-on-device.sh root@10.100.0.19"
+requires = ["root-ssh", "handheld"]
+safe_for_agents = false
+expected_duration = "about 1-5 minutes after the target is reachable"
+evidence = "Full verifier output from the target handheld."
+
+[[checks]]
+id = "release-artifact"
+description = "Unsigned GitLab-style pacman repository artifact shape check."
+command = "scripts/verify-gitlab-pacman-artifact.sh /path/to/downloaded/artifact"
+requires = ["artifact-path"]
+safe_for_agents = false
+expected_duration = "under 1 minute after artifact download"
+evidence = "Verifier output naming the artifact root."
+
+[[checks]]
+id = "qemu-mangoapp-rootfs"
+description = "Build patched mangoapp in a SteamOS rootfs chroot for release parity."
+command = "scripts/steamos-qemu-build-env.sh fetch-raw && scripts/steamos-qemu-build-env.sh prepare-rootfs && scripts/steamos-qemu-build-env.sh build-mangoapp-rootfs"
+requires = ["linux-x86_64", "network", "sudo", "20gb-disk"]
+safe_for_agents = false
+expected_duration = "tens of minutes on a cold cache"
+evidence = "mangoapp artifact path plus file output; real sensor behavior still needs device verification."
