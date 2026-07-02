@@ -12,6 +12,12 @@
 
 ## Local Loop
 
+- After any code or policy change, run the required sweep:
+
+  ```bash
+  scripts/harness.py sweep required --report .cache/harness/required.json
+  ```
+
 - Prefer the repo venv when present:
 
   ```bash
@@ -21,7 +27,7 @@
 - If `.venv` is missing, install dev dependencies with `python -m pip install -e ".[dev]"`
   and then run `scripts/check-local.sh`.
 - For focused TDD, run the smallest relevant `.venv/bin/python -m pytest ...`
-  command first, then the full local harness.
+  command first, then the required sweep. Do not stop after the focused test.
 
 ## Heavy Checks
 

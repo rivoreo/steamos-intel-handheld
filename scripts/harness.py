@@ -17,12 +17,11 @@ except ModuleNotFoundError:  # Python 3.10 compatibility for direct script use.
     tomllib = None
 
 
-ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "harness.toml"
+DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_manifest() -> dict[str, Any]:
-    text = MANIFEST.read_text()
+def load_manifest(root: Path) -> dict[str, Any]:
+    text = (root / "harness.toml").read_text()
     if tomllib is not None:
         return tomllib.loads(text)
     return parse_simple_manifest(text)
@@ -84,7 +83,7 @@ def print_json(payload: dict[str, Any]) -> None:
 
 
 def list_checks(args: argparse.Namespace) -> int:
-    manifest = load_manifest()
+    manifest = load_manifest(args.root.resolve())
     if args.json:
         print_json(manifest)
         return 0
@@ -101,8 +100,57 @@ def write_report(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def run_command(check: dict[str, Any], root: Path, capture: bool) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        check["command"],
+        cwd=root,
+        shell=True,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=capture,
+    )
+
+
+def result_for_completed(
+    check: dict[str, Any],
+    completed: subprocess.CompletedProcess,
+    started: datetime,
+    duration_seconds: float,
+) -> dict[str, Any]:
+    expectation = check.get("expectation", "pass")
+    output = (completed.stdout or "") + (completed.stderr or "")
+    status = "pass" if completed.returncode == 0 else "fail"
+
+    if expectation == "known-fail":
+        signature = check.get("failure_signature", "")
+        if completed.returncode == 0:
+            status = "unexpected-pass"
+        elif signature and signature in output:
+            status = "known-fail"
+        else:
+            status = "new-failure"
+
+    return {
+        "id": check["id"],
+        "command": check["command"],
+        "returncode": completed.returncode,
+        "status": status,
+        "expectation": expectation,
+        "tier": check.get("tier", "required"),
+        "started_at": started.isoformat(),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "duration_seconds": round(duration_seconds, 3),
+        "requirements": check.get("requires", []),
+    }
+
+
+def status_is_success(status: str) -> bool:
+    return status in {"pass", "known-fail"}
+
+
 def run_check(args: argparse.Namespace) -> int:
-    manifest = load_manifest()
+    root = args.root.resolve()
+    manifest = load_manifest(root)
     checks = checks_by_id(manifest)
     check = checks.get(args.check_id)
     if check is None:
@@ -129,24 +177,79 @@ def run_check(args: argparse.Namespace) -> int:
     started = datetime.now(timezone.utc)
     start = time.monotonic()
     print(f"Running {check['id']}: {check['command']}", flush=True)
-    completed = subprocess.run(check["command"], cwd=ROOT, shell=True, env=os.environ.copy())
-    finished = datetime.now(timezone.utc)
-    payload = {
-        "id": check["id"],
-        "command": check["command"],
-        "returncode": completed.returncode,
-        "started_at": started.isoformat(),
-        "finished_at": finished.isoformat(),
-        "duration_seconds": round(time.monotonic() - start, 3),
-        "requirements": requirements,
-    }
+    completed = run_command(check, root, capture=False)
+    payload = result_for_completed(check, completed, started, time.monotonic() - start)
     if args.report:
         write_report(Path(args.report), payload)
     return completed.returncode
 
 
+def checks_for_sweep(manifest: dict[str, Any], selector: str) -> list[dict[str, Any]]:
+    checks = manifest["checks"]
+    if selector == "required":
+        return [check for check in checks if check.get("tier") == "required"]
+    if selector == "safe":
+        return [check for check in checks if check.get("safe_for_agents") is True]
+    if selector == "all":
+        return list(checks)
+    raise ValueError(f"Unsupported sweep selector: {selector}")
+
+
+def sweep_checks(args: argparse.Namespace) -> int:
+    root = args.root.resolve()
+    manifest = load_manifest(root)
+    results = []
+    success = True
+
+    for check in checks_for_sweep(manifest, args.selector):
+        requirements = check.get("requires", [])
+        if requirements and args.selector != "all":
+            result = {
+                "id": check["id"],
+                "command": check["command"],
+                "returncode": 2,
+                "status": "blocked",
+                "expectation": check.get("expectation", "blocked"),
+                "tier": check.get("tier", "guarded"),
+                "requirements": requirements,
+            }
+            results.append(result)
+            success = False
+            print(f"{check['id']}: blocked", file=sys.stderr)
+            continue
+
+        started = datetime.now(timezone.utc)
+        start = time.monotonic()
+        print(f"Sweeping {check['id']}: {check['command']}", flush=True)
+        completed = run_command(check, root, capture=True)
+        result = result_for_completed(check, completed, started, time.monotonic() - start)
+        results.append(result)
+        print(f"{check['id']}: {result['status']}", flush=True)
+        if not status_is_success(result["status"]):
+            success = False
+            print(f"{check['id']}: {result['status']}", file=sys.stderr)
+
+    payload = {
+        "selector": args.selector,
+        "results": results,
+        "status": "passed" if success else "failed",
+    }
+    if args.report:
+        write_report(Path(args.report), payload)
+    else:
+        print_json(payload)
+
+    return 0 if success else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="List and run project harness checks.")
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=DEFAULT_ROOT,
+        help="Repository root containing harness.toml.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     list_parser = subparsers.add_parser("list", help="List harness checks.")
@@ -163,6 +266,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--report", help="Optional path for a JSON run report.")
     run_parser.set_defaults(func=run_check)
+
+    sweep_parser = subparsers.add_parser("sweep", help="Run a set of harness checks.")
+    sweep_parser.add_argument("selector", choices=["required", "safe", "all"])
+    sweep_parser.add_argument("--report", help="Optional path for a JSON sweep report.")
+    sweep_parser.set_defaults(func=sweep_checks)
 
     return parser
 
