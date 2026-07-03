@@ -154,6 +154,36 @@ Game-scoped host policy is established practice on Linux. Our governor should
 stay compatible with GameMode concepts: temporary activation, exact restore,
 and process-scoped controls rather than permanent system-wide state.
 
+Source:
+https://wiki.deckbrew.xyz/en/plugin-dev/getting-started
+
+Key finding:
+Decky plugins have a normal structure with `plugin.json`, `package.json`,
+frontend TypeScript under `src/`, and optional Python backend code in
+`main.py`. The frontend can call backend functions through the provided
+`ServerAPI`.
+
+Design impact:
+Decky is a good control surface for game-power policy, but not the right place
+for the core privileged scheduler. The plugin should call a stable service API
+to toggle the governor, select profile intent, set FPS target overrides, start
+A/B profiling, and render results.
+
+Source:
+https://github.com/SteamDeckHomebrew/decky-plugin-template
+
+Key finding:
+The Decky plugin template is the reference starting point. It uses `@decky/ui`
+for frontend work, supports Python and custom backend code, and documents
+plugin-store distribution expectations. Backend binaries belong under
+`backend/out` during build and are packaged under `bin/` for distribution.
+
+Design impact:
+If this project ships a Decky plugin, it should be a separate package boundary
+with a small API client, not a copy of the root governor. Store-readiness will
+require clean metadata, license handling, reproducible builds, and a conservative
+permission story.
+
 ### Linux Scheduler And Power Interfaces
 
 Source:
@@ -351,6 +381,41 @@ The next governor should classify CPU control at four levels:
    - Pinning is risky because games have different threading models. It should
      start as a profiler candidate and advisor output, not as default runtime
      policy.
+
+## Decky Plugin Control Surface
+
+The Decky plugin should be treated as an optional UI and experiment surface:
+
+- Toggle the system governor: off, observe, automatic, profiling.
+- Show current FPS target, actual FPS, 1% low, p99 frametime, package/core/
+  uncore watts, CPU pressure, and active policy action.
+- Select intent: battery, balanced, performance, quiet, custom.
+- Override FPS target for a game session when Steam/gamescope target discovery
+  is unavailable or ambiguous.
+- Start a guided A/B run across selected TDP levels and policy candidates.
+- Show restore health: CPU policy restored, cgroup restored, TDP restored,
+  service drop-ins absent, last error.
+- Expose advanced tuning only under an expert gate:
+  - EPP target,
+  - P-core/E-core max frequency experiment variants,
+  - foreground `uclamp.min`,
+  - background `uclamp.max`,
+  - CPU pressure thresholds,
+  - frame-time guard band.
+
+The plugin should not directly write RAPL, CPUFreq, cgroup, or gamescope state.
+The safer model is:
+
+```text
+Decky frontend
+    -> Decky Python backend
+        -> steamos-intel-handheld D-Bus or CLI API
+            -> root system service
+                -> snapshot, apply, observe, restore
+```
+
+This keeps privileged writes in the already tested restore boundary and makes
+Decky removable without leaving scheduler state behind.
 
 ## First Control Loop Shape
 
