@@ -110,6 +110,39 @@ latest_mangohud_csv() {
     2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-
 }
 
+sample_cgroup_pressure() {
+  local output="$1"
+  local seconds="$2"
+  local start elapsed
+  start="$(date +%s)"
+  : >"$output"
+  while true; do
+    elapsed=$(($(date +%s) - start))
+    [ "$elapsed" -gt "$seconds" ] && break
+    if [ -r /sys/fs/cgroup/cpu.pressure ]; then
+      python3 - "$elapsed" /sys/fs/cgroup/cpu.pressure >>"$output" <<'PY'
+import json
+import pathlib
+import sys
+
+elapsed = float(sys.argv[1])
+text = pathlib.Path(sys.argv[2]).read_text()
+payload = {"elapsed_s": elapsed, "cpu": {}}
+for line in text.splitlines():
+    parts = line.split()
+    if not parts:
+        continue
+    payload["cpu"][parts[0]] = {}
+    for item in parts[1:]:
+        key, value = item.split("=", 1)
+        payload["cpu"][parts[0]][key] = float(value)
+print(json.dumps(payload, sort_keys=True))
+PY
+    fi
+    sleep 1
+  done
+}
+
 if [ "$CAPTURE_MODE" != "imported" ]; then
   echo "controlled capture mode is not enabled until the trigger path is validated" >&2
   exit 2
@@ -136,15 +169,18 @@ for tdp in $TDP_LEVELS; do
       *)
         echo "unsupported PROFILE_GAME_POWER_POLICIES entry: $policy" >&2
         exit 2
-        ;;
+      ;;
     esac
 
+    sample_cgroup_pressure "$run_dir/cgroup-pressure.jsonl" "$DURATION_S" &
+    pressure_pid="$!"
     /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power \
       --mode "$mode" \
       --duration-s "$DURATION_S" \
       --poll-s "$POLL_S" \
       --target-appid "$APPID" \
       --output-format jsonl >"$run_dir/game-power.jsonl"
+    wait "$pressure_pid" || true
 
     csv="$(latest_mangohud_csv)"
     if [ -z "$csv" ]; then
@@ -168,6 +204,7 @@ for tdp in $TDP_LEVELS; do
       --capture-mode "$CAPTURE_MODE" \
       --mangohud-csv "$run_dir/mangohud.csv" \
       --game-power-jsonl "$run_dir/game-power.jsonl" \
+      --pressure-jsonl "$run_dir/cgroup-pressure.jsonl" \
       --restored "$restored" \
       --output "$run_dir"
   done

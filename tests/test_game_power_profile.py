@@ -14,6 +14,8 @@ from steamos_intel_handheld.game_power_profile import (
     parse_game_power_jsonl,
     parse_mangohud_fps_csv,
     parse_mangohud_summary_csv,
+    parse_pressure_file,
+    summarize_pressure_jsonl,
 )
 
 
@@ -183,6 +185,7 @@ def test_compare_run_summaries_rejects_imported_baseline_as_non_automated_ab():
 def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     mangohud = tmp_path / "mangohud.csv"
     game_power = tmp_path / "game-power.jsonl"
+    pressure = tmp_path / "cgroup-pressure.jsonl"
     output = tmp_path / "profile"
     write_csv(
         mangohud,
@@ -199,6 +202,15 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
                 "core_w": 7.0,
                 "uncore_w": 9.0,
                 "render_busy": 0.8,
+            }
+        )
+        + "\n"
+    )
+    pressure.write_text(
+        json.dumps(
+            {
+                "elapsed_s": 1.0,
+                "cpu": {"some": {"avg10": 2.5}, "full": {"avg10": 0.4}},
             }
         )
         + "\n"
@@ -222,6 +234,8 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
             str(mangohud),
             "--game-power-jsonl",
             str(game_power),
+            "--pressure-jsonl",
+            str(pressure),
             "--output",
             str(output),
         ],
@@ -238,6 +252,8 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert manifest["capture_mode"] == "imported"
     assert summary["avg_fps"] == 42.0
     assert summary["avg_uncore_w"] == 9.0
+    assert summary["cpu_pressure_some_avg10_peak"] == 2.5
+    assert summary["cpu_pressure_full_avg10_peak"] == 0.4
     assert summary["restored"] is True
 
 
@@ -292,3 +308,31 @@ def test_profile_cli_compare_reads_two_summary_files(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["verdict"] == "better"
     assert payload["candidate_policy"] == "gpu-priority"
+
+
+def test_parse_pressure_file_reads_some_and_full_avg10():
+    text = (
+        "some avg10=2.10 avg60=1.00 avg300=0.20 total=12345\n"
+        "full avg10=0.30 avg60=0.10 avg300=0.00 total=456\n"
+    )
+
+    pressure = parse_pressure_file(text)
+
+    assert pressure["some"]["avg10"] == 2.10
+    assert pressure["full"]["avg10"] == 0.30
+
+
+def test_summarize_pressure_jsonl_reports_peak_cpu_pressure(tmp_path):
+    path = tmp_path / "cgroup-pressure.jsonl"
+    rows = [
+        {"elapsed_s": 1.0, "cpu": {"some": {"avg10": 1.2}, "full": {"avg10": 0.0}}},
+        {"elapsed_s": 2.0, "cpu": {"some": {"avg10": 3.4}, "full": {"avg10": 0.2}}},
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    summary = summarize_pressure_jsonl(path)
+
+    assert summary == {
+        "cpu_pressure_some_avg10_peak": 3.4,
+        "cpu_pressure_full_avg10_peak": 0.2,
+    }

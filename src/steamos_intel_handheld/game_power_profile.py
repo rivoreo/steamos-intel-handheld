@@ -61,6 +61,8 @@ class RunSummary:
     avg_core_share: float | None = None
     avg_uncore_share: float | None = None
     avg_render_busy: float | None = None
+    cpu_pressure_some_avg10_peak: float | None = None
+    cpu_pressure_full_avg10_peak: float | None = None
     actions: dict[str, int] | None = None
     restored: bool = False
 
@@ -170,8 +172,10 @@ def merge_run_summary(
     policy: str,
     fps: MangoHudFpsSummary,
     power: GamePowerLogSummary | None,
+    pressure: dict[str, float] | None = None,
     restored: bool,
 ) -> RunSummary:
+    pressure = pressure or {}
     return RunSummary(
         appid=appid,
         tdp_w=tdp_w,
@@ -189,6 +193,8 @@ def merge_run_summary(
         avg_core_share=power.avg_core_share if power else None,
         avg_uncore_share=power.avg_uncore_share if power else None,
         avg_render_busy=power.avg_render_busy if power else None,
+        cpu_pressure_some_avg10_peak=pressure.get("cpu_pressure_some_avg10_peak"),
+        cpu_pressure_full_avg10_peak=pressure.get("cpu_pressure_full_avg10_peak"),
         actions=power.actions if power else None,
         restored=restored,
     )
@@ -284,6 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--mangohud-csv")
     summarize.add_argument("--mangohud-summary-csv")
     summarize.add_argument("--game-power-jsonl")
+    summarize.add_argument("--pressure-jsonl")
     summarize.add_argument("--output", required=True)
     summarize.add_argument("--restored", choices=["true", "false"], default="true")
 
@@ -303,6 +310,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         raise SystemExit("summarize requires --mangohud-csv or --mangohud-summary-csv")
 
     power = parse_game_power_jsonl(args.game_power_jsonl) if args.game_power_jsonl else None
+    pressure = summarize_pressure_jsonl(args.pressure_jsonl) if args.pressure_jsonl else None
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -317,6 +325,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         policy=args.policy,
         fps=fps,
         power=power,
+        pressure=pressure,
         restored=args.restored == "true",
     )
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -347,6 +356,44 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, list):
         return [_json_ready(item) for item in value]
     return value
+
+
+def parse_pressure_file(text: str) -> dict[str, dict[str, float]]:
+    parsed: dict[str, dict[str, float]] = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        category = parts[0]
+        parsed[category] = {}
+        for item in parts[1:]:
+            key, value = item.split("=", 1)
+            parsed[category][key] = float(value)
+    return parsed
+
+
+def summarize_pressure_jsonl(path: str | Path) -> dict[str, float]:
+    some_peak = 0.0
+    full_peak = 0.0
+    with Path(path).open() as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            cpu = row.get("cpu") or {}
+            some_peak = max(some_peak, _pressure_avg10(cpu, "some"))
+            full_peak = max(full_peak, _pressure_avg10(cpu, "full"))
+    return {
+        "cpu_pressure_some_avg10_peak": round(some_peak, 3),
+        "cpu_pressure_full_avg10_peak": round(full_peak, 3),
+    }
+
+
+def _pressure_avg10(cpu: dict[str, object], category: str) -> float:
+    values = cpu.get(category)
+    if not isinstance(values, dict):
+        return 0.0
+    return float(values.get("avg10") or 0.0)
 
 
 def main(argv: list[str] | None = None) -> None:
