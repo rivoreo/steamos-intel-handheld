@@ -8,6 +8,12 @@ a shared package TDP limit. The governor must be observable, reversible, safe to
 ship disabled by default, and validated on a real Cyberpunk 2077 workload before
 becoming an installed default.
 
+Status note: the first implementation has since passed the targeted Cyberpunk
+2077 validation on the MSI Claw 8 AI+ test device, and commit `7d66e09` made
+the reversible EPP-only `gpu-priority` policy the installed default. The
+default-off requirement in this first-stage design is preserved here as the
+original safety gate, not as the current package behavior.
+
 ## Problem
 
 The current project provides a SteamOS Manager TDP provider and maps the SteamOS
@@ -80,7 +86,7 @@ Relevant references:
 - Make policy decisions from measured evidence, not from fixed assumptions that
   every game is GPU-bound.
 - Keep the implementation split into observation, decision, and actuation so it
-  can later move toward GameMode, sched_ext, SteamOS Manager, or an upstream
+  can move in future work toward GameMode, sched_ext, SteamOS Manager, or an upstream
   SteamOS service boundary.
 
 ## Architecture
@@ -204,7 +210,7 @@ Development and validation can enable:
 ```
 
 The default installed service must not change CPU behavior until real-device
-validation proves the policy is stable enough for this target. A later package
+validation proves the policy is stable enough for this target. A future package
 revision may enable `observe` by default for telemetry-quality logging without
 runtime writes.
 
@@ -287,4 +293,3 @@ Success criteria for Cyberpunk validation:
   optional and separately validated from EPP control.
 - `scx_lavd` may improve latency but does not directly reserve iGPU package
   power. It should be evaluated as a second-stage scheduler experiment.
-
