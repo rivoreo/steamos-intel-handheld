@@ -91,14 +91,7 @@ def parse_mangohud_summary_csv(
         rows = list(csv.DictReader(handle))
     if not rows:
         raise ValueError(f"MangoHud summary CSV is empty: {path}")
-    row = rows[0]
-    return MangoHudFpsSummary(
-        avg_fps=_float(row.get("Average FPS")),
-        one_percent_low_fps=_float(row.get("1% Min FPS")),
-        point_one_percent_low_fps=_float(row.get("0.1% Min FPS")),
-        ninety_seven_percentile_fps=_float(row.get("97% Percentile FPS")),
-        capture_mode=capture_mode,
-    )
+    return _parse_mangohud_summary_row(rows[0], capture_mode=capture_mode)
 
 
 def parse_mangohud_fps_csv(
@@ -109,13 +102,18 @@ def parse_mangohud_fps_csv(
     fps_values: list[float] = []
     frametime_values: list[float] = []
     with Path(path).open(newline="") as handle:
-        for row in csv.DictReader(handle):
+        rows = list(csv.DictReader(handle))
+        for row in rows:
             fps = _float(row.get("fps"))
             frametime = _float(row.get("frametime"))
             if fps is not None:
                 fps_values.append(fps)
             if frametime is not None:
                 frametime_values.append(frametime)
+    if not fps_values and not frametime_values and rows:
+        summary = _parse_mangohud_summary_row(rows[0], capture_mode=capture_mode)
+        if summary.avg_fps is not None or summary.one_percent_low_fps is not None:
+            return summary
     if not fps_values and not frametime_values:
         raise ValueError(f"MangoHud FPS CSV has no fps or frametime rows: {path}")
     return MangoHudFpsSummary(
@@ -419,6 +417,21 @@ def _float(value: object) -> float | None:
         return float(text)
     except ValueError:
         return None
+
+
+def _parse_mangohud_summary_row(
+    row: dict[str, object],
+    *,
+    capture_mode: CaptureMode,
+) -> MangoHudFpsSummary:
+    return MangoHudFpsSummary(
+        avg_fps=_float(row.get("Average FPS")),
+        one_percent_low_fps=_float(row.get("1% Min FPS")),
+        point_one_percent_low_fps=_float(row.get("0.1% Min FPS")),
+        ninety_seven_percentile_fps=_float(row.get("97% Percentile FPS")),
+        avg_frametime_ms=_float(row.get("Average Frame Time")),
+        capture_mode=capture_mode,
+    )
 
 
 def _append_float(values: list[float], value: object) -> None:

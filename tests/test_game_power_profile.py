@@ -30,13 +30,20 @@ def test_parse_mangohud_summary_csv_reads_low_percentile_metrics(tmp_path):
     path = tmp_path / "mangohud-summary.csv"
     write_csv(
         path,
-        ["0.1% Min FPS", "1% Min FPS", "97% Percentile FPS", "Average FPS"],
+        [
+            "0.1% Min FPS",
+            "1% Min FPS",
+            "97% Percentile FPS",
+            "Average FPS",
+            "Average Frame Time",
+        ],
         [
             {
                 "0.1% Min FPS": "24.1",
                 "1% Min FPS": "31.2",
                 "97% Percentile FPS": "45.8",
                 "Average FPS": "42.3",
+                "Average Frame Time": "23.6",
             }
         ],
     )
@@ -48,7 +55,43 @@ def test_parse_mangohud_summary_csv_reads_low_percentile_metrics(tmp_path):
     assert summary.one_percent_low_fps == 31.2
     assert summary.point_one_percent_low_fps == 24.1
     assert summary.ninety_seven_percentile_fps == 45.8
+    assert summary.avg_frametime_ms == 23.6
     assert summary.capture_mode == CaptureMode.IMPORTED
+
+
+def test_parse_mangohud_fps_csv_accepts_summary_export(tmp_path):
+    path = tmp_path / "mangohud.csv"
+    write_csv(
+        path,
+        [
+            "0.1% Min FPS",
+            "1% Min FPS",
+            "97% Percentile FPS",
+            "Average FPS",
+            "GPU Load",
+            "CPU Load",
+            "Average Frame Time",
+        ],
+        [
+            {
+                "0.1% Min FPS": "29.3602",
+                "1% Min FPS": "29.7643",
+                "97% Percentile FPS": "32.9791",
+                "Average FPS": "31.9",
+                "GPU Load": "88.1",
+                "CPU Load": "52.0",
+                "Average Frame Time": "31.3",
+            }
+        ],
+    )
+
+    summary = parse_mangohud_fps_csv(path)
+
+    assert summary.avg_fps == 31.9
+    assert summary.one_percent_low_fps == 29.7643
+    assert summary.point_one_percent_low_fps == 29.3602
+    assert summary.ninety_seven_percentile_fps == 32.9791
+    assert summary.avg_frametime_ms == 31.3
 
 
 def test_parse_mangohud_fps_csv_computes_average_and_frame_time_percentiles(tmp_path):
