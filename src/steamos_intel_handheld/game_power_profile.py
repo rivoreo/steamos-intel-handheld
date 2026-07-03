@@ -23,6 +23,10 @@ class CaptureMode(str, Enum):
 FPS_TARGET_TOLERANCE = 0.98
 TARGET_POWER_SAVING_MIN_PCT = 5.0
 PACING_REGRESSION_REJECT_PCT = -3.0
+AFFINITY_ROLE_MIN_RUN_COVERAGE = 0.67
+AFFINITY_ROLE_MIN_OBSERVED_RUNS = 2
+AFFINITY_ROLE_MIN_HARM_SCORE = 5.0
+AFFINITY_ROLE_MIN_RUNQUEUE_WAIT_MS = 25.0
 
 
 @dataclass(frozen=True)
@@ -1313,17 +1317,23 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
                 candidate,
                 min_runs=args.min_runs,
             )
+            baseline_roles = aggregate_affinity_roles(paths_by_group[baseline_key])
+            candidate_roles = aggregate_affinity_roles(paths_by_group[candidate_key])
             comparisons.append(
                 {
                     "appid": appid,
                     "tdp_w": tdp_w,
                     "baseline": asdict(baseline),
                     "candidate": asdict(candidate),
-                    "baseline_affinity_roles": aggregate_affinity_roles(
-                        paths_by_group[baseline_key]
-                    ),
-                    "candidate_affinity_roles": aggregate_affinity_roles(
-                        paths_by_group[candidate_key]
+                    "baseline_affinity_roles": baseline_roles,
+                    "candidate_affinity_roles": candidate_roles,
+                    "affinity_experiment_plan": build_affinity_experiment_plan(
+                        baseline=baseline,
+                        candidate=candidate,
+                        comparison=comparison,
+                        baseline_roles=baseline_roles,
+                        candidate_roles=candidate_roles,
+                        min_runs=args.min_runs,
                     ),
                     "comparison": asdict(comparison),
                 }
@@ -1335,6 +1345,115 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
         "capture_mode": capture_mode,
         "min_runs": args.min_runs,
         "comparisons": comparisons,
+    }
+
+
+def build_affinity_experiment_plan(
+    *,
+    baseline: PolicyAggregate,
+    candidate: PolicyAggregate,
+    comparison: PolicyComparison,
+    baseline_roles: list[dict[str, object]],
+    candidate_roles: list[dict[str, object]],
+    min_runs: int,
+) -> dict[str, object]:
+    reasons = [
+        "hard per-TID affinity remains profiler-only",
+        "plan output is advisory and does not write affinity state",
+    ]
+    ready = True
+
+    if comparison.verdict == PolicyVerdict.BETTER:
+        reasons.append("candidate policy comparison is better")
+    else:
+        ready = False
+        reasons.append(f"candidate policy comparison is {comparison.verdict.value}")
+
+    if baseline.sample_count < min_runs or candidate.sample_count < min_runs:
+        ready = False
+        reasons.append("controlled repeated min-runs gate is not met")
+
+    if baseline.capture_mode != CaptureMode.CONTROLLED:
+        ready = False
+        reasons.append("baseline capture is not controlled")
+    if candidate.capture_mode != CaptureMode.CONTROLLED:
+        ready = False
+        reasons.append("candidate capture is not controlled")
+
+    if baseline.restored_count != baseline.sample_count:
+        ready = False
+        reasons.append("baseline restore verification is incomplete")
+    if candidate.restored_count != candidate.sample_count:
+        ready = False
+        reasons.append("candidate restore verification is incomplete")
+
+    if not candidate_roles:
+        ready = False
+        reasons.append("candidate run has no stable affinity role evidence")
+    if baseline_roles:
+        reasons.append("baseline affinity role evidence is available for comparison")
+
+    role_candidates = [
+        _guarded_affinity_role_candidate(role)
+        for role in candidate_roles
+        if _role_is_ready_for_guarded_affinity_experiment(role)
+    ]
+    if not role_candidates:
+        ready = False
+        reasons.append("no foreground latency-hot role passed guarded-affinity gates")
+
+    return {
+        "mode": "ready-for-guarded-experiment" if ready else "observe-only",
+        "write_policy": "disabled",
+        "strategy": "adaptive-compact-preferred-set",
+        "candidates": role_candidates,
+        "reasons": reasons,
+    }
+
+
+def _role_is_ready_for_guarded_affinity_experiment(role: dict[str, object]) -> bool:
+    if role.get("cgroup_role") != "foreground-game":
+        return False
+    if role.get("suggested_action") != "prefer-latency-cpus":
+        return False
+    if _classification_rank(_optional_str(role.get("classification"))) < _classification_rank(
+        "latency-hot"
+    ):
+        return False
+    if (_optional_int(role.get("observed_run_count")) or 0) < AFFINITY_ROLE_MIN_OBSERVED_RUNS:
+        return False
+    if (_float(role.get("run_coverage")) or 0.0) < AFFINITY_ROLE_MIN_RUN_COVERAGE:
+        return False
+    preferred_cpus = role.get("preferred_cpu_overlap")
+    if not isinstance(preferred_cpus, list) or not preferred_cpus:
+        return False
+    harm = _float(role.get("migration_harm_score_max_median")) or 0.0
+    wait = _float(role.get("runqueue_wait_ms_delta_median")) or 0.0
+    return (
+        harm >= AFFINITY_ROLE_MIN_HARM_SCORE
+        or wait >= AFFINITY_ROLE_MIN_RUNQUEUE_WAIT_MS
+    )
+
+
+def _guarded_affinity_role_candidate(role: dict[str, object]) -> dict[str, object]:
+    return {
+        "role_key": role.get("role_key"),
+        "comm": role.get("comm"),
+        "control_scope": "foreground-game-role",
+        "candidate_control": "soft-compact-preferred-cpus",
+        "guarded_variant": "foreground-role-soft-compact",
+        "preferred_cpus": role.get("preferred_cpu_overlap") or [],
+        "fallback": "restore-original-affinity-and-cgroup-state",
+        "observed_run_count": role.get("observed_run_count"),
+        "run_coverage": role.get("run_coverage"),
+        "classification": role.get("classification"),
+        "runqueue_wait_ms_delta_median": role.get("runqueue_wait_ms_delta_median"),
+        "runqueue_wait_per_slice_ms_max_median": role.get(
+            "runqueue_wait_per_slice_ms_max_median"
+        ),
+        "migration_harm_score_max_median": role.get(
+            "migration_harm_score_max_median"
+        ),
     }
 
 

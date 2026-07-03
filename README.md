@@ -321,8 +321,13 @@ repeated samples. When sibling `affinity-advice.json` files are present, the
 aggregate output also includes `baseline_affinity_roles` and
 `candidate_affinity_roles`, which summarize how often stable role candidates
 appeared across the included runs and their median migration/runqueue-wait
-scores. AppID is an experiment grouping key; production game-power policy
-should remain a generic telemetry-driven governor rather than a per-game table.
+scores. It also emits an `affinity_experiment_plan`: an observe-only next-run
+plan that becomes `ready-for-guarded-experiment` only when repeated controlled
+runs, restore checks, policy comparison, and stable foreground role evidence all
+pass. The plan does not apply affinity; it identifies whether a future soft
+compact preferred-CPU-set experiment is justified. AppID is an experiment
+grouping key; production game-power policy should remain a generic
+telemetry-driven governor rather than a per-game table.
 
 ## Repository layout
 

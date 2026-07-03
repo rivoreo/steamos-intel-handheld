@@ -574,6 +574,66 @@ This mirrors the common lesson from Windows CPU Sets, scx_lavd, and Affinity
 Tailor: latency-sensitive work benefits from locality, but strict partitions
 can create local queueing and visible frame pacing regressions.
 
+### Automatic Thread-Affinity Control Synthesis
+
+Sources:
+https://developer.android.com/reference/android/os/PerformanceHintManager.Session
+https://docs.kernel.org/scheduler/sched-util-clamp.html
+https://learn.microsoft.com/en-us/windows/win32/procthread/cpu-sets
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadaffinitymask
+https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html
+https://man7.org/linux/man-pages/man1/perf-sched.1.html
+https://raw.githubusercontent.com/FeralInteractive/gamemode/master/example/gamemode.ini
+https://raw.githubusercontent.com/sched-ext/scx/main/scheds/rust/scx_lavd/README.md
+https://arxiv.org/abs/2604.27915
+
+Key finding:
+The strongest cross-platform pattern is not "pin every hot thread." Android's
+performance hints model groups threads, compares actual work duration to a
+target, and lets the platform adjust core placement and frequency. Windows CPU
+Sets similarly provide preferred processor sets that still let the scheduler
+choose among valid CPUs, while Microsoft warns that hard affinity can reduce
+available processor time. Linux exposes hard per-thread masks through
+`sched_setaffinity()`, but those masks are intersected with cpuset constraints,
+can require elevated privileges for other users' threads, and are inherited by
+forked children. GameMode's current config shows that Linux gaming tools already
+experiment with core pinning/parking and CPU/iGPU power balance, but its
+controls are still profile-like rather than a frame-pacing feedback scheduler.
+
+Design impact:
+The generic SteamOS strategy should be a staged controller:
+
+1. classify stable thread roles across repeated controlled runs, not raw TIDs,
+2. keep background/helper shaping as the first write-capable experiment because
+   it is less likely to starve foreground work,
+3. express foreground locality as a soft compact preferred-set experiment when
+   the platform has a suitable primitive,
+4. keep hard per-TID affinity profiler-only until repeated A/B data proves it
+   improves 1% low or p99 frametime without average-FPS or restore regression,
+5. use sched_ext/LAVD as the long-term upstream-aligned path when the target
+   kernel exposes it, because it already models gaming as high-throughput,
+   low-tail-latency scheduling with domains by LLC and core type.
+
+The controller's machine-readable gates should be conservative:
+
+- both baseline and candidate runs must be controlled captures,
+- both sides must meet the repeated-run count and exact-restore checks,
+- the candidate policy must already compare as better on FPS, low-percentile
+  frame pacing, or target-sustained power saving,
+- a foreground-game role must appear in most candidate runs,
+- that role must be latency-hot, have preferred latency-CPU overlap, and show
+  runqueue-wait or migration-harm evidence,
+- the resulting plan must still be advisory until a guarded writer snapshots
+  and restores every touched affinity/cgroup/uclamp file.
+
+Current implementation note:
+`steamos-intel-handheld-game-power-profile aggregate` now emits an
+`affinity_experiment_plan` alongside `candidate_affinity_roles`. This converts
+the research into a next-run decision artifact. A `ready-for-guarded-experiment`
+plan means the profiler has enough repeated evidence to test a soft compact
+foreground-role placement variant next; it does not mean production hard
+affinity should be enabled.
+
 ### Academic And Research Literature
 
 Source:
