@@ -822,6 +822,300 @@ Existing plugins prove the UI demand but also define the safety boundary:
   `package.json`, frontend `dist/`, optional `main.py`, license, and backend
   binaries under the expected `backend/out` to plugin `bin/` flow when needed.
 
+## Automatic Thread Affinity Deep Dive
+
+This section is a persistent research checkpoint for the generic automatic
+thread-affinity direction. It intentionally avoids per-game pinning tables. The
+portable target is adaptive placement: observe thread behavior, choose compact
+preferred CPU sets when there is evidence of migration or topology harm, and
+only use hard affinity in short, reversible profiler experiments.
+
+Source:
+https://docs.kernel.org/scheduler/sched-capacity.html
+
+Key finding:
+Linux capacity-aware scheduling already models heterogeneous CPUs with
+capacity, frequency-invariant utilization, CPU-invariant utilization, wakeup CPU
+selection, and misfit migration. Uclamp can influence wakeup CPU selection by
+changing the utilization bounds that the scheduler compares against CPU
+capacity.
+
+Design impact:
+The governor should not duplicate the scheduler's basic P/E-core logic. It
+should feed better game-context hints into existing placement and frequency
+machinery: FPS target, foreground game scope, render-busy state, CPU pressure,
+and package-power state. If a task already "fits" on a selected CPU and frame
+pacing is stable, forcing affinity is unnecessary risk.
+
+Source:
+https://docs.kernel.org/scheduler/sched-util-clamp.html
+
+Key finding:
+Uclamp is explicitly designed as a user-space hinting interface for task
+performance bounds, and the kernel documentation calls out FPS feedback loops
+for games and background-task capping on mobile/heterogeneous systems.
+
+Design impact:
+The first generic control should be uclamp/cgroup shaping, not per-TID hard
+pinning. Foreground latency threads can receive a limited `uclamp.min` only
+when CPU-side frame misses are observed. Background/helper scopes can receive
+`uclamp.max` or lower weight when they interfere with the foreground game.
+
+Source:
+https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html
+
+Key finding:
+cgroup v2 has both process and thread organization primitives. `cgroup.threads`
+can move individual TIDs within a threaded subtree, and the `cpu` and `cpuset`
+controllers support threaded mode. The same document also warns that frequent
+cgroup migration is relatively expensive; workloads should normally be
+organized once, then tuned through controller files.
+
+Design impact:
+Thread-level cgroup placement is possible, but it is not the default runtime
+tool. A practical handheld governor should prefer stable game/background
+boundaries, then adjust controller values. Moving individual TIDs into special
+threaded cgroups is a guarded experiment for a small number of repeatedly
+identified hot threads, not a continuous per-frame controller.
+
+Source:
+https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html
+
+Key finding:
+Linux CPU affinity is per thread, inherited across fork/exec, and intersected
+with cpuset constraints. Setting affinity on another user's thread can require
+privilege.
+
+Design impact:
+Hard affinity must snapshot every original mask, restore exactly, and track
+newly spawned threads. It is unsuitable as the first default because it can
+reduce legal CPU capacity, conflict with cpuset policy, and accidentally inherit
+into later child work.
+
+Source:
+https://learn.microsoft.com/en-us/windows/win32/procthread/cpu-sets
+
+Key finding:
+Windows CPU Sets expose soft affinity that remains compatible with OS power
+management. Process default CPU Sets can move background threads to a subset of
+processors, while thread-selected CPU Sets override the process default. A hard
+affinity mask still takes precedence when present.
+
+Design impact:
+This is the right product model for SteamOS even though Linux exposes different
+primitives: prefer "where this task should usually run" over "where this task
+is allowed to run". On current Linux, emulate that with cgroup/uclamp/cpuset
+and later sched_ext placement hints rather than strict masks.
+
+Source:
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadidealprocessor
+
+Key finding:
+Windows also exposes a preferred-processor API: the OS schedules the thread on
+that processor whenever possible, but it is not the only legal processor.
+
+Design impact:
+The advisor should output preferred CPU/core-set recommendations before it
+outputs hard masks. If the current kernel cannot apply a soft per-thread
+preference, keep the recommendation as an artifact or test it through a
+sched_ext scheduler that can make wakeup-time placement decisions.
+
+Source:
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadaffinitymask
+
+Key finding:
+Microsoft documents hard affinity as a restrictive mask and warns that in most
+cases it is better to let the system select an available processor because a
+mask can reduce the processor time available to the thread.
+
+Design impact:
+The acceptance gate for any hard-pinning experiment must include run-queue
+delay and missed-idle evidence. If a pinned thread waits while another suitable
+P-core or SMT sibling is idle, the policy is rejected even if average FPS looks
+flat.
+
+Source:
+https://raw.githubusercontent.com/FeralInteractive/gamemode/master/README.md
+
+Key finding:
+GameMode is a Linux daemon/library for temporary game optimizations and already
+supports CPU governor, I/O priority, nice, scheduler policy, GPU performance
+mode, CPU core pinning/parking, and custom scripts.
+
+Design impact:
+GameMode proves that game-triggered temporary host tuning is a normal Linux
+shape. It also reinforces that the tuning boundary must be session-scoped and
+reversible. This project should stay compatible with GameMode-style activation
+instead of assuming it owns the whole system forever.
+
+Source:
+https://raw.githubusercontent.com/FeralInteractive/gamemode/master/example/gamemode.ini
+
+Key finding:
+GameMode's example configuration now includes CPU/iGPU power-balance logic,
+`igpu_power_threshold`, and CPU core pinning/parking. The comments say automatic
+pin/park detection currently targets selected Ryzen X3D and Intel P/E-core
+systems.
+
+Design impact:
+There is already ecosystem demand for CPU/GPU balance and P/E-aware pinning,
+but the public configuration is still heuristic and platform-limited. Our
+generic scheduler should treat this as a compatibility and conflict-detection
+surface, not as an algorithm to copy blindly.
+
+Source:
+https://github.com/FeralInteractive/gamemode/tree/master/daemon
+
+Key finding:
+GameMode's daemon documentation warns about priority inversion and inconsistent
+FPS when stronger scheduler priority or CPU binding interacts badly with busy
+loops, graphics drivers, CPU count, or architecture.
+
+Design impact:
+This is directly relevant to games: boosting or pinning the game can starve the
+driver/compositor path and make frame pacing worse. The governor must measure
+the whole presentation path, not just the main game process CPU time.
+
+Source:
+https://raw.githubusercontent.com/NGnius/PowerTools/main/README.md
+
+Key finding:
+PowerTools exposes manual Decky controls for CPU threads/SMT, CPU frequencies,
+GPU frequencies/power, charge behavior, and per-game persistence.
+
+Design impact:
+Decky is a good expert UI for visibility and opt-in experiments, but raw
+thread/frequency controls are too sharp for automatic defaults. The default
+service should expose intent and telemetry; expert Decky controls should be
+clearly separate from automatic policy ownership.
+
+Source:
+https://raw.githubusercontent.com/sched-ext/scx/main/scheds/rust/scx_lavd/README.md
+
+Key finding:
+`scx_lavd` implements Latency-criticality Aware Virtual Deadline scheduling,
+was initially motivated by gaming workloads, targets interactivity and reduced
+stutter, and creates scheduling domains by LLC, core type, and NUMA domain.
+
+Design impact:
+This is the closest public shape to a generic game scheduler. Instead of
+guessing thread names or static pins, it classifies latency criticality and
+uses topology domains. For this project, sched_ext/LAVD should become a guarded
+future experiment when the target kernel exposes sched_ext.
+
+Source:
+https://raw.githubusercontent.com/sched-ext/scx/main/OVERVIEW.md
+
+Key finding:
+sched_ext exists because modern scheduling is hard across heterogeneous cores,
+dynamic frequency scaling, chiplet/cache topology, mobile/VR latency targets,
+and stacked workloads. Its CPU selection callback is an optimization hint, not
+a binding decision, and sched_ext has system-integrity rollback when a scheduler
+misbehaves.
+
+Design impact:
+This supports a two-track plan: current kernels use observer/advisor plus
+reversible cgroup/uclamp experiments; future kernels test a sched_ext policy
+that can make wakeup-time preferred-placement decisions without hard masks.
+
+Source:
+https://arxiv.org/abs/2604.27915
+
+Key finding:
+Affinity Tailor argues that strict partitioning wastes capacity, while
+demand-sized, topologically compact CPU sets used as hints preserve locality
+without forbidding escape execution. A userspace controller estimates workload
+CPU demand online and chooses compact sets that span as few LLC domains as
+possible.
+
+Design impact:
+This is the best generic algorithmic template for SteamOS game affinity:
+estimate foreground game CPU demand, choose a compact preferred set with guard
+capacity, keep background work away from that set when it interferes, and keep
+escape capacity available. On an Intel handheld, the compact set should also
+respect P/E-core class, SMT sibling state, HFI/ITMT hints, and the current TDP.
+
+Source:
+https://raw.githubusercontent.com/torvalds/linux/master/drivers/thermal/intel/intel_hfi.c
+
+Key finding:
+Intel HFI reports per-CPU performance and energy-efficiency capabilities, and
+hardware may update those capabilities when power limits or thermal constraints
+change.
+
+Design impact:
+Core choice is not static. The governor should record HFI capability snapshots
+when available and treat core quality as dynamic under handheld power/thermal
+limits. If HFI is unavailable, fall back to CPU capacity, CPUFreq policy class,
+and measured per-policy efficiency curves.
+
+Source:
+https://raw.githubusercontent.com/torvalds/linux/master/arch/x86/kernel/itmt.c
+
+Key finding:
+Intel ITMT lets the scheduler prefer cores with higher maximum turbo
+capability by setting per-CPU scheduler core priorities and rebuilding
+scheduler domains when support changes.
+
+Design impact:
+The governor should not override ITMT with static masks unless profiling proves
+that the scheduler's preferred high-turbo cores still cause frame-time misses.
+ITMT priority is an input to the preferred-set ranking, not something to ignore.
+
+### Generic Affinity Algorithm Shape
+
+1. Observe, never write:
+   - sample TID inventory, CPU-time deltas, current CPU, allowed mask,
+     voluntary/involuntary context switches, migration counters, cgroup path,
+     CPU pressure, package/core/uncore watts, render busy, and frame pacing.
+   - add tracefs or `perf sched` windows later for wakeup delay and run-queue
+     latency around p99 frame spikes.
+
+2. Classify behavior:
+   - `latency-hot`: high CPU time or frequent wakeups, repeated migration, and
+     frame-time correlation.
+   - `latency-light`: short but frequent frame-boundary work that suffers from
+     ramp-up latency.
+   - `throughput-worker`: sustained work with weak frame-time correlation.
+   - `background/helper`: launcher, overlay, shader compile, IO/network/helper,
+     or unrelated scopes that can be shaped before foreground threads.
+
+3. Estimate demand and choose preferred sets:
+   - estimate foreground runnable demand over a sliding window.
+   - choose a compact set sized to demand plus guard capacity.
+   - rank CPUs by core class, HFI/ITMT/capacity, SMT sibling pressure,
+     LLC/topology compactness, current thermals/power, and measured per-TDP
+     efficiency.
+   - when CPU-limited below target, prefer latency threads on stronger cores.
+   - when GPU-limited and CPU core watts are stealing iGPU headroom, avoid
+     foreground boosts and first move or cap background/helper work.
+
+4. Apply only reversible controls:
+   - default: advisor output plus cgroup/uclamp shaping.
+   - next: compact foreground/background cpuset experiments in profiler mode.
+   - last: selective hard affinity for one or two stable hot thread roles, only
+     during short A/B captures with exact restore.
+
+5. Accept by frame pacing and power balance:
+   - require p99/1% low improvement or equal pacing with lower watts at target.
+   - reject if run-queue delay grows, driver/compositor work is starved,
+     package core watts lower iGPU headroom, or restore differs from snapshot.
+   - cache only by AppID plus topology/kernel/driver/Proton/TDP/FPS-target
+     fingerprint; never cache by raw TID.
+
+### Profiler Artifacts To Add Next
+
+- `cpu-topology.json`: CPU to policy, core type, SMT sibling, LLC/domain,
+  capacity, HFI/ITMT hints when present, max frequency, and EPP state.
+- `sched-trace.jsonl`: optional guarded tracefs/perf-sched window around
+  frame-time spikes with wakeup, switch, migration, and run-queue delay.
+- `affinity-advice.json`: observe-only ranking of hot thread roles, migration
+  harm score, preferred set candidates, and explicit reasons for no-op.
+- `background-shaping.json`: cgroup candidates for launcher/helper/background
+  scopes before touching foreground game threads.
+- `restore-affinity.json`: original masks/cgroups/cpuset/uclamp snapshots for
+  every write-mode experiment.
+
 ## Research Matrix
 
 | Area | Source signal/control | Governor use | Main risk | First validation |
