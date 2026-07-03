@@ -155,6 +155,13 @@ def test_installer_installs_game_power_cli_wrapper():
     assert r"python3 -m steamos_intel_handheld.game_power \"\$@\"" in script
 
 
+def test_installer_installs_game_power_profile_cli_wrapper():
+    script = (ROOT / "scripts/install-on-device.sh").read_text()
+
+    assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile" in script
+    assert r"python3 -m steamos_intel_handheld.game_power_profile \"\$@\"" in script
+
+
 def test_manual_installer_installs_restore_service_and_canonical_artifacts():
     script = (ROOT / "scripts/install-on-device.sh").read_text()
 

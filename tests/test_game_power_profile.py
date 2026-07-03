@@ -1,5 +1,7 @@
 import csv
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from steamos_intel_handheld.game_power_profile import (
@@ -176,3 +178,117 @@ def test_compare_run_summaries_rejects_imported_baseline_as_non_automated_ab():
 
     assert verdict.verdict == PolicyVerdict.NEEDS_CONTROLLED_CAPTURE
     assert "baseline" in verdict.reason
+
+
+def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
+    mangohud = tmp_path / "mangohud.csv"
+    game_power = tmp_path / "game-power.jsonl"
+    output = tmp_path / "profile"
+    write_csv(
+        mangohud,
+        ["fps", "frametime"],
+        [{"fps": "40", "frametime": "25.0"}, {"fps": "44", "frametime": "22.7"}],
+    )
+    game_power.write_text(
+        json.dumps(
+            {
+                "elapsed_s": 2.0,
+                "appid": "1091500",
+                "action": "gpu-priority-epp",
+                "package_w": 22.0,
+                "core_w": 7.0,
+                "uncore_w": 9.0,
+                "render_busy": 0.8,
+            }
+        )
+        + "\n"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "summarize",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--policy",
+            "gpu-priority",
+            "--capture-mode",
+            "imported",
+            "--mangohud-csv",
+            str(mangohud),
+            "--game-power-jsonl",
+            str(game_power),
+            "--output",
+            str(output),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    summary = json.loads((output / "summary.json").read_text())
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert "summary.json" in result.stdout
+    assert manifest["appid"] == "1091500"
+    assert manifest["policy"] == "gpu-priority"
+    assert manifest["capture_mode"] == "imported"
+    assert summary["avg_fps"] == 42.0
+    assert summary["avg_uncore_w"] == 9.0
+    assert summary["restored"] is True
+
+
+def test_profile_cli_compare_reads_two_summary_files(tmp_path):
+    baseline = tmp_path / "off-summary.json"
+    candidate = tmp_path / "gpu-summary.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "tdp_w": 22,
+                "policy": "off",
+                "capture_mode": "controlled",
+                "avg_fps": 40.0,
+                "one_percent_low_fps": 30.0,
+                "p99_frametime_ms": 36.0,
+                "restored": True,
+            }
+        )
+    )
+    candidate.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "tdp_w": 22,
+                "policy": "gpu-priority",
+                "capture_mode": "controlled",
+                "avg_fps": 40.2,
+                "one_percent_low_fps": 32.0,
+                "p99_frametime_ms": 35.0,
+                "restored": True,
+            }
+        )
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "compare",
+            "--baseline",
+            str(baseline),
+            "--candidate",
+            str(candidate),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["verdict"] == "better"
+    assert payload["candidate_policy"] == "gpu-priority"

@@ -27,6 +27,7 @@ steamos-intel-handheld-power-control = "steamos_intel_handheld.power_control:mai
 steamos-intel-handheld-ec-control = "steamos_intel_handheld.ec_charge_control:main"
 steamos-intel-handheld-restore-etc = "steamos_intel_handheld.restore_etc:main"
 steamos-intel-handheld-game-power = "steamos_intel_handheld.game_power:main"
+steamos-intel-handheld-game-power-profile = "steamos_intel_handheld.game_power_profile:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
