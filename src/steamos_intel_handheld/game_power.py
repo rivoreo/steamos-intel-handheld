@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
@@ -242,3 +243,74 @@ def _write_if_changed(path: Path, value: str) -> None:
     if _read_text(path) == value:
         return
     path.write_text(value)
+
+
+RAPL_NAME_MAP = {
+    "package-0": "package",
+    "core": "core",
+    "uncore": "uncore",
+    "dram": "dram",
+    "psys": "psys",
+}
+
+
+@dataclass(frozen=True)
+class GameProcess:
+    pid: int
+    appid: str | None
+    command: str
+
+
+class RaplObserver:
+    def __init__(
+        self,
+        *,
+        sysfs_root: str | Path = "/sys",
+        clock: object = time.monotonic,
+    ) -> None:
+        self.sysfs_root = Path(sysfs_root)
+        self.clock = clock
+
+    def read(self) -> EnergyReading:
+        energy: dict[str, int] = {}
+        powercap = self.sysfs_root / "class" / "powercap"
+        for domain in sorted(powercap.glob("intel-rapl*")):
+            name = _read_text(domain / "name")
+            mapped = RAPL_NAME_MAP.get(name)
+            if mapped is None:
+                continue
+            value = _read_optional_int(domain / "energy_uj")
+            if value is not None:
+                energy[mapped] = value
+        return EnergyReading(timestamp_s=float(self.clock()), energy_uj=energy)
+
+
+def parse_fdinfo_engine_times(text: str) -> dict[str, int]:
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        match = re.match(r"drm-(total-)?engine-([^:]+):\s+(\d+)\s+ns$", line)
+        if not match:
+            continue
+        prefix = "total-" if match.group(1) else ""
+        values[f"{prefix}{match.group(2)}"] = int(match.group(3))
+    return values
+
+
+def compute_fdinfo_busy(
+    start: dict[str, int],
+    end: dict[str, int],
+    *,
+    duration_s: float,
+) -> dict[str, float]:
+    if duration_s <= 0:
+        raise ValueError("fdinfo busy calculation requires positive duration")
+    busy: dict[str, float] = {}
+    for engine, start_ns in start.items():
+        if engine.startswith("total-") or engine not in end:
+            continue
+        delta_ns = end[engine] - start_ns
+        if delta_ns < 0:
+            continue
+        busy[engine] = delta_ns / 1_000_000_000 / duration_s
+    return busy

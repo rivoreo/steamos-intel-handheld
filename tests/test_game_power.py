@@ -6,9 +6,12 @@ from steamos_intel_handheld.game_power import (
     CpuPolicySnapshot,
     EnergyReading,
     GamePowerMode,
+    RaplObserver,
     RaplPowerWindow,
+    compute_fdinfo_busy,
     compute_rapl_power_window,
     discover_cpu_policies,
+    parse_fdinfo_engine_times,
 )
 
 
@@ -129,3 +132,54 @@ def test_cpu_policy_actuator_applies_and_restores_epp_and_frequency_caps(tmp_pat
     ).read_text() == "balance_performance"
     assert (policies[0].path / "scaling_max_freq").read_text() == "4800000"
     assert (policies[1].path / "scaling_max_freq").read_text() == "3700000"
+
+
+def make_rapl_domain(sysfs_root: Path, domain: str, name: str, energy_uj: int):
+    path = sysfs_root / "class" / "powercap" / domain
+    path.mkdir(parents=True)
+    (path / "name").write_text(name)
+    (path / "energy_uj").write_text(str(energy_uj))
+    return path
+
+
+def test_rapl_observer_reads_named_domains(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    make_rapl_domain(sysfs_root, "intel-rapl:0", "package-0", 100)
+    make_rapl_domain(sysfs_root, "intel-rapl:0:0", "core", 40)
+    make_rapl_domain(sysfs_root, "intel-rapl:0:1", "uncore", 30)
+    make_rapl_domain(sysfs_root, "intel-rapl:1", "psys", 140)
+
+    reading = RaplObserver(sysfs_root=sysfs_root, clock=lambda: 5.0).read()
+
+    assert reading.timestamp_s == 5.0
+    assert reading.energy_uj == {
+        "package": 100,
+        "core": 40,
+        "uncore": 30,
+        "psys": 140,
+    }
+
+
+def test_parse_fdinfo_engine_times_reads_drm_engine_keys():
+    fdinfo = """
+drm-engine-render: 123456789 ns
+drm-engine-copy: 999 ns
+drm-engine-compute: 234000000 ns
+drm-total-engine-render: 200000000 ns
+"""
+
+    parsed = parse_fdinfo_engine_times(fdinfo)
+
+    assert parsed["render"] == 123456789
+    assert parsed["compute"] == 234000000
+    assert parsed["total-render"] == 200000000
+
+
+def test_compute_fdinfo_busy_uses_nanosecond_delta_over_window():
+    start = {"render": 1_000_000_000, "compute": 500_000_000}
+    end = {"render": 2_500_000_000, "compute": 1_000_000_000}
+
+    busy = compute_fdinfo_busy(start, end, duration_s=2.0)
+
+    assert busy["render"] == 0.75
+    assert busy["compute"] == 0.25
