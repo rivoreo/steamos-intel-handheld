@@ -369,6 +369,37 @@ def test_game_power_device_verifier_restores_cpu_policy_snapshot():
     assert "drm-resident-vram0" in script
 
 
+def test_game_power_profile_device_check_is_guarded():
+    payload = tomllib.loads((ROOT / "harness.toml").read_text())
+    checks = {check["id"]: check for check in payload["checks"]}
+
+    check = checks["game-power-profile-device"]
+    assert check["command"] == "scripts/profile-game-power-on-device.sh root@10.100.0.19"
+    assert check["tier"] == "guarded"
+    assert check["safe_for_agents"] is False
+    assert check["expectation"] == "blocked"
+    assert check["requires"] == ["root-ssh", "handheld", "foreground-game"]
+
+
+def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert "snapshot_cpu_policy()" in script
+    assert "restore_cpu_policy()" in script
+    assert "set_service_game_power_mode()" in script
+    assert "restore_service_game_power_mode()" in script
+    assert "provider_tdp()" in script
+    assert "set_provider_tdp()" in script
+    assert 'trap restore_state EXIT' in script
+    assert "--game-power-mode $mode" in script
+    assert "set_service_game_power_mode off" in script
+    assert "--output-format jsonl" in script
+    assert "steamos-intel-handheld-game-power-profile summarize" in script
+    assert "capture_mode" in script
+    assert ".cache/game-power/profiles" in script
+    assert '"$target:$remote_root/."' in script
+
+
 def test_device_verifier_checks_profile_aware_tdp_policy_and_tau():
     script = (ROOT / "scripts/verify-on-device.sh").read_text()
 
