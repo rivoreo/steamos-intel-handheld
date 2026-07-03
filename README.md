@@ -201,6 +201,28 @@ not a total system VRAM counter. GPU temperature is still not faked or shown
 until the `xe` kernel driver exposes a real DRM hwmon temperature input such as
 `/sys/class/drm/renderD128/device/hwmon/hwmon*/temp*_input`.
 
+## Game power governor
+
+The optional game power governor helps Intel integrated graphics keep package
+headroom when CPU boost competes with the iGPU under the same SteamOS TDP. It
+is installed default-off:
+
+```bash
+--game-power-mode off
+```
+
+Use the standalone validation CLI before enabling it in the service:
+
+```bash
+steamos-intel-handheld-game-power --mode observe --duration-s 30
+steamos-intel-handheld-game-power --mode gpu-priority --duration-s 30 --target-appid 1091500
+VERIFY_GAME_POWER_APPID=1091500 scripts/verify-game-power-on-device.sh root@10.100.0.19
+```
+
+`observe` only reads sensors. `gpu-priority` snapshots CPUFreq policy state,
+applies reversible EPP hints, and only applies max-frequency caps when
+`--cpu-cap` is requested. The governor restores the previous CPU EPP and frequency limits when the active policy deactivates, the command exits, the service stops, or a write fails. It does not raise the SteamOS TDP, does not raise PL1, and does not replace SteamOS Manager's TDP slider.
+
 ## Repository layout
 
 - `src/steamos_intel_handheld/` - Python service code.

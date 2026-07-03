@@ -71,6 +71,23 @@ when the persisted state already matches the current long-term RAPL PL1; this
 converges policy after service restarts without forcing an old PL1 back onto the
 system.
 
+## Game power governor
+
+The Game power governor is a separate default-off control loop for foreground
+Steam games on Intel integrated graphics. It does not replace SteamOS Manager's
+TDP slider and does not raise PL1 automatically. The TDP backend continues to
+own the total package-power contract.
+
+The governor observes Steam game cgroups, RAPL package/core/uncore power, and
+DRM fdinfo engine activity. In `gpu-priority` mode it uses reversible CPU EPP hints, and only then optional CPU max-frequency caps, to reduce CPU package pressure when the iGPU is active and package power is already near PL1.
+
+Every active write starts from a CPUFreq snapshot. The service restores the
+previous EPP and `scaling_max_freq` values when the game disappears, the samples
+stop matching the GPU-priority policy, the service stops, or any write fails.
+The guarded device verifier runs `observe` and `gpu-priority` through
+`scripts/verify-game-power-on-device.sh` and fails if the final CPU policy
+snapshot differs from the pre-test snapshot.
+
 ## Boundaries
 
 - Hardware access is isolated in `TdpBackend`.

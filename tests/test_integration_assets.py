@@ -515,6 +515,19 @@ def test_local_check_does_not_lint_external_submodules():
     assert "ruff check ." not in script
 
 
+def test_docs_describe_game_power_governor_default_off_and_reversible():
+    readme = (ROOT / "README.md").read_text()
+    design = (ROOT / "docs/design.md").read_text()
+
+    assert "Game power governor" in readme
+    assert "--game-power-mode off" in readme
+    assert "restores the previous CPU EPP and frequency limits" in readme
+    assert "scripts/verify-game-power-on-device.sh root@10.100.0.19" in readme
+    assert "Game power governor" in design
+    assert "does not raise PL1 automatically" in design
+    assert "reversible CPU EPP hints" in design
+
+
 def test_mangohud_submodule_tracks_fork_branch():
     gitmodules = (ROOT / ".gitmodules").read_text()
 
