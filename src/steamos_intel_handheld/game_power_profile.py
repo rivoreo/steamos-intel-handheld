@@ -57,6 +57,14 @@ class ThreadAffinitySummary:
 
 
 @dataclass(frozen=True)
+class FpsTargetDiscovery:
+    fps_target: float | None
+    source: str
+    confidence: str
+    raw: str | None = None
+
+
+@dataclass(frozen=True)
 class RunSummary:
     appid: str
     tdp_w: int
@@ -71,6 +79,7 @@ class RunSummary:
     cpu_cap_enabled: bool | None = None
     cpu_cap_core_share_threshold: float | None = None
     fps_target: float | None = None
+    fps_target_source: str | None = None
     target_frame_ms: float | None = None
     avg_fps_target_ratio: float | None = None
     fps_target_met: bool | None = None
@@ -112,6 +121,7 @@ class PolicyAggregate:
     cpu_cap_enabled: bool = False
     cpu_cap_core_share_threshold: float | None = None
     fps_target: float | None = None
+    fps_target_source: str | None = None
     target_frame_ms: float | None = None
     avg_fps_target_ratio_median: float | None = None
     fps_target_met_count: int = 0
@@ -189,6 +199,27 @@ def parse_mangohud_fps_csv(
         p99_frametime_ms=_high_percentile(frametime_values, 0.99),
         capture_mode=capture_mode,
     )
+
+
+def parse_gamescope_fps_target_from_argv(argv: list[str]) -> FpsTargetDiscovery:
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":
+            break
+        if token == "-r" and index + 1 < len(argv):
+            return _gamescope_fps_target(argv[index + 1], f"-r {argv[index + 1]}")
+        for option in ("--framerate-limit", "--fps-limit"):
+            if token == option and index + 1 < len(argv):
+                return _gamescope_fps_target(
+                    argv[index + 1],
+                    f"{option} {argv[index + 1]}",
+                )
+            prefix = f"{option}="
+            if token.startswith(prefix):
+                return _gamescope_fps_target(token.removeprefix(prefix), token)
+        index += 1
+    return FpsTargetDiscovery(None, "unknown", "low")
 
 
 def parse_game_power_jsonl(path: str | Path) -> GamePowerLogSummary:
@@ -334,6 +365,7 @@ def merge_run_summary(
     cpu_cap_enabled: bool | None = None,
     cpu_cap_core_share_threshold: float | None = None,
     fps_target: float | None = None,
+    fps_target_source: str | None = None,
     duration_s: float | None = None,
     warmup_s: float | None = None,
     poll_s: float | None = None,
@@ -354,6 +386,7 @@ def merge_run_summary(
         cpu_cap_enabled=cpu_cap_enabled,
         cpu_cap_core_share_threshold=cpu_cap_core_share_threshold,
         fps_target=fps_target,
+        fps_target_source=_normalize_fps_target_source(fps_target, fps_target_source),
         target_frame_ms=_target_frame_ms(fps_target),
         avg_fps_target_ratio=_ratio(fps.avg_fps, fps_target),
         fps_target_met=_fps_target_met(fps.avg_fps, fps_target),
@@ -502,7 +535,7 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
             raise ValueError("cannot aggregate runs with different capture timing")
         if _effective_tunables(run) != first_tunables:
             raise ValueError("cannot aggregate runs with different effective tunables")
-    duration_s, warmup_s, poll_s, fps_target = first_experiment
+    duration_s, warmup_s, poll_s, fps_target, fps_target_source = first_experiment
     epp, pcore_max_mhz, ecore_max_mhz, cpu_cap_enabled, threshold = first_tunables
     return PolicyAggregate(
         appid=first.appid,
@@ -520,6 +553,7 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
         cpu_cap_enabled=cpu_cap_enabled,
         cpu_cap_core_share_threshold=threshold,
         fps_target=fps_target,
+        fps_target_source=fps_target_source,
         target_frame_ms=_target_frame_ms(fps_target),
         avg_fps_target_ratio_median=_median(
             [_run_avg_fps_target_ratio(run) for run in runs]
@@ -709,6 +743,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--cpu-cap-enabled", choices=["true", "false"])
     summarize.add_argument("--cpu-cap-core-share-threshold", type=float)
     summarize.add_argument("--fps-target", type=float)
+    summarize.add_argument("--fps-target-source")
     summarize.add_argument("--duration-s", type=float)
     summarize.add_argument("--warmup-s", type=float)
     summarize.add_argument("--poll-s", type=float)
@@ -729,6 +764,7 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--warmup-s", type=float)
     aggregate.add_argument("--poll-s", type=float)
     aggregate.add_argument("--fps-target", type=float)
+    aggregate.add_argument("--fps-target-source")
     aggregate.add_argument(
         "--capture-mode",
         choices=[mode.value for mode in CaptureMode],
@@ -767,6 +803,10 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "cpu_cap_enabled": _optional_bool(args.cpu_cap_enabled),
         "cpu_cap_core_share_threshold": args.cpu_cap_core_share_threshold,
         "fps_target": args.fps_target,
+        "fps_target_source": _normalize_fps_target_source(
+            args.fps_target,
+            args.fps_target_source,
+        ),
         "target_frame_ms": _target_frame_ms(args.fps_target),
         "duration_s": args.duration_s,
         "warmup_s": args.warmup_s,
@@ -787,6 +827,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         cpu_cap_enabled=_optional_bool(args.cpu_cap_enabled),
         cpu_cap_core_share_threshold=args.cpu_cap_core_share_threshold,
         fps_target=args.fps_target,
+        fps_target_source=args.fps_target_source,
         duration_s=args.duration_s,
         warmup_s=args.warmup_s,
         poll_s=args.poll_s,
@@ -821,6 +862,11 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
         if args.poll_s is not None and summary.poll_s != args.poll_s:
             continue
         if args.fps_target is not None and summary.fps_target != args.fps_target:
+            continue
+        if (
+            args.fps_target_source is not None
+            and summary.fps_target_source != args.fps_target_source
+        ):
             continue
         if summary.capture_mode != capture_mode:
             continue
@@ -910,13 +956,19 @@ def _profile_group_key(run: RunSummary) -> tuple[object, ...]:
 
 
 def _comparison_context_key(group_key: tuple[object, ...]) -> tuple[object, ...]:
-    return (group_key[0], group_key[1], *group_key[3:7])
+    return (group_key[0], group_key[1], *group_key[3:8])
 
 
 def _experiment_settings(
     run: RunSummary,
-) -> tuple[float | None, float | None, float | None, float | None]:
-    return (run.duration_s, run.warmup_s, run.poll_s, run.fps_target)
+) -> tuple[float | None, float | None, float | None, float | None, str | None]:
+    return (
+        run.duration_s,
+        run.warmup_s,
+        run.poll_s,
+        run.fps_target,
+        run.fps_target_source,
+    )
 
 
 def _effective_tunables(
@@ -1008,6 +1060,32 @@ def _target_frame_ms(fps_target: float | None) -> float | None:
     if fps_target is None or fps_target <= 0:
         return None
     return round(1000.0 / fps_target, 3)
+
+
+def _gamescope_fps_target(value: object, raw: str) -> FpsTargetDiscovery:
+    fps_target = _float(value)
+    if fps_target is None:
+        return FpsTargetDiscovery(None, "unknown", "low", raw)
+    if fps_target <= 0:
+        return FpsTargetDiscovery(None, "gamescope-cmdline-unlimited", "medium", raw)
+    return FpsTargetDiscovery(
+        round(fps_target, 3),
+        "gamescope-cmdline",
+        "medium",
+        raw,
+    )
+
+
+def _normalize_fps_target_source(
+    fps_target: float | None,
+    fps_target_source: str | None,
+) -> str | None:
+    source = _optional_str(fps_target_source)
+    if source is not None:
+        return source
+    if fps_target is not None:
+        return "manual"
+    return None
 
 
 def _fps_target_met(avg_fps: float | None, fps_target: float | None) -> bool | None:

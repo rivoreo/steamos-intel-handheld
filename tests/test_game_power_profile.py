@@ -6,6 +6,7 @@ from pathlib import Path
 
 from steamos_intel_handheld.game_power_profile import (
     CaptureMode,
+    FpsTargetDiscovery,
     GamePowerLogSummary,
     MangoHudFpsSummary,
     PolicyVerdict,
@@ -15,6 +16,7 @@ from steamos_intel_handheld.game_power_profile import (
     compare_policy_aggregates,
     compare_run_summaries,
     parse_game_power_jsonl,
+    parse_gamescope_fps_target_from_argv,
     parse_mangohud_fps_csv,
     parse_mangohud_summary_csv,
     parse_pressure_file,
@@ -116,6 +118,35 @@ def test_parse_mangohud_fps_csv_computes_average_and_frame_time_percentiles(tmp_
     assert summary.avg_frametime_ms == 23.75
     assert summary.p95_frametime_ms == 33.3
     assert summary.p99_frametime_ms == 33.3
+
+
+def test_parse_gamescope_fps_target_from_argv_uses_focused_limit_before_separator():
+    discovery = parse_gamescope_fps_target_from_argv(
+        [
+            "gamescope",
+            "-w",
+            "1920",
+            "-h",
+            "1200",
+            "-r",
+            "40",
+            "--",
+            "game-binary",
+            "-r",
+            "999",
+        ]
+    )
+
+    assert isinstance(discovery, FpsTargetDiscovery)
+    assert discovery.fps_target == 40.0
+    assert discovery.source == "gamescope-cmdline"
+    assert discovery.confidence == "medium"
+    assert discovery.raw == "-r 40"
+
+
+def test_parse_gamescope_fps_target_from_argv_ignores_unlimited_or_missing_limit():
+    assert parse_gamescope_fps_target_from_argv(["gamescope", "-r", "0"]).fps_target is None
+    assert parse_gamescope_fps_target_from_argv(["gamescope", "--", "game"]).source == "unknown"
 
 
 def test_parse_game_power_jsonl_averages_power_and_counts_actions(tmp_path):
@@ -667,8 +698,10 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert manifest["policy"] == "gpu-priority"
     assert manifest["capture_mode"] == "imported"
     assert manifest["fps_target"] == 40.0
+    assert manifest["fps_target_source"] == "manual"
     assert summary["avg_fps"] == 42.0
     assert summary["fps_target"] == 40.0
+    assert summary["fps_target_source"] == "manual"
     assert summary["target_frame_ms"] == 25.0
     assert summary["avg_fps_target_ratio"] == 1.05
     assert summary["fps_target_met"] is True

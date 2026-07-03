@@ -228,6 +228,95 @@ parse_cpu_cap_variant() {
   esac
 }
 
+write_manual_fps_target_discovery() {
+  local output="$1"
+  python3 - "$output" "$FPS_TARGET" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+target = float(sys.argv[2])
+payload = {
+    "fps_target": target,
+    "fps_target_source": "manual",
+    "fps_target_confidence": "high",
+    "raw": "PROFILE_GAME_POWER_FPS_TARGET",
+}
+path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
+}
+
+discover_fps_target() {
+  local output="$1"
+  python3 - "$output" <<'PY'
+import json
+import pathlib
+import sys
+
+output = pathlib.Path(sys.argv[1])
+
+
+def parse_target(args):
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token == "--":
+            break
+        if token == "-r" and index + 1 < len(args):
+            return parse_value(args[index + 1], f"-r {args[index + 1]}")
+        index += 1
+    return None
+
+
+def parse_value(value, raw):
+    try:
+        target = float(value)
+    except ValueError:
+        return None
+    if target <= 0:
+        return {
+            "fps_target": None,
+            "fps_target_source": "gamescope-cmdline-unlimited",
+            "fps_target_confidence": "medium",
+            "raw": raw,
+        }
+    return {
+        "fps_target": target,
+        "fps_target_source": "gamescope-cmdline",
+        "fps_target_confidence": "medium",
+        "raw": raw,
+    }
+
+
+payload = {
+    "fps_target": None,
+    "fps_target_source": "unknown",
+    "fps_target_confidence": "low",
+    "candidates": [],
+}
+for cmdline in pathlib.Path("/proc").glob("[0-9]*/cmdline"):
+    try:
+        raw = cmdline.read_bytes()
+    except OSError:
+        continue
+    args = [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
+    if not args or "gamescope" not in pathlib.Path(args[0]).name:
+        continue
+    candidate = {"pid": int(cmdline.parent.name), "argv": args}
+    target = parse_target(args)
+    if target is not None:
+        candidate.update(target)
+        if target["fps_target"] is not None and payload["fps_target"] is None:
+            payload.update(target)
+    payload["candidates"].append(candidate)
+
+output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+if payload["fps_target"] is not None:
+    print(payload["fps_target"])
+PY
+}
+
 latest_mangohud_csv() {
   find /home/deck -maxdepth 1 -name 'mangoapp_*.csv' -type f -printf '%T@ %p\n' \
     2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-
@@ -446,6 +535,16 @@ provider_tdp >"$REMOTE_ROOT/tdp.initial"
 trap restore_state EXIT
 set_service_game_power_mode off
 setup_mangohud_controlled_capture
+FPS_TARGET_SOURCE="unknown"
+if [ -n "$FPS_TARGET" ]; then
+  FPS_TARGET_SOURCE="manual"
+  write_manual_fps_target_discovery "$REMOTE_ROOT/fps-target.discovery.json"
+else
+  FPS_TARGET="$(discover_fps_target "$REMOTE_ROOT/fps-target.discovery.json" || true)"
+  if [ -n "$FPS_TARGET" ]; then
+    FPS_TARGET_SOURCE="gamescope-cmdline"
+  fi
+fi
 
 for repeat in $(seq 1 "$REPEATS"); do
   for tdp in $TDP_LEVELS; do
@@ -471,6 +570,7 @@ for repeat in $(seq 1 "$REPEATS"); do
         fi
         run_dir="$REMOTE_ROOT/$(date +%Y%m%dT%H%M%S)-app${APPID}-${tdp}w-${run_policy_label}-r${repeat}"
         mkdir -p "$run_dir"
+        cp "$REMOTE_ROOT/fps-target.discovery.json" "$run_dir/fps-target.discovery.json"
         snapshot_cpu_policy >"$run_dir/cpu-policy.before"
         provider_tdp >"$run_dir/tdp.before"
 
@@ -541,6 +641,7 @@ for repeat in $(seq 1 "$REPEATS"); do
         if [ -n "$FPS_TARGET" ]; then
           fps_target_args=(--fps-target "$FPS_TARGET")
         fi
+        fps_target_source_args=(--fps-target-source "$FPS_TARGET_SOURCE")
 
         /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile summarize \
           --appid "$APPID" \
@@ -549,6 +650,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           --capture-mode "$CAPTURE_MODE" \
           "${mangohud_args[@]}" \
           "${fps_target_args[@]}" \
+          "${fps_target_source_args[@]}" \
           --game-power-jsonl "$run_dir/game-power.jsonl" \
           --pressure-jsonl "$run_dir/cgroup-pressure.jsonl" \
           --thread-affinity-jsonl "$run_dir/thread-affinity.jsonl" \

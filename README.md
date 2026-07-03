@@ -260,11 +260,14 @@ directory contains `manifest.json`, `summary.json`, `game-power.jsonl`,
 snapshots, and the MangoHud CSV/summary used for FPS analysis. The
 thread-affinity capture is observe-only and records per-thread CPU time,
 migration, context-switch, current-CPU, affinity-mask, and cgroup samples for
-future automatic-affinity research. Until automatic Steam/gamescope FPS-target
-detection is validated, set `PROFILE_GAME_POWER_FPS_TARGET` to the target used
-for the run. Summaries then include `fps_target`, `target_frame_ms`,
-`avg_fps_target_ratio`, and `fps_target_met`, and repeated comparisons can
-accept a candidate that sustains the target while reducing package power.
+future automatic-affinity research. Set `PROFILE_GAME_POWER_FPS_TARGET` to the
+target used for the run when you want an explicit controlled A/B target. If it
+is unset, the wrapper makes a best-effort read-only discovery from the live
+gamescope command line's focused `-r` frame-rate limit and stores
+`fps-target.discovery.json` next to the run artifacts. Summaries then include
+`fps_target`, `fps_target_source`, `target_frame_ms`, `avg_fps_target_ratio`,
+and `fps_target_met`, and repeated comparisons can accept a candidate that
+sustains the target while reducing package power.
 Controlled capture temporarily installs a
 runtime user-service drop-in for `gamescope-mangoapp.service`, restarts
 `mangoapp`, and uses `mangohudctl` to start and stop one logging session per
@@ -289,6 +292,7 @@ steamos-intel-handheld-game-power-profile aggregate \
   --warmup-s 10 \
   --poll-s 2 \
   --fps-target 40 \
+  --fps-target-source manual \
   --min-runs 3
 ```
 

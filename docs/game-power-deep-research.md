@@ -872,6 +872,11 @@ unstable-or-unknown:
 - The guarded profiler accepts an explicit `PROFILE_GAME_POWER_FPS_TARGET`
   override and stores `fps_target`, `target_frame_ms`,
   `avg_fps_target_ratio`, and `fps_target_met` in every run summary.
+- When the explicit override is absent, the wrapper makes a best-effort
+  read-only pass over live `/proc/*/cmdline` entries whose executable name
+  contains `gamescope` and parses the focused `-r` frame-rate limit before the
+  `--` command separator. The result is stored in `fps-target.discovery.json`
+  with `fps_target_source` and confidence metadata.
 - Profile aggregation treats FPS target as part of the experiment context, so
   40 FPS, 45 FPS, 60 FPS, and uncapped runs do not share one median bucket.
 - The comparison gate now has a target-sustained power-saving path: if baseline
@@ -879,10 +884,10 @@ unstable-or-unknown:
   pacing does not regress beyond the rejection guard, restore is exact, and the
   candidate reduces package watts by at least 5%, the candidate can be accepted
   even when raw FPS does not increase.
-- This is still not automatic FPS-target discovery. The remaining work is to
-  validate the best SteamOS source: Steam client setting, gamescope state,
-  gamescopectl, stats pipe, or MangoHud. Until that source is proven on device,
-  the profiler uses the explicit target override for controlled A/B runs.
+- This is still only the first automatic FPS-target source, not a proven
+  SteamOS target oracle. The remaining work is to validate it against the Steam
+  client setting, gamescope state, gamescopectl, stats pipe, and MangoHud on a
+  live game session.
 
 ## Research Gaps
 
