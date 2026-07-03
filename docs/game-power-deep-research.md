@@ -1103,14 +1103,17 @@ ITMT priority is an input to the preferred-set ranking, not something to ignore.
    - cache only by AppID plus topology/kernel/driver/Proton/TDP/FPS-target
      fingerprint; never cache by raw TID.
 
-### Profiler Artifacts To Add Next
+### Profiler Artifacts
 
 - `cpu-topology.json`: CPU to policy, core type, SMT sibling, LLC/domain,
   capacity, HFI/ITMT hints when present, max frequency, and EPP state.
-- `sched-trace.jsonl`: optional guarded tracefs/perf-sched window around
-  frame-time spikes with wakeup, switch, migration, and run-queue delay.
 - `affinity-advice.json`: observe-only ranking of hot thread roles, migration
   harm score, preferred set candidates, and explicit reasons for no-op.
+
+### Profiler Artifacts To Add Next
+
+- `sched-trace.jsonl`: optional guarded tracefs/perf-sched window around
+  frame-time spikes with wakeup, switch, migration, and run-queue delay.
 - `background-shaping.json`: cgroup candidates for launcher/helper/background
   scopes before touching foreground game threads.
 - `restore-affinity.json`: original masks/cgroups/cpuset/uclamp snapshots for
@@ -1178,6 +1181,11 @@ unstable-or-unknown:
   pacing does not regress beyond the rejection guard, restore is exact, and the
   candidate reduces package watts by at least 5%, the candidate can be accepted
   even when raw FPS does not increase.
+- The guarded profiler now emits `cpu-topology.json` for each run by reading
+  `/sys/devices/system/cpu`, CPU topology, and CPUFreq policy files. The
+  summarizer uses it with `thread-affinity.jsonl` to write
+  `affinity-advice.json`, an observe-only advisor that ranks hot thread roles,
+  preferred latency CPUs, migration harm, and explicit no-write reasons.
 - This is still only the first automatic FPS-target source, not a proven
   SteamOS target oracle. The remaining work is to validate it against the Steam
   client setting, gamescope state, gamescopectl, stats pipe, and MangoHud on a

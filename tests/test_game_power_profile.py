@@ -6,6 +6,7 @@ from pathlib import Path
 
 from steamos_intel_handheld.game_power_profile import (
     CaptureMode,
+    CpuTopologySummary,
     FpsTargetDiscovery,
     GamePowerLogSummary,
     MangoHudFpsSummary,
@@ -13,6 +14,7 @@ from steamos_intel_handheld.game_power_profile import (
     RunSummary,
     ThreadAffinitySummary,
     aggregate_run_summaries,
+    build_affinity_advice,
     compare_policy_aggregates,
     compare_run_summaries,
     parse_game_power_jsonl,
@@ -20,6 +22,7 @@ from steamos_intel_handheld.game_power_profile import (
     parse_mangohud_fps_csv,
     parse_mangohud_summary_csv,
     parse_pressure_file,
+    summarize_cpu_topology,
     summarize_pressure_jsonl,
     summarize_thread_affinity_jsonl,
 )
@@ -265,6 +268,136 @@ def test_summarize_thread_affinity_jsonl_ranks_hot_threads_by_cpu_and_migrations
         "affinity_masks": ["0-5"],
         "cgroup": "app-steam-app1091500.scope",
     }
+
+
+def test_summarize_cpu_topology_groups_policy_domains_and_core_classes(tmp_path):
+    path = tmp_path / "cpu-topology.json"
+    path.write_text(
+        json.dumps(
+            {
+                "cpus": [
+                    {
+                        "cpu": 0,
+                        "online": True,
+                        "policy": "policy0",
+                        "core_type": "p-core",
+                        "capacity": 1024,
+                        "thread_siblings": "0,4",
+                        "core_id": 0,
+                        "physical_package_id": 0,
+                        "max_freq_khz": 4700000,
+                        "epp": "balance_performance",
+                    },
+                    {
+                        "cpu": 1,
+                        "online": True,
+                        "policy": "policy1",
+                        "core_type": "e-core",
+                        "capacity": 640,
+                        "thread_siblings": "1",
+                        "core_id": 1,
+                        "physical_package_id": 0,
+                        "max_freq_khz": 3200000,
+                        "epp": "balance_power",
+                    },
+                    {
+                        "cpu": 2,
+                        "online": False,
+                        "policy": "policy1",
+                        "core_type": "e-core",
+                        "capacity": 640,
+                        "thread_siblings": "2",
+                    },
+                ]
+            }
+        )
+        + "\n"
+    )
+
+    summary = summarize_cpu_topology(path)
+
+    assert isinstance(summary, CpuTopologySummary)
+    assert summary.cpu_count == 3
+    assert summary.online_cpu_count == 2
+    assert summary.core_class_counts == {"e-core": 2, "p-core": 1}
+    assert summary.policy_domains == [
+        {
+            "policy": "policy0",
+            "cpus": [0],
+            "core_classes": ["p-core"],
+            "max_freq_khz": 4700000,
+            "epp": "balance_performance",
+        },
+        {
+            "policy": "policy1",
+            "cpus": [1, 2],
+            "core_classes": ["e-core"],
+            "max_freq_khz": 3200000,
+            "epp": "balance_power",
+        },
+    ]
+
+
+def test_build_affinity_advice_outputs_observe_only_preferred_set_candidates(tmp_path):
+    topology_path = tmp_path / "cpu-topology.json"
+    topology_path.write_text(
+        json.dumps(
+            {
+                "cpus": [
+                    {"cpu": 0, "online": True, "core_type": "p-core", "capacity": 1024},
+                    {"cpu": 1, "online": True, "core_type": "p-core", "capacity": 1024},
+                    {"cpu": 2, "online": True, "core_type": "e-core", "capacity": 640},
+                    {"cpu": 3, "online": True, "core_type": "e-core", "capacity": 640},
+                ]
+            }
+        )
+        + "\n"
+    )
+    thread_affinity = ThreadAffinitySummary(
+        samples=2,
+        observed_threads=2,
+        hot_threads=[
+            {
+                "tid": 101,
+                "comm": "GameThread",
+                "cpu_time_s_delta": 3.5,
+                "migration_delta": 5,
+                "voluntary_ctxt_switches_delta": 11,
+                "nonvoluntary_ctxt_switches_delta": 5,
+                "cpus_seen": [0, 2],
+                "affinity_masks": ["0-3"],
+                "cgroup": "app-steam-app1091500.scope",
+            },
+            {
+                "tid": 102,
+                "comm": "Worker",
+                "cpu_time_s_delta": 0.4,
+                "migration_delta": 1,
+                "voluntary_ctxt_switches_delta": 1,
+                "nonvoluntary_ctxt_switches_delta": 0,
+                "cpus_seen": [3],
+                "affinity_masks": ["0-3"],
+                "cgroup": "app-steam-app1091500.scope",
+            },
+        ],
+    )
+
+    advice = build_affinity_advice(
+        topology=summarize_cpu_topology(topology_path),
+        thread_affinity=thread_affinity,
+        fps_target=40.0,
+        avg_fps=38.5,
+        avg_core_share=0.42,
+        avg_render_busy=0.93,
+    )
+
+    assert advice["mode"] == "observe-only"
+    assert advice["write_policy"] == "disabled"
+    assert advice["preferred_latency_cpus"] == [0, 1]
+    assert advice["ranked_threads"][0]["tid"] == 101
+    assert advice["ranked_threads"][0]["classification"] == "latency-hot"
+    assert advice["ranked_threads"][0]["migration_harm_score"] > 0
+    assert "hard affinity is profiler-only" in advice["reasons"]
 
 
 def test_compare_run_summaries_accepts_better_one_percent_low_without_avg_regression():
@@ -589,6 +722,7 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     game_power = tmp_path / "game-power.jsonl"
     pressure = tmp_path / "cgroup-pressure.jsonl"
     thread_affinity = tmp_path / "thread-affinity.jsonl"
+    cpu_topology = tmp_path / "cpu-topology.json"
     output = tmp_path / "profile"
     write_csv(
         mangohud,
@@ -658,6 +792,19 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
         )
         + "\n"
     )
+    cpu_topology.write_text(
+        json.dumps(
+            {
+                "cpus": [
+                    {"cpu": 0, "online": True, "core_type": "p-core", "capacity": 1024},
+                    {"cpu": 1, "online": True, "core_type": "p-core", "capacity": 1024},
+                    {"cpu": 2, "online": True, "core_type": "e-core", "capacity": 640},
+                    {"cpu": 3, "online": True, "core_type": "e-core", "capacity": 640},
+                ]
+            }
+        )
+        + "\n"
+    )
 
     result = subprocess.run(
         [
@@ -681,6 +828,8 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
             str(pressure),
             "--thread-affinity-jsonl",
             str(thread_affinity),
+            "--cpu-topology-json",
+            str(cpu_topology),
             "--fps-target",
             "40",
             "--output",
@@ -693,12 +842,15 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
 
     summary = json.loads((output / "summary.json").read_text())
     manifest = json.loads((output / "manifest.json").read_text())
+    advice = json.loads((output / "affinity-advice.json").read_text())
     assert "summary.json" in result.stdout
     assert manifest["appid"] == "1091500"
     assert manifest["policy"] == "gpu-priority"
     assert manifest["capture_mode"] == "imported"
     assert manifest["fps_target"] == 40.0
     assert manifest["fps_target_source"] == "manual"
+    assert manifest["cpu_topology_json"] is True
+    assert manifest["affinity_advice_json"] is True
     assert summary["avg_fps"] == 42.0
     assert summary["fps_target"] == 40.0
     assert summary["fps_target_source"] == "manual"
@@ -713,6 +865,9 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert summary["thread_affinity_hot_threads"][0]["migration_delta"] == 5
     assert summary["thread_affinity_hot_threads"][0]["nonvoluntary_ctxt_switches_delta"] == 5
     assert summary["restored"] is True
+    assert advice["mode"] == "observe-only"
+    assert advice["preferred_latency_cpus"] == [0, 1]
+    assert advice["ranked_threads"][0]["tid"] == 101
 
 
 def test_profile_cli_summarize_records_policy_tunables(tmp_path):

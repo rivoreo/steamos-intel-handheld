@@ -523,6 +523,101 @@ PY
   done
 }
 
+collect_cpu_topology() {
+  local output="$1"
+  python3 - "$output" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+output = pathlib.Path(sys.argv[1])
+cpu_root = pathlib.Path("/sys/devices/system/cpu")
+cpus = []
+
+
+def read_text(path):
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def read_int(path):
+    text = read_text(path)
+    if text is None or text == "":
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def cpufreq_policy(cpu_dir):
+    cpufreq = cpu_dir / "cpufreq"
+    if not cpufreq.exists():
+        return None
+    try:
+        resolved = cpufreq.resolve()
+    except OSError:
+        resolved = cpufreq
+    return resolved.name
+
+
+def core_type_label(cpu_dir, capacity):
+    text = read_text(cpu_dir / "topology" / "core_type")
+    if text:
+        lowered = text.lower()
+        if lowered in {"atom", "efficient", "e-core", "1"}:
+            return "e-core"
+        if lowered in {"core", "performance", "p-core", "2"}:
+            return "p-core"
+        return lowered
+    if capacity is not None:
+        return "p-core" if capacity >= 1024 else "e-core"
+    return "unknown"
+
+
+for cpu_dir in sorted(cpu_root.glob("cpu[0-9]*"), key=lambda item: int(item.name[3:])):
+    match = re.fullmatch(r"cpu([0-9]+)", cpu_dir.name)
+    if not match:
+        continue
+    cpu = int(match.group(1))
+    online_text = read_text(cpu_dir / "online")
+    online = True if online_text is None else online_text != "0"
+    policy_name = cpufreq_policy(cpu_dir)
+    policy_dir = cpu_dir / "cpufreq"
+    if policy_name:
+        candidate = cpu_root / "cpufreq" / policy_name
+        if candidate.exists():
+            policy_dir = candidate
+    capacity = read_int(cpu_dir / "cpu_capacity")
+    cpus.append(
+        {
+            "cpu": cpu,
+            "online": online,
+            "policy": policy_name,
+            "core_type": core_type_label(cpu_dir, capacity),
+            "capacity": capacity,
+            "thread_siblings": read_text(
+                cpu_dir / "topology" / "thread_siblings_list"
+            ),
+            "core_id": read_int(cpu_dir / "topology" / "core_id"),
+            "physical_package_id": read_int(
+                cpu_dir / "topology" / "physical_package_id"
+            ),
+            "max_freq_khz": read_int(policy_dir / "scaling_max_freq")
+            or read_int(policy_dir / "cpuinfo_max_freq"),
+            "epp": read_text(policy_dir / "energy_performance_preference"),
+            "scaling_driver": read_text(policy_dir / "scaling_driver"),
+            "affected_cpus": read_text(policy_dir / "affected_cpus"),
+        }
+    )
+
+output.write_text(json.dumps({"cpus": cpus}, indent=2, sort_keys=True) + "\n")
+PY
+}
+
 if [ "$CAPTURE_MODE" != "imported" ] && [ "$CAPTURE_MODE" != "controlled" ]; then
   echo "unsupported PROFILE_GAME_POWER_CAPTURE_MODE: $CAPTURE_MODE" >&2
   exit 2
@@ -571,6 +666,7 @@ for repeat in $(seq 1 "$REPEATS"); do
         run_dir="$REMOTE_ROOT/$(date +%Y%m%dT%H%M%S)-app${APPID}-${tdp}w-${run_policy_label}-r${repeat}"
         mkdir -p "$run_dir"
         cp "$REMOTE_ROOT/fps-target.discovery.json" "$run_dir/fps-target.discovery.json"
+        collect_cpu_topology "$run_dir/cpu-topology.json"
         snapshot_cpu_policy >"$run_dir/cpu-policy.before"
         provider_tdp >"$run_dir/tdp.before"
 
@@ -654,6 +750,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           --game-power-jsonl "$run_dir/game-power.jsonl" \
           --pressure-jsonl "$run_dir/cgroup-pressure.jsonl" \
           --thread-affinity-jsonl "$run_dir/thread-affinity.jsonl" \
+          --cpu-topology-json "$run_dir/cpu-topology.json" \
           --epp "$EPP" \
           --pcore-max-mhz "$variant_pcore_max_mhz" \
           --ecore-max-mhz "$variant_ecore_max_mhz" \
@@ -664,6 +761,10 @@ for repeat in $(seq 1 "$REPEATS"); do
           --poll-s "$POLL_S" \
           --restored "$restored" \
           --output "$run_dir"
+        if [ ! -f "$run_dir/affinity-advice.json" ]; then
+          echo "missing affinity-advice.json in $run_dir" >&2
+          exit 1
+        fi
       done
     done
   done

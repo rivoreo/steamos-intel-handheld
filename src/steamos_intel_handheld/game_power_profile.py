@@ -57,6 +57,15 @@ class ThreadAffinitySummary:
 
 
 @dataclass(frozen=True)
+class CpuTopologySummary:
+    cpu_count: int
+    online_cpu_count: int
+    core_class_counts: dict[str, int]
+    policy_domains: list[dict[str, object]]
+    cpus: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
 class FpsTargetDiscovery:
     fps_target: float | None
     source: str
@@ -348,6 +357,116 @@ def summarize_thread_affinity_jsonl(
         observed_threads=len(threads),
         hot_threads=hot_threads[:hot_thread_limit],
     )
+
+
+def summarize_cpu_topology(path: str | Path) -> CpuTopologySummary:
+    payload = json.loads(Path(path).read_text())
+    raw_cpus = payload.get("cpus") if isinstance(payload, dict) else None
+    if not isinstance(raw_cpus, list):
+        raw_cpus = []
+
+    cpus = [_normalize_cpu_topology_item(item) for item in raw_cpus]
+    cpus.sort(key=lambda item: int(item["cpu"]))
+
+    core_class_counts: dict[str, int] = {}
+    policy_domain_state: dict[str, dict[str, object]] = {}
+    for cpu in cpus:
+        core_class = str(cpu["core_type"])
+        core_class_counts[core_class] = core_class_counts.get(core_class, 0) + 1
+        policy = _optional_str(cpu.get("policy"))
+        if policy is None:
+            continue
+        domain = policy_domain_state.setdefault(
+            policy,
+            {
+                "policy": policy,
+                "cpus": [],
+                "core_classes": set(),
+                "max_freq_khz": None,
+                "epp": None,
+            },
+        )
+        domain_cpus = domain["cpus"]
+        assert isinstance(domain_cpus, list)
+        domain_cpus.append(cpu["cpu"])
+        domain_classes = domain["core_classes"]
+        assert isinstance(domain_classes, set)
+        domain_classes.add(core_class)
+        max_freq = _optional_int(cpu.get("max_freq_khz"))
+        current_max = _optional_int(domain.get("max_freq_khz"))
+        if max_freq is not None and (current_max is None or max_freq > current_max):
+            domain["max_freq_khz"] = max_freq
+        if domain["epp"] is None:
+            domain["epp"] = _optional_str(cpu.get("epp"))
+
+    policy_domains = []
+    for domain in policy_domain_state.values():
+        classes = domain["core_classes"]
+        assert isinstance(classes, set)
+        policy_domains.append(
+            {
+                "policy": domain["policy"],
+                "cpus": sorted(domain["cpus"]),
+                "core_classes": sorted(classes),
+                "max_freq_khz": domain["max_freq_khz"],
+                "epp": domain["epp"],
+            }
+        )
+    policy_domains.sort(key=lambda item: str(item["policy"]))
+
+    return CpuTopologySummary(
+        cpu_count=len(cpus),
+        online_cpu_count=sum(1 for cpu in cpus if cpu["online"] is True),
+        core_class_counts=dict(sorted(core_class_counts.items())),
+        policy_domains=policy_domains,
+        cpus=cpus,
+    )
+
+
+def build_affinity_advice(
+    *,
+    topology: CpuTopologySummary | None,
+    thread_affinity: ThreadAffinitySummary | None,
+    fps_target: float | None,
+    avg_fps: float | None,
+    avg_core_share: float | None,
+    avg_render_busy: float | None,
+) -> dict[str, object]:
+    preferred_latency_cpus = _preferred_latency_cpus(topology)
+    ranked_threads = []
+    if thread_affinity is not None:
+        ranked_threads = [
+            _ranked_affinity_thread(item, preferred_latency_cpus)
+            for item in thread_affinity.hot_threads
+        ]
+        ranked_threads.sort(
+            key=lambda item: (
+                -float(item["migration_harm_score"]),
+                -float(item["cpu_time_s_delta"]),
+                int(item["tid"]),
+            )
+        )
+    reasons = [
+        "hard affinity is profiler-only",
+        "advisor output is observe-only until repeated A/B captures validate a policy",
+    ]
+    if fps_target is not None and avg_fps is not None:
+        if avg_fps < fps_target * FPS_TARGET_TOLERANCE:
+            reasons.append("average FPS is below target tolerance")
+        else:
+            reasons.append("average FPS is within target tolerance")
+    if avg_render_busy is not None and avg_render_busy >= 0.9:
+        reasons.append("render engine appears busy; avoid foreground CPU caps first")
+    if avg_core_share is not None and avg_core_share >= 0.4:
+        reasons.append("core package share is high; inspect background/helper work")
+
+    return {
+        "mode": "observe-only",
+        "write_policy": "disabled",
+        "preferred_latency_cpus": preferred_latency_cpus,
+        "ranked_threads": ranked_threads,
+        "reasons": reasons,
+    }
 
 
 def merge_run_summary(
@@ -737,6 +856,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--game-power-jsonl")
     summarize.add_argument("--pressure-jsonl")
     summarize.add_argument("--thread-affinity-jsonl")
+    summarize.add_argument("--cpu-topology-json")
     summarize.add_argument("--epp")
     summarize.add_argument("--pcore-max-mhz", type=int)
     summarize.add_argument("--ecore-max-mhz", type=int)
@@ -790,6 +910,9 @@ def run_summarize(args: argparse.Namespace) -> Path:
         if args.thread_affinity_jsonl
         else None
     )
+    cpu_topology = (
+        summarize_cpu_topology(args.cpu_topology_json) if args.cpu_topology_json else None
+    )
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -812,6 +935,8 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "warmup_s": args.warmup_s,
         "poll_s": args.poll_s,
         "thread_affinity_jsonl": bool(args.thread_affinity_jsonl),
+        "cpu_topology_json": bool(args.cpu_topology_json),
+        "affinity_advice_json": bool(cpu_topology and thread_affinity),
     }
     summary = merge_run_summary(
         appid=args.appid,
@@ -837,6 +962,18 @@ def run_summarize(args: argparse.Namespace) -> Path:
     (output / "summary.json").write_text(
         json.dumps(_json_ready(asdict(summary)), indent=2, sort_keys=True) + "\n"
     )
+    if cpu_topology is not None and thread_affinity is not None:
+        advice = build_affinity_advice(
+            topology=cpu_topology,
+            thread_affinity=thread_affinity,
+            fps_target=args.fps_target,
+            avg_fps=summary.avg_fps,
+            avg_core_share=summary.avg_core_share,
+            avg_render_busy=summary.avg_render_busy,
+        )
+        (output / "affinity-advice.json").write_text(
+            json.dumps(_json_ready(advice), indent=2, sort_keys=True) + "\n"
+        )
     return output / "summary.json"
 
 
@@ -1024,6 +1161,92 @@ def _optional_str(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _normalize_cpu_topology_item(item: object) -> dict[str, object]:
+    if not isinstance(item, dict):
+        item = {}
+    cpu = _optional_int(item.get("cpu"))
+    if cpu is None:
+        cpu = -1
+    online = _boolish(item.get("online"), default=True)
+    core_type = _optional_str(item.get("core_type")) or "unknown"
+    return {
+        "cpu": cpu,
+        "online": online,
+        "policy": _optional_str(item.get("policy")),
+        "core_type": core_type,
+        "capacity": _optional_int(item.get("capacity")),
+        "thread_siblings": _optional_str(item.get("thread_siblings")),
+        "core_id": _optional_int(item.get("core_id")),
+        "physical_package_id": _optional_int(item.get("physical_package_id")),
+        "max_freq_khz": _optional_int(item.get("max_freq_khz")),
+        "epp": _optional_str(item.get("epp")),
+    }
+
+
+def _boolish(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = _optional_str(value)
+    if text is None:
+        return default
+    return text.lower() not in {"0", "false", "no", "offline"}
+
+
+def _preferred_latency_cpus(topology: CpuTopologySummary | None) -> list[int]:
+    if topology is None:
+        return []
+    online = [cpu for cpu in topology.cpus if cpu.get("online") is True]
+    p_cores = [cpu for cpu in online if cpu.get("core_type") == "p-core"]
+    candidates = p_cores or online
+    candidates.sort(
+        key=lambda item: (
+            -(_optional_int(item.get("capacity")) or 0),
+            _optional_int(item.get("cpu")) or 0,
+        )
+    )
+    return [int(cpu["cpu"]) for cpu in candidates]
+
+
+def _ranked_affinity_thread(
+    item: dict[str, object],
+    preferred_latency_cpus: list[int],
+) -> dict[str, object]:
+    cpu_delta = _float(item.get("cpu_time_s_delta")) or 0.0
+    migration_delta = _optional_int(item.get("migration_delta")) or 0
+    involuntary_delta = _optional_int(item.get("nonvoluntary_ctxt_switches_delta")) or 0
+    cpus_seen = item.get("cpus_seen")
+    if not isinstance(cpus_seen, list):
+        cpus_seen = []
+    migration_harm_score = round(
+        migration_delta * max(cpu_delta, 0.001) + involuntary_delta * 0.25,
+        3,
+    )
+    classification = "throughput-worker"
+    if migration_delta >= 3 and cpu_delta >= 1.0:
+        classification = "latency-hot"
+    elif migration_delta >= 2 or involuntary_delta >= 3:
+        classification = "latency-light"
+    suggested_action = (
+        "observe"
+        if classification == "throughput-worker"
+        else "prefer-latency-cpus"
+    )
+    preferred_overlap = sorted(
+        cpu for cpu in cpus_seen if isinstance(cpu, int) and cpu in preferred_latency_cpus
+    )
+    return {
+        "tid": item.get("tid"),
+        "comm": item.get("comm"),
+        "classification": classification,
+        "cpu_time_s_delta": round(cpu_delta, 3),
+        "migration_delta": migration_delta,
+        "migration_harm_score": migration_harm_score,
+        "cpus_seen": cpus_seen,
+        "preferred_cpu_overlap": preferred_overlap,
+        "suggested_action": suggested_action,
+    }
 
 
 def _thread_hotspot(state: dict[str, object]) -> dict[str, object]:
