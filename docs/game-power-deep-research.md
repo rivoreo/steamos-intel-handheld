@@ -721,6 +721,11 @@ interfaces and research point in the same direction:
   deadline scheduler which considers CPU topology such as LLC domains and
   P/E-core classes. That supports our design choice to classify behavior from
   telemetry rather than ship a hand-written per-game affinity table.
+- `perf sched timehist` is a useful future escalation path because it reports
+  wait time, scheduler delay, and run time per task event. The current
+  `/proc/<pid>/task/<tid>/schedstat` sampler is intentionally cheaper and less
+  invasive; trace/perf windows should be reserved for short captures around
+  frame-time spikes.
 
 Current implementation state: the guarded device profiler now emits
 `thread-affinity.jsonl` and `thread-schedstat.jsonl` for the foreground Steam
@@ -729,9 +734,12 @@ voluntary and involuntary context-switch counters, scheduler run time,
 runqueue wait time, timeslice count, current CPU, affinity mask, and cgroup
 path. The summary ranks hot threads by CPU-time delta, preserves
 migration/context-switch deltas, and now adds runqueue-wait deltas to
-`affinity-advice.json`. This is intentionally observe-only; it creates the
-evidence needed for later affinity A/B experiments without changing scheduler
-state.
+`affinity-advice.json`. The advisor also emits `role_candidates`, grouping raw
+TIDs into stable signatures such as `foreground-game:worker-thread`. Raw TIDs
+are useful inside one capture, but role keys are the only acceptable unit for
+cross-launch A/B comparison or future policy caches. This is intentionally
+observe-only; it creates the evidence needed for later affinity A/B experiments
+without changing scheduler state.
 
 Primary references used for this slice:
 
@@ -743,8 +751,12 @@ Primary references used for this slice:
   https://docs.kernel.org/admin-guide/cgroup-v2.html
 - Linux trace events:
   https://docs.kernel.org/trace/events.html
+- Linux perf sched:
+  https://man7.org/linux/man-pages/man1/perf-sched.1.html
 - Linux sched_ext:
   https://docs.kernel.org/scheduler/sched-ext.html
+- Windows CPU Sets:
+  https://learn.microsoft.com/en-us/windows/win32/procthread/cpu-sets
 - sched-ext `scx_lavd` README:
   https://github.com/sched-ext/scx/tree/main/scheds/rust/scx_lavd
 
@@ -786,7 +798,9 @@ The governor should classify threads by behavior over a sliding window:
 1. Observe-only hotspot detector
    - Rank TIDs by CPU time, wakeup cadence, run-queue delay, migration rate,
      and frame-time correlation.
-   - Emit recommendations only; no affinity writes.
+   - Group TIDs into role signatures by foreground/background cgroup role and
+     normalized thread name, then emit recommendations only; no affinity
+     writes.
 
 2. Soft compact placement
    - Keep foreground game threads eligible on enough CPUs, but bias hot threads
@@ -801,6 +815,9 @@ The governor should classify threads by behavior over a sliding window:
    - Reject if average FPS, 1% low, p99, package balance, or restore gets worse.
    - Never persist by thread ID alone because TIDs and engine thread layouts
      change across launches and updates.
+   - Future write-mode experiments should select a role signature from repeated
+     captures, map it to the live TID set at runtime, snapshot original masks,
+     apply for one bounded run, and restore immediately after the run.
 
 4. sched_ext/LAVD experiment
    - When sched_ext is available, test `scx_lavd` or a future custom scheduler
@@ -821,6 +838,9 @@ The governor should classify threads by behavior over a sliding window:
   changes, or FPS target/TDP changes.
 - Store affinity observations as profiler artifacts, not as permanent manual
   profiles, until repeated controlled captures validate the same pattern.
+- Store cross-run affinity evidence by role key plus AppID/topology/kernel/
+  Proton/TDP/FPS-target fingerprint. Do not cache raw TID, because it is a
+  launch-local implementation detail rather than a stable game behavior.
 
 ## Decky Plugin Control Surface
 
@@ -1160,8 +1180,8 @@ ITMT priority is an input to the preferred-set ranking, not something to ignore.
   summarizer converts counters to deltas and adds runqueue-wait fields to
   `affinity-advice.json`.
 - `affinity-advice.json`: observe-only ranking of hot thread roles, migration
-  harm score, runqueue-wait score, preferred set candidates, and explicit
-  reasons for no-op.
+  harm score, runqueue-wait score, preferred set candidates, stable role
+  candidates, and explicit reasons for no-op.
 - `process-cgroups.jsonl`: read-only process-level CPU-time and cgroup samples
   for foreground game, Steam helpers, gamescope/mangoapp, user, and system
   scopes.
@@ -1244,6 +1264,12 @@ unstable-or-unknown:
   `affinity-advice.json`, an observe-only advisor that ranks hot thread roles,
   preferred latency CPUs, migration harm, runqueue wait, and explicit no-write
   reasons.
+- `affinity-advice.json` now includes `role_candidates`. Each role key combines
+  cgroup role and normalized thread name, for example
+  `foreground-game:worker-thread`, then aggregates CPU time, migration count,
+  runqueue wait, seen CPUs, preferred CPU overlap, and suggested action across
+  matching TIDs. This is the first cross-run unit for automatic affinity A/B
+  analysis.
 - The guarded profiler now emits `thread-schedstat.jsonl` for each run by
   sampling read-only `/proc/<pid>/task/<tid>/schedstat` for foreground Steam
   app cgroups. This is the first automatic-affinity latency signal because it

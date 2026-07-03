@@ -625,6 +625,7 @@ def build_affinity_advice(
                 int(item["tid"]),
             )
         )
+    role_candidates = _affinity_role_candidates(ranked_threads)
     reasons = [
         "hard affinity is profiler-only",
         "advisor output is observe-only until repeated A/B captures validate a policy",
@@ -644,6 +645,7 @@ def build_affinity_advice(
         "write_policy": "disabled",
         "preferred_latency_cpus": preferred_latency_cpus,
         "ranked_threads": ranked_threads,
+        "role_candidates": role_candidates,
         "reasons": reasons,
     }
 
@@ -1528,9 +1530,14 @@ def _ranked_affinity_thread(
     preferred_overlap = sorted(
         cpu for cpu in cpus_seen if isinstance(cpu, int) and cpu in preferred_latency_cpus
     )
+    cgroup_role = _thread_cgroup_role(item.get("cgroup"))
+    comm = item.get("comm")
+    role_key = f"{cgroup_role}:{_normalize_role_part(comm)}"
     result = {
         "tid": item.get("tid"),
-        "comm": item.get("comm"),
+        "comm": comm,
+        "role_key": role_key,
+        "cgroup_role": cgroup_role,
         "classification": classification,
         "cpu_time_s_delta": round(cpu_delta, 3),
         "migration_delta": migration_delta,
@@ -1552,6 +1559,150 @@ def _ranked_affinity_thread(
             }
         )
     return result
+
+
+def _affinity_role_candidates(
+    ranked_threads: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    roles: dict[str, dict[str, object]] = {}
+    for thread in ranked_threads:
+        role_key = _optional_str(thread.get("role_key"))
+        if role_key is None:
+            continue
+        role = roles.setdefault(
+            role_key,
+            {
+                "role_key": role_key,
+                "comm": thread.get("comm"),
+                "cgroup_role": thread.get("cgroup_role"),
+                "classification": "throughput-worker",
+                "thread_count": 0,
+                "tids": set(),
+                "cpu_time_s_delta": 0.0,
+                "migration_delta": 0,
+                "runqueue_wait_ms_delta": 0.0,
+                "runqueue_wait_per_slice_ms_max": 0.0,
+                "migration_harm_score_max": 0.0,
+                "cpus_seen": set(),
+                "preferred_cpu_overlap": set(),
+                "suggested_action": "observe",
+            },
+        )
+        role["thread_count"] = int(role["thread_count"]) + 1
+        _set_add_optional_int(role["tids"], thread.get("tid"))
+        role["cpu_time_s_delta"] = float(role["cpu_time_s_delta"]) + (
+            _float(thread.get("cpu_time_s_delta")) or 0.0
+        )
+        role["migration_delta"] = int(role["migration_delta"]) + (
+            _optional_int(thread.get("migration_delta")) or 0
+        )
+        role["runqueue_wait_ms_delta"] = float(role["runqueue_wait_ms_delta"]) + (
+            _float(thread.get("runqueue_wait_ms_delta")) or 0.0
+        )
+        role["runqueue_wait_per_slice_ms_max"] = max(
+            float(role["runqueue_wait_per_slice_ms_max"]),
+            _float(thread.get("runqueue_wait_per_slice_ms")) or 0.0,
+        )
+        role["migration_harm_score_max"] = max(
+            float(role["migration_harm_score_max"]),
+            _float(thread.get("migration_harm_score")) or 0.0,
+        )
+        _extend_int_set(role["cpus_seen"], thread.get("cpus_seen"))
+        _extend_int_set(role["preferred_cpu_overlap"], thread.get("preferred_cpu_overlap"))
+        thread_classification = _optional_str(thread.get("classification"))
+        if _classification_rank(thread_classification) > _classification_rank(
+            _optional_str(role.get("classification"))
+        ):
+            role["classification"] = thread_classification
+        if thread.get("suggested_action") == "prefer-latency-cpus":
+            role["suggested_action"] = "prefer-latency-cpus"
+
+    candidates = [_finalize_affinity_role(role) for role in roles.values()]
+    candidates.sort(
+        key=lambda item: (
+            -float(item["migration_harm_score_max"]),
+            -float(item["runqueue_wait_ms_delta"]),
+            -float(item["cpu_time_s_delta"]),
+            str(item["role_key"]),
+        )
+    )
+    return candidates
+
+
+def _finalize_affinity_role(role: dict[str, object]) -> dict[str, object]:
+    tids = role.get("tids")
+    cpus_seen = role.get("cpus_seen")
+    preferred_overlap = role.get("preferred_cpu_overlap")
+    return {
+        "role_key": role.get("role_key"),
+        "comm": role.get("comm"),
+        "cgroup_role": role.get("cgroup_role"),
+        "classification": role.get("classification"),
+        "thread_count": role.get("thread_count"),
+        "tids": sorted(tids) if isinstance(tids, set) else [],
+        "cpu_time_s_delta": round(float(role["cpu_time_s_delta"]), 3),
+        "migration_delta": role.get("migration_delta"),
+        "runqueue_wait_ms_delta": round(float(role["runqueue_wait_ms_delta"]), 3),
+        "runqueue_wait_per_slice_ms_max": round(
+            float(role["runqueue_wait_per_slice_ms_max"]),
+            3,
+        ),
+        "migration_harm_score_max": round(float(role["migration_harm_score_max"]), 3),
+        "cpus_seen": sorted(cpus_seen) if isinstance(cpus_seen, set) else [],
+        "preferred_cpu_overlap": (
+            sorted(preferred_overlap) if isinstance(preferred_overlap, set) else []
+        ),
+        "suggested_action": role.get("suggested_action"),
+    }
+
+
+def _set_add_optional_int(values: object, value: object) -> None:
+    parsed = _optional_int(value)
+    if parsed is None or not isinstance(values, set):
+        return
+    values.add(parsed)
+
+
+def _extend_int_set(values: object, items: object) -> None:
+    if not isinstance(values, set) or not isinstance(items, list):
+        return
+    for item in items:
+        parsed = _optional_int(item)
+        if parsed is not None:
+            values.add(parsed)
+
+
+def _classification_rank(classification: str | None) -> int:
+    return {
+        "throughput-worker": 0,
+        "latency-light": 1,
+        "latency-hot": 2,
+    }.get(classification or "", -1)
+
+
+def _thread_cgroup_role(cgroup: object) -> str:
+    text = (_optional_str(cgroup) or "").lower()
+    if "app-steam-app" in text:
+        return "foreground-game"
+    if "gamescope" in text or "mangoapp" in text:
+        return "gamescope-helper"
+    if "steam" in text:
+        return "steam-helper"
+    return "other"
+
+
+def _normalize_role_part(value: object) -> str:
+    text = (_optional_str(value) or "unknown").lower()
+    normalized = []
+    previous_dash = False
+    for char in text:
+        if char.isalnum():
+            normalized.append(char)
+            previous_dash = False
+        elif not previous_dash:
+            normalized.append("-")
+            previous_dash = True
+    return "".join(normalized).strip("-") or "unknown"
 
 
 def _classify_background_cgroup(cgroup: str, command: object) -> str:

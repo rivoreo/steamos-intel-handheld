@@ -270,7 +270,10 @@ topology capture is also read-only and records CPU class, CPUFreq policy,
 capacity, SMT sibling, max-frequency, and EPP hints when the kernel exposes
 them.
 `affinity-advice.json` is an observe-only advisor output; it ranks hot threads
-and preferred latency CPUs but does not apply affinity, cgroup, or uclamp
+and preferred latency CPUs, and also groups threads into stable role candidates
+such as `foreground-game:worker-thread`. Raw TIDs are kept for a single run, but
+role candidates are the intended unit for repeated A/B analysis because TIDs
+change across launches. The advisor does not apply affinity, cgroup, or uclamp
 writes. `background-shaping.json` is also observe-only; it ranks non-foreground
 Steam, gamescope/mangoapp, user, and system cgroups whose CPU time may compete
 with the foreground game before any foreground thread pinning is considered.

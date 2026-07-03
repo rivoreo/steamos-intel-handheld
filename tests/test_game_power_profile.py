@@ -606,6 +606,116 @@ def test_build_affinity_advice_outputs_observe_only_preferred_set_candidates(tmp
     assert "hard affinity is profiler-only" in advice["reasons"]
 
 
+def test_build_affinity_advice_groups_threads_by_stable_role_key(tmp_path):
+    topology = CpuTopologySummary(
+        cpu_count=4,
+        online_cpu_count=4,
+        core_class_counts={"p-core": 2, "e-core": 2},
+        policy_domains=[],
+        cpus=[
+            {"cpu": 0, "online": True, "core_type": "p-core", "capacity": 1024},
+            {"cpu": 1, "online": True, "core_type": "p-core", "capacity": 1024},
+            {"cpu": 2, "online": True, "core_type": "e-core", "capacity": 640},
+            {"cpu": 3, "online": True, "core_type": "e-core", "capacity": 640},
+        ],
+    )
+    thread_affinity = ThreadAffinitySummary(
+        samples=2,
+        observed_threads=3,
+        hot_threads=[
+            {
+                "tid": 201,
+                "comm": "Worker Thread",
+                "cpu_time_s_delta": 1.2,
+                "migration_delta": 3,
+                "voluntary_ctxt_switches_delta": 4,
+                "nonvoluntary_ctxt_switches_delta": 2,
+                "cpus_seen": [0, 2],
+                "affinity_masks": ["0-3"],
+                "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+            },
+            {
+                "tid": 202,
+                "comm": "Worker Thread",
+                "cpu_time_s_delta": 0.8,
+                "migration_delta": 2,
+                "voluntary_ctxt_switches_delta": 3,
+                "nonvoluntary_ctxt_switches_delta": 1,
+                "cpus_seen": [1, 3],
+                "affinity_masks": ["0-3"],
+                "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+            },
+            {
+                "tid": 301,
+                "comm": "Render Thread",
+                "cpu_time_s_delta": 0.4,
+                "migration_delta": 0,
+                "voluntary_ctxt_switches_delta": 1,
+                "nonvoluntary_ctxt_switches_delta": 0,
+                "cpus_seen": [2],
+                "affinity_masks": ["0-3"],
+                "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+            },
+        ],
+    )
+    thread_schedstat = ThreadSchedstatSummary(
+        samples=2,
+        observed_threads=2,
+        hot_threads=[
+            {
+                "tid": 201,
+                "comm": "Worker Thread",
+                "run_time_s_delta": 1.1,
+                "runqueue_wait_ms_delta": 80.0,
+                "timeslices_delta": 20,
+                "runqueue_wait_per_slice_ms": 4.0,
+                "runqueue_wait_ratio": 0.068,
+                "cpus_seen": [0, 2],
+                "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+            },
+            {
+                "tid": 202,
+                "comm": "Worker Thread",
+                "run_time_s_delta": 0.7,
+                "runqueue_wait_ms_delta": 20.0,
+                "timeslices_delta": 10,
+                "runqueue_wait_per_slice_ms": 2.0,
+                "runqueue_wait_ratio": 0.028,
+                "cpus_seen": [1, 3],
+                "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+            },
+        ],
+    )
+
+    advice = build_affinity_advice(
+        topology=topology,
+        thread_affinity=thread_affinity,
+        thread_schedstat=thread_schedstat,
+        fps_target=40.0,
+        avg_fps=36.0,
+        avg_core_share=0.45,
+        avg_render_busy=0.8,
+    )
+
+    assert advice["ranked_threads"][0]["role_key"] == "foreground-game:worker-thread"
+    assert advice["role_candidates"][0] == {
+        "role_key": "foreground-game:worker-thread",
+        "comm": "Worker Thread",
+        "cgroup_role": "foreground-game",
+        "classification": "latency-hot",
+        "thread_count": 2,
+        "tids": [201, 202],
+        "cpu_time_s_delta": 2.0,
+        "migration_delta": 5,
+        "runqueue_wait_ms_delta": 100.0,
+        "runqueue_wait_per_slice_ms_max": 4.0,
+        "migration_harm_score_max": advice["ranked_threads"][0]["migration_harm_score"],
+        "cpus_seen": [0, 1, 2, 3],
+        "preferred_cpu_overlap": [0, 1],
+        "suggested_action": "prefer-latency-cpus",
+    }
+
+
 def test_compare_run_summaries_accepts_better_one_percent_low_without_avg_regression():
     baseline = RunSummary(
         appid="1091500",
