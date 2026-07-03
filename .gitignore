@@ -11,4 +11,5 @@ decky/steamos-intel-handheld-ec/dist/*.map
 .venv/
 .DS_Store
 .cache/
+.worktrees/
 reference/steamos-holo/
