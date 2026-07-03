@@ -241,6 +241,7 @@ To include the stronger CPU max-frequency cap candidate, opt into it in the
 profile matrix instead of changing the installed default:
 
 ```bash
+PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
 PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap" \
 PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000 \
 PROFILE_GAME_POWER_ECORE_MAX_MHZ=2200 \
@@ -253,7 +254,11 @@ standalone profiler controls the test policy and the `off` run is a real
 baseline. Results are copied into `.cache/game-power/profiles/`. Each run
 directory contains `manifest.json`, `summary.json`, `game-power.jsonl`,
 `cgroup-pressure.jsonl`, CPU policy snapshots, TDP snapshots, and the MangoHud
-CSV used for FPS analysis.
+CSV/summary used for FPS analysis. Controlled capture temporarily installs a
+runtime user-service drop-in for `gamescope-mangoapp.service`, restarts
+`mangoapp`, and uses `mangohudctl` to start and stop one logging session per
+policy run. The drop-in is removed and `mangoapp` is restarted again during
+restore.
 
 Imported captures are useful for parser and comparison development, but they do
 not prove an automated A/B result. A policy recommendation requires controlled

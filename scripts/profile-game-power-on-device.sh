@@ -31,6 +31,7 @@ ECORE_MAX_MHZ='$ecore_max_mhz' \
 CPU_CAP_CORE_SHARE_THRESHOLD='$cpu_cap_core_share_threshold' \
 REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
 set -euo pipefail
+MANGOHUD_OUTPUT_DIR="$REMOTE_ROOT/mangohud-logs"
 
 wait_for_power_service() {
   for _ in $(seq 1 45); do
@@ -120,7 +121,73 @@ restore_service_game_power_mode() {
   wait_for_power_provider
 }
 
+run_as_deck() {
+  local uid runtime_dir
+  uid="$(id -u deck)"
+  runtime_dir="/run/user/$uid"
+  runuser -u deck -- env \
+    XDG_RUNTIME_DIR="$runtime_dir" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
+    "$@"
+}
+
+deck_systemctl() {
+  run_as_deck systemctl --user "$@"
+}
+
+wait_for_mangoapp_service() {
+  for _ in $(seq 1 45); do
+    if deck_systemctl is-active --quiet gamescope-mangoapp.service; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "timed out waiting for gamescope-mangoapp.service" >&2
+  return 1
+}
+
+setup_mangohud_controlled_capture() {
+  if [ "$CAPTURE_MODE" = "controlled" ]; then
+    if ! command -v mangohudctl >/dev/null; then
+      echo "controlled capture requires mangohudctl on the target" >&2
+      exit 1
+    fi
+    install -d -o deck -g deck -m 0755 "$MANGOHUD_OUTPUT_DIR"
+    local uid dropin_dir
+    uid="$(id -u deck)"
+    dropin_dir="/run/user/$uid/systemd/user/gamescope-mangoapp.service.d"
+    install -d -o deck -g deck -m 0755 "$dropin_dir"
+    cat >"$dropin_dir/50-game-power-profile.conf" <<EOF
+[Service]
+WorkingDirectory=/home/deck
+Environment=MANGOHUD_CONFIG=output_folder=$MANGOHUD_OUTPUT_DIR,log_interval=100,fps_metrics=avg+0.01+0.001,benchmark_percentiles=97+AVG
+EOF
+    chown deck:deck "$dropin_dir/50-game-power-profile.conf"
+    deck_systemctl daemon-reload
+    deck_systemctl restart gamescope-mangoapp.service
+    wait_for_mangoapp_service
+    run_as_deck sh -c 'cd /home/deck && mangohudctl set log_session false' \
+      >/dev/null 2>&1 || true
+  fi
+}
+
+restore_mangohud_controlled_capture() {
+  if [ "$CAPTURE_MODE" = "controlled" ]; then
+    run_as_deck sh -c 'cd /home/deck && mangohudctl set log_session false' \
+      >/dev/null 2>&1 || true
+    local uid dropin_dir
+    uid="$(id -u deck)"
+    dropin_dir="/run/user/$uid/systemd/user/gamescope-mangoapp.service.d"
+    rm -f "$dropin_dir/50-game-power-profile.conf"
+    rmdir "$dropin_dir" 2>/dev/null || true
+    deck_systemctl daemon-reload || true
+    deck_systemctl restart gamescope-mangoapp.service || true
+    wait_for_mangoapp_service || true
+  fi
+}
+
 restore_state() {
+  restore_mangohud_controlled_capture || true
   restore_cpu_policy || true
   if [ -f "$REMOTE_ROOT/tdp.initial" ]; then
     if wait_for_power_provider >/dev/null 2>&1; then
@@ -135,6 +202,69 @@ restore_state() {
 latest_mangohud_csv() {
   find /home/deck -maxdepth 1 -name 'mangoapp_*.csv' -type f -printf '%T@ %p\n' \
     2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-
+}
+
+start_mangohud_capture() {
+  local run_dir="$1"
+  if [ "$CAPTURE_MODE" = "controlled" ]; then
+    touch "$run_dir/mangohud.start"
+    run_as_deck sh -c 'cd /home/deck && mangohudctl set log_session false' \
+      >/dev/null 2>&1 || true
+    run_as_deck sh -c 'cd /home/deck && mangohudctl set log_session true'
+  fi
+}
+
+stop_mangohud_capture() {
+  if [ "$CAPTURE_MODE" = "controlled" ]; then
+    run_as_deck sh -c 'cd /home/deck && mangohudctl set log_session false'
+  fi
+}
+
+collect_imported_mangohud_csv() {
+  local run_dir="$1"
+  local csv summary
+  csv="$(latest_mangohud_csv)"
+  if [ -z "$csv" ]; then
+    echo "no MangoHud CSV log found under /home/deck" >&2
+    exit 1
+  fi
+  cp "$csv" "$run_dir/mangohud.csv"
+  summary="${csv%.csv}_summary.csv"
+  if [ -f "$summary" ]; then
+    cp "$summary" "$run_dir/mangohud-summary.csv"
+  fi
+}
+
+collect_controlled_mangohud_csv() {
+  local run_dir="$1"
+  local summary csv
+  for _ in $(seq 1 20); do
+    summary="$(
+      find "$MANGOHUD_OUTPUT_DIR" -maxdepth 1 -name 'mangoapp_*_summary.csv' \
+        -newer "$run_dir/mangohud.start" -printf '%T@ %p\n' 2>/dev/null \
+        | sort -n | tail -n 1 | cut -d' ' -f2-
+    )"
+    if [ -n "$summary" ]; then
+      csv="${summary%_summary.csv}.csv"
+      if [ -f "$csv" ]; then
+        cp "$csv" "$run_dir/mangohud.csv"
+        cp "$summary" "$run_dir/mangohud-summary.csv"
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  echo "controlled MangoHud capture did not produce a new CSV under $MANGOHUD_OUTPUT_DIR" >&2
+  exit 1
+}
+
+collect_mangohud_csv() {
+  local run_dir="$1"
+  if [ "$CAPTURE_MODE" = "controlled" ]; then
+    collect_controlled_mangohud_csv "$run_dir"
+  else
+    collect_imported_mangohud_csv "$run_dir"
+  fi
 }
 
 sample_cgroup_pressure() {
@@ -170,8 +300,8 @@ PY
   done
 }
 
-if [ "$CAPTURE_MODE" != "imported" ]; then
-  echo "controlled capture mode is not enabled until the trigger path is validated" >&2
+if [ "$CAPTURE_MODE" != "imported" ] && [ "$CAPTURE_MODE" != "controlled" ]; then
+  echo "unsupported PROFILE_GAME_POWER_CAPTURE_MODE: $CAPTURE_MODE" >&2
   exit 2
 fi
 
@@ -181,6 +311,7 @@ snapshot_cpu_policy >"$REMOTE_ROOT/cpu-policy.initial"
 provider_tdp >"$REMOTE_ROOT/tdp.initial"
 trap restore_state EXIT
 set_service_game_power_mode off
+setup_mangohud_controlled_capture
 
 for tdp in $TDP_LEVELS; do
   set_provider_tdp "$tdp"
@@ -219,23 +350,24 @@ for tdp in $TDP_LEVELS; do
       ;;
     esac
 
+    start_mangohud_capture "$run_dir"
     sample_cgroup_pressure "$run_dir/cgroup-pressure.jsonl" "$DURATION_S" &
     pressure_pid="$!"
-    /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power \
+    if ! /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power \
       --mode "$mode" \
       --duration-s "$DURATION_S" \
       --poll-s "$POLL_S" \
       --target-appid "$APPID" \
       --output-format jsonl \
-      "${policy_args[@]}" >"$run_dir/game-power.jsonl"
-    wait "$pressure_pid" || true
-
-    csv="$(latest_mangohud_csv)"
-    if [ -z "$csv" ]; then
-      echo "no MangoHud CSV log found under /home/deck" >&2
+      "${policy_args[@]}" >"$run_dir/game-power.jsonl"; then
+      stop_mangohud_capture || true
+      wait "$pressure_pid" || true
       exit 1
     fi
-    cp "$csv" "$run_dir/mangohud.csv"
+    stop_mangohud_capture
+    wait "$pressure_pid" || true
+
+    collect_mangohud_csv "$run_dir"
 
     snapshot_cpu_policy >"$run_dir/cpu-policy.after"
     provider_tdp >"$run_dir/tdp.after"
@@ -245,12 +377,17 @@ for tdp in $TDP_LEVELS; do
       restored=false
     fi
 
+    mangohud_args=(--mangohud-csv "$run_dir/mangohud.csv")
+    if [ -f "$run_dir/mangohud-summary.csv" ]; then
+      mangohud_args+=(--mangohud-summary-csv "$run_dir/mangohud-summary.csv")
+    fi
+
     /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile summarize \
       --appid "$APPID" \
       --tdp-w "$tdp" \
       --policy "$policy" \
       --capture-mode "$CAPTURE_MODE" \
-      --mangohud-csv "$run_dir/mangohud.csv" \
+      "${mangohud_args[@]}" \
       --game-power-jsonl "$run_dir/game-power.jsonl" \
       --pressure-jsonl "$run_dir/cgroup-pressure.jsonl" \
       --epp "$EPP" \

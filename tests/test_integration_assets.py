@@ -390,6 +390,8 @@ def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
     assert "restore_cpu_policy()" in script
     assert "set_service_game_power_mode()" in script
     assert "restore_service_game_power_mode()" in script
+    assert "setup_mangohud_controlled_capture()" in script
+    assert "restore_mangohud_controlled_capture()" in script
     assert "provider_tdp()" in script
     assert "set_provider_tdp()" in script
     assert "wait_for_power_provider()" in script
@@ -404,6 +406,20 @@ def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
     assert "capture_mode" in script
     assert ".cache/game-power/profiles" in script
     assert '"$target:$remote_root/."' in script
+
+
+def test_game_power_profile_wrapper_supports_controlled_mangohud_capture():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert 'if [ "$CAPTURE_MODE" = "controlled" ]; then' in script
+    assert "MANGOHUD_CONFIG=" in script
+    assert "output_folder=$MANGOHUD_OUTPUT_DIR" in script
+    assert "gamescope-mangoapp.service.d" in script
+    assert "mangohudctl set log_session true" in script
+    assert "mangohudctl set log_session false" in script
+    assert "collect_controlled_mangohud_csv()" in script
+    assert "mangohud-summary.csv" in script
+    assert "controlled capture mode is not enabled" not in script
 
 
 def test_game_power_profile_wrapper_supports_cpu_cap_policy_variants():
@@ -584,6 +600,7 @@ def test_docs_describe_game_power_governor_default_on_and_reversible():
     assert "restores the previous CPU EPP and frequency limits" in readme
     assert "scripts/verify-game-power-on-device.sh root@10.100.0.19" in readme
     assert 'PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap"' in readme
+    assert "PROFILE_GAME_POWER_CAPTURE_MODE=controlled" in readme
     assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000" in readme
     assert "PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD=0.30" in readme
     assert "Game power governor" in design
