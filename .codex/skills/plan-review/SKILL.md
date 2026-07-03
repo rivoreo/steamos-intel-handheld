@@ -1,39 +1,65 @@
 ---
 name: plan-review
-description: Use this skill for plan, architecture, product, technical design, or implementation-plan review when the review should improve the artifact through an automatic convergence loop. It replaces fixed round-count review with issue-ledger tracking, fresh full sweeps, held-out final sweeps, plateau detection, and a harness-readable status. Trigger for /plan-review, design review, plan gate, architecture review, or any LunaTalk workflow phase that needs independent reviewers before implementation.
+description: Use this skill for plan, architecture, product, technical design, or implementation-plan review when the review should improve the artifact through an adversarial, self-terminating convergence loop. Reviewers attack the plan, an independent verifier tries to refute every blocker before it can block, and a hard iteration budget guarantees the loop always terminates with a harness-readable status. Trigger for /plan-review, design review, plan gate, architecture review, UI/UX plan review, or any LunaTalk workflow phase that needs independent reviewers before implementation.
 ---
 
 # Plan Review
 
-Review a plan until it reaches a real convergence state. This skill is designed
-for Goal/Cell/harness loops: it does not stop because a fixed round limit was
-hit, and it does not keep looping after the review has stopped producing useful,
-fixable blockers.
+Adversarial review loop for plans and design documents. It gives two guarantees
+the naive "review N rounds" pattern cannot:
+
+1. **Blockers are verified, not asserted.** A finding blocks convergence only
+   after an independent verifier tried to refute it and failed. Reviewer opinion
+   alone never drives another iteration.
+2. **The loop always terminates.** Convergence semantics decide *why* it stops;
+   the iteration budget guarantees *that* it stops. There is no input that can
+   produce an unbounded number of review rounds.
 
 ## Core Model
 
-The review loop has three possible harness outcomes:
+Three harness outcomes:
 
-- `passed`: no blocking issues remain and a final held-out sweep finds no new
+- `passed`: no verified blockers remain and a held-out sweep found no new
   evidence-backed blocker.
-- `continue`: fixable blocking issues remain; revise the plan and run another
-  review iteration.
-- `blocked`: the loop has plateaued, oscillated, requires a human/product
-  decision, lacks required evidence, or hit an external Goal/harness budget.
+- `continue`: verified, fixable blockers remain; revise and run one more sweep.
+- `blocked`: plateaued, oscillating, needs a human decision, lacks required
+  evidence, review process is defective, or the iteration budget is exhausted.
 
-Do not use a fixed round cap as the stopping condition. Runtime budgets belong
-to the outer harness. This skill defines convergence semantics so the harness can
-stop for a reason that is visible and reviewable.
+## Iteration Budget (hard backstop)
+
+Default budget: **5 sweeps total** (discovery + verification sweeps + held-out
+sweeps combined). The harness may set a different budget explicitly, but the
+skill must never exceed the active budget silently, and must never treat "no
+budget given" as "unlimited".
+
+Why a hard cap when convergence semantics exist: convergence rules are executed
+by a model, and a misread rule or a churny artifact can defeat them. The budget
+is the circuit breaker that turns a defective loop into a `blocked` result with
+a readable ledger, instead of a 200-round runaway. Hitting the budget is not
+failure noise — it returns `blocked` with `reasonCode: "budget_exhausted"` and
+the full unresolved ledger, which is itself a useful review result.
+
+Two secondary brakes, checked every iteration:
+
+- **Monotonic progress (carryover)**: from iteration 3 onward, the blockers
+  that were already open before the last revision must strictly shrink each
+  iteration — a revise step must actually resolve what it claims to address,
+  and one that doesn't will not start doing so on round 12. If the carryover
+  set fails to shrink, return `blocked` as plateau. Brand-new first-seen
+  findings do not count against this rule: a healthy loop that fixes last
+  round's blocker while a fresh sweep uncovers a different one is making
+  progress, not plateauing. New findings are governed by attribution (the
+  `latent_missed` streak, artifact instability) and by the budget.
+- **Per-issue cap**: an issue still open after 2 material revision attempts with
+  no new fixable evidence is a plateau, not a todo.
 
 ## Inputs
-
-Prepare these before starting:
 
 1. Plan artifact: inline text or file path.
 2. Context summary: problem, constraints, scope, acceptance criteria.
 3. Relevant code/document references.
-4. Review state snapshots for iteration > 1: `originalSurfaceSnapshot`,
-   `currentSurfaceSnapshot`, and `latestRevisionDiff`.
+4. For iteration > 1: `originalSurfaceSnapshot`, `currentSurfaceSnapshot`,
+   `latestRevisionDiff`.
 5. Optional concern list.
 
 ## Reviewer Roles
@@ -43,258 +69,306 @@ Prepare these before starting:
 | A | Architecture & Feasibility | Architecture, feasibility, API/data contracts, integration, performance |
 | B | Completeness & Risk | Requirements, edge cases, security, failures, migration, rollback |
 | C | Quality & Conventions | Project conventions, testability, clarity, reuse, maintainability |
-| D | UX/UI Design | User journeys, loading/empty/error states, accessibility, interaction flow |
+| D | UX/UI Design | User journeys, states, design-system compliance, platform parity |
 | E | Product & Business Value | MVP scope, priority, business value, success metrics, rollout |
 
-A, B, and C are always active. Activate D when the plan changes UI, user
-journeys, user-visible states, or frontend data shapes. Activate E when the plan
-changes product behavior, user-facing APIs, workflow scope, pricing, release
-strategy, or measurable business outcomes.
+A, B, C are always active. Activate D when the plan changes UI, user journeys,
+user-visible states, or frontend data shapes. Activate E when the plan changes
+product behavior, user-facing APIs, workflow scope, pricing, release strategy,
+or measurable business outcomes.
+
+**Reviewer D is not generic.** When D is active, its prompt must require reading
+`DESIGN.md` and `.claude/skills/lunatalk-ui-review/SKILL.md` before reviewing,
+plus the surface-matched UI skill (`lunatalk-ui-glass` / `-ambient` /
+`-primitives` / `-loading`) and the `ui-ux-pro-max` skill for industry-level
+benchmarking. D's findings must cite the specific design-system rule violated,
+and D must run the screen × state matrix check. A plan that touches UI but does
+not enumerate its screens and their loading/empty/error states is itself a
+major finding. Full rubric in `references/reviewer-prompts.md`.
+
+## Domain Skill Packs
+
+Reviewers judge against knowledge, and this repo already encodes its domain
+knowledge as skills. When freezing the review surface, map the plan's domains
+to skills and inject them into the matching reviewer's prompt as required
+reading. A reviewer without the domain pack produces generic findings that the
+verifier will refute; a reviewer with it cites specific rules, which is what
+makes findings survive.
+
+Known mappings (scan the session's available-skills list for others — this
+table is illustrative, not exhaustive):
+
+| Plan touches | Reviewer | Required skill pack |
+| --- | --- | --- |
+| Any UI/UX surface | D | `DESIGN.md`, `lunatalk-ui-review`, surface-matched `lunatalk-ui-*`, `ui-ux-pro-max` |
+| Chat pipeline, prompt structure, context/cache, billing/points | A, B | `chat-framework` |
+| Worldbook recall / activation | A, B | `lunatalk-worldbook-recall-eval` |
+| New API relay, channel affinity, prompt_cache_key | A, B | `newapi-relay-diagnose` |
+| MCP tools/resources, Moonloom surfaces | A, C | `moonloom:using-moonloom` + the MCP parity gate in root `CLAUDE.md` |
+| Deployment, release, rollout steps | B, C | Deploy Charter + Observability/Prometheus gate in root `CLAUDE.md` |
+| User-facing message copy | D, E | `.claude/rules/user-facing-message.md` |
+
+Two rules keep this from bloating the loop: inject a pack only when the plan
+actually touches that domain, and when an external-benchmark skill (like
+`ui-ux-pro-max`) conflicts with an internal authority (like `DESIGN.md`), the
+internal authority wins — the external skill exists to raise the bar, not to
+overrule the design system.
+
+## Adversarial Structure
+
+The loop is adversarial in both directions:
+
+- **Reviewers attack the plan.** Their stance is "find the reasons this plan
+  fails in production", not "give feedback". A +2 must be earned by a genuine
+  failed attack, not granted by default.
+- **A verifier attacks the findings.** Every critical/major finding goes to an
+  independent skeptic whose only job is to refute it using the plan text and
+  context. Verdicts: `CONFIRMED` / `REFUTED` / `NEEDS_DECISION`. Only
+  `CONFIRMED` findings become open blockers. `REFUTED` findings are downgraded
+  to suggestions with the refutation recorded.
+
+Why both sides: attack-only review generates churn — plausible-sounding
+blockers that restart the loop forever. Verification-only review goes soft.
+Attack plus refutation is what makes "no blockers remain" mean something.
+
+Reviewers know their findings will face refutation. This is stated in their
+prompt so they front-load evidence instead of padding the finding list.
 
 ## Convergence Loop
 
 ### 1. Bound Review Surface
 
 Freeze a bounded review surface before the first reviewer runs. A review whose
-scope can expand forever cannot converge.
+scope can expand forever cannot converge. The surface includes: exact plan
+files/sections under review, the context available to reviewers, active roles,
+and explicit out-of-scope areas.
 
-The surface must include:
+Review the entire bounded artifact, not only new or changed paragraphs.
+Reviewers may mark blockers only inside this surface — unrelated documents,
+files, tests, or harness behavior stay outside the blocker surface unless
+explicitly listed as context. Findings that need external facts or broader
+scope become `needs_decision` or `missing_evidence`, never `open`.
 
-- artifact boundaries: exact plan files or sections under review
-- context boundaries: requirements, constraints, code references, and acceptance
-  criteria available to reviewers
-- active reviewer roles and the dimensions each role owns
-- explicit out-of-scope areas
-
-Review the entire bounded artifact, not only the new, changed, latest, or
-incremental paragraphs. If the surface is one design document, reviewers inspect
-that full document, including older sections that interact with the change. If
-the surface is a named section, reviewers inspect that whole section and the
-explicitly listed cross-references.
-
-Reviewers may mark blockers only inside this surface. Unrelated documents,
-files, tests, or harness behavior are outside the blocker surface unless they
-are explicitly listed as context boundaries. If a finding requires external
-facts or broader scope, mark it `needs_decision` or `missing_evidence`, not
-`open`.
-
-Store an attribution evidence pack when the surface is frozen:
+Store attribution evidence when the surface is frozen:
 
 ```json
 {
   "attributionEvidence": {
-    "originalSurfaceSnapshot": "stable path, hash, or stored text for the first reviewed bounded surface",
-    "currentSurfaceSnapshot": "stable path, hash, or stored text for the current bounded surface",
-    "latestRevisionDiff": "diff or section-level change summary from the previous iteration to the current one"
+    "originalSurfaceSnapshot": "path, hash, or stored text of the first reviewed surface",
+    "currentSurfaceSnapshot": "path, hash, or stored text of the current surface",
+    "latestRevisionDiff": "diff or section-level change summary from the previous iteration"
   }
 }
 ```
 
-The exact storage can be a file path, content hash, or persisted Cell artifact,
-but it must let later reviewers compare the original surface, current surface,
-and latest revision. A prose changelog alone is useful context but is not enough
-to classify whether a late blocker was introduced by the latest revision or was
-missed from the original surface.
+These must allow a later comparison of original vs current vs latest change. A
+prose changelog alone cannot classify whether a late blocker was introduced by
+a revision or missed from the start.
 
-### 2. Discovery Sweep
+### 2. Intake Checkpoint (before the first sweep)
 
-Start with a fresh full sweep. Each active reviewer receives only:
+Scan the context summary for gaps that would predictably prevent convergence.
+They come in two classes with different handling:
 
-- the current plan artifact
-- the context summary
-- role-specific rubric from `references/reviewer-prompts.md`
-- the required JSON output format from `references/scoring-rubric.md`
+- **Reviewability gaps** — missing acceptance criteria, undefined target
+  platforms, ambiguous scope words ("optimize", "improve") with no measurable
+  target. These only need *a* defensible answer for review to proceed.
+- **Deferred decisions** — product, pricing, revenue-share, access-gating,
+  legal, security-posture, or release choices the plan explicitly leaves
+  undecided. These need *the owner's* answer; a review must never supply it.
 
-They must review the whole artifact, not only the parts likely to be wrong. They
-must cite evidence: section names, file paths, API contracts, missing acceptance
-criteria, or explicit contradictions. Findings without evidence are suggestions,
-not blockers. After this sweep, the surface is considered covered once all
-active reviewers have returned parseable output.
+Handling:
 
-### 3. Issue Ledger
+- **Interactive session**: batch both classes into one ask, at most 3
+  questions (use AskUserQuestion when available). Fold answers into the
+  context summary.
+- **Headless/harness run**: do not wait for a human. Write each
+  *reviewability gap* into the surface as an explicit `ASSUMPTION:` line and
+  proceed — reviewers treat stated assumptions as given, so ambiguity cannot
+  re-enter as oscillating findings. For each *deferred decision*, seed the
+  ledger with a `needs_decision` item instead. Do not invent an assumption
+  for a choice that moves money, access, legal exposure, or release posture:
+  a loop that assumes "10% platform cut" can silently pass a plan no human
+  approved. Review everything else normally; the loop's terminal state cannot
+  be `passed` while `needs_decision` items remain — it exits `blocked` with
+  the exact decision list (see Decision Checkpoint).
 
-Normalize all findings into an Issue Ledger. This ledger is the loop memory; do
-not feed previous full review prose into later reviewers.
+This is the only checkpoint before the loop. Never pause mid-sweep to ask
+about an individual finding — that converts the convergence loop into an
+unbounded conversation.
 
-Each ledger item uses:
+### 3. Discovery Sweep
+
+Fresh full sweep. Each active reviewer receives only: the current plan
+artifact, the context summary, its role rubric from
+`references/reviewer-prompts.md`, and the JSON output format from
+`references/scoring-rubric.md`. They review the whole artifact and must cite
+evidence: section names, file paths, contracts, contradictions. Findings
+without evidence are suggestions, not blocker candidates.
+
+### 4. Verify Findings
+
+Send all critical/major findings to the verifier (prompt in
+`references/reviewer-prompts.md`). The verifier gets the plan, the context
+summary, and the findings — not the reviewer's reasoning or score. For each
+finding it must attempt a refutation and return `CONFIRMED`, `REFUTED`
+(with the refuting evidence), or `NEEDS_DECISION` (valid concern, but the
+answer is a product/human choice). When evidence is thin, refute — the cost of
+a wrongly-dropped blocker is one missed comment; the cost of a wrongly-kept one
+is a whole extra loop iteration.
+
+### 5. Issue Ledger
+
+Normalize verified findings into the Issue Ledger — the loop's only memory.
+Never feed previous review prose into later reviewers.
 
 ```json
 {
-  "dedupeKey": "stable lowercase key for this issue",
+  "dedupeKey": "stable lowercase key",
   "severity": "critical|major|minor|suggestion",
-  "status": "open|resolved|wontfix|needs_decision|missing_evidence|stale",
+  "status": "open|resolved|wontfix|needs_decision|missing_evidence|refuted|stale",
+  "verification": "confirmed|refuted|needs_decision|not_required",
   "reviewer": "A|B|C|D|E",
   "firstSeenIteration": 1,
   "lastSeenIteration": 1,
   "materialRevisionAttempts": 0,
-  "escapedBlocker": false,
   "novelIssueSource": "none|revision_introduced|latent_missed|scope_expansion|unsupported",
   "evidence": "specific section/file/contract evidence",
   "finding": "what is wrong",
   "recommendation": "specific fix",
-  "disposition": "why it is open/resolved/non-blocking"
+  "disposition": "why it is open/resolved/refuted/non-blocking"
 }
 ```
 
-Critical and major items are blockers unless they are outside the reviewer scope,
-duplicate an existing ledger item, or lack concrete evidence. Minor and
-suggestion items never block convergence.
+Only `status: open` items with `verification: confirmed` and severity
+critical/major are blockers. Minor and suggestion items never block, never
+drive another iteration, and are reported at the end.
 
-### 4. Revise
+### 6. Revise
 
-The main agent revises the plan. Produce a changelog that maps every addressed
-blocker to a concrete change:
+The main agent revises the plan. Produce a changelog mapping every addressed
+blocker to a concrete change (format in `references/scoring-rubric.md`). Do not
+broaden scope while revising unless the ledger requires it. Increment
+`materialRevisionAttempts` only when the change could plausibly resolve that
+item.
 
-```markdown
-## Revision Changelog (Iteration N -> N+1)
+### 7. Verification Sweep
 
-1. **[MAJOR/A][api-contract-auth]** Added auth and ownership rules
-   - Finding: API contract omitted ownership checks.
-   - Change: Added "Auth & Ownership" section and request/response examples.
-```
+Next iteration is another fresh full sweep — not a delta pass. Reviewers
+receive: revised artifact, current Issue Ledger (statuses only), revision
+changelog, attributionEvidence, context summary, role rubric. Each reviewer
+does two things: verify that addressed blockers were actually handled, and
+fresh-sweep the whole artifact for regressions. New critical/major findings go
+through the verifier (step 4) before entering the ledger.
 
-Do not broaden scope while revising unless the ledger requires it. Increment
-`materialRevisionAttempts` only when the plan changed in a way that could
-reasonably resolve that ledger item.
+### 8. Attribute Late Findings
 
-### 5. Verification Sweep
+After discovery plus one verification sweep, every new confirmed critical/major
+finding must be attributed from `attributionEvidence` (not reviewer memory)
+before it affects convergence:
 
-Run the next iteration as a fresh full sweep, not a delta-only pass. Reviewers
-receive:
-
-- revised plan artifact
-- current Issue Ledger with statuses, not the full previous commentary
-- revision changelog
-- attributionEvidence containing `originalSurfaceSnapshot`,
-  `currentSurfaceSnapshot`, and `latestRevisionDiff`
-- context summary and role rubric
-
-Each reviewer must do two checks:
-
-1. Verify whether open/resolved blockers were actually handled.
-2. Perform a fresh full sweep of the whole artifact for regressions or missed
-   blockers.
-
-This avoids both bad extremes: it does not starve reviewers with only a diff,
-and it does not anchor them on the previous review transcript.
-
-### 6. Novel Issue Attribution
-
-After the bounded review surface has had a discovery sweep and one verification
-sweep, every new critical/major finding must be attributed before it can affect
-convergence. A late finding may mean the artifact is still changing badly, or it
-may mean the review process is missing in-surface issues. Treat those cases
-differently.
-
-- Is the finding inside the bounded review surface?
-- Does it include concrete evidence?
-- Is it materially different from an existing ledger item?
-- Was it introduced by the revision, or did it exist from the start?
-- Was it missed because the reviewer role/rubric/surface was unclear?
-
-Make this attribution from `attributionEvidence`, not from reviewer memory or
-the prose changelog alone. If `originalSurfaceSnapshot`,
-`currentSurfaceSnapshot`, or `latestRevisionDiff` is unavailable, return
-`blocked` with `reasonCode: "missing_evidence"` instead of guessing.
-
-Set `novelIssueSource` for each late blocker:
-
-| Source | Meaning | Gate behavior |
+| `novelIssueSource` | Meaning | Gate behavior |
 | --- | --- | --- |
-| `revision_introduced` | The latest plan revision created a new blocker or regression. | Add it as an open ledger blocker and continue the normal revise loop. Reset `latentMissedBlockerStreak` because this is an artifact-quality problem, not a review miss. |
-| `latent_missed` | The blocker existed inside the original bounded review surface and should have been caught in discovery or verification. | Mark it as an escaped blocker and increment `escapedBlockerStreak` and `latentMissedBlockerStreak`. |
-| `scope_expansion` | The finding requires facts, requirements, files, or product scope outside the frozen surface. | Do not mark it `open` in this loop. Return `blocked` with `needs_decision` or `missing_evidence`, or start a new review with a new surface if the harness explicitly expands scope. |
-| `unsupported` | The finding lacks concrete evidence or is only a preference. | Record as minor/suggestion or stale; it must not block convergence. |
+| `revision_introduced` | Latest revision created it | Normal open blocker; reset `latentMissedStreak` — this is artifact quality, not a review miss |
+| `latent_missed` | Existed in the original surface; earlier sweeps missed it | Open blocker; increment `latentMissedStreak`. Streak ≥ 2 across consecutive sweeps → `blocked` with `review_process_defect` — fix the review surface/rubric, don't revise the artifact forever |
+| `scope_expansion` | Needs facts outside the frozen surface | Not `open` in this loop; `blocked` with `needs_decision`/`missing_evidence`, or restart with a new surface |
+| `unsupported` | No concrete evidence | Minor/suggestion; never blocks |
 
-If one valid `latent_missed` blocker appears, add it to the Issue Ledger and
-continue once with `escapedBlockerStreak: 1` and
-`latentMissedBlockerStreak: 1`. If the next full sweep also finds one or more
-`latent_missed` blockers, `latentMissedBlockerStreak >= 2` and
-`escapedBlockerStreak >= 2` must return `blocked` with
-`reasonCode: "review_process_defect"`. That means the review skill, rubric, or
-surface definition is too open-ended; the harness should stop and fix the review
-process rather than revising the artifact forever.
+If revisions keep introducing *different* `revision_introduced` blockers in the
+same section after material fixes, that is artifact instability — `blocked`,
+not more loops. If `attributionEvidence` is missing, return `blocked` with
+`missing_evidence` instead of guessing.
 
-If every revision keeps introducing different `revision_introduced` blockers,
-do not blame the review skill. Continue while each blocker is concrete and
-fixable. If the same section keeps producing new critical/major regressions
-after material revisions and no smaller fix is available, return `blocked` as
-plateau or artifact instability with the unstable ledger items.
+### 9. Decision Checkpoint
 
-### 7. Held-Out Sweep
+When the ledger holds `needs_decision` items and no open fixable blockers
+remain:
 
-When the normal gate has no open blockers, run a held-out sweep before returning
-`passed`. Use a new reviewer or reviewer set that receives only the final plan,
-context summary, and acceptance criteria. Do not provide the Issue Ledger or
-changelog.
+- **Interactive session**: batch all decision items into one question set for
+  the user (AskUserQuestion, one call). Fold answers into the context summary
+  and continue the loop with the budget unchanged.
+- **Headless/harness run**: return `blocked` with `reasonCode:
+  "needs_decision"` and the exact decision list.
 
-If the held-out sweep finds no evidence-backed critical/major blockers, the loop
-has converged. If it finds a real blocker, add it to the ledger and continue.
-If it finds only minor/suggestion items, record them as non-blocking and pass.
+Ask once per loop at most. If decisions remain unanswered, that is `blocked`,
+not a re-ask.
 
-### 8. Plateau And Oscillation Detection
+### 10. Held-Out Sweep
 
-Return `blocked` instead of looping when any of these is true:
+When no open blockers remain, run a held-out sweep before `passed`: a fresh
+reviewer set receives only the final plan, context summary, and acceptance
+criteria — no ledger, no changelog. Held-out critical/major findings still go
+through the verifier.
 
-- The same blocker remains open after two material revisions and the reviewer
-  provides no new fixable evidence.
-- Reviewers alternate between incompatible requirements and the conflict cannot
-  be resolved by technical evidence.
-- The remaining blocker requires a product, legal, security, or release decision
-  that is not encoded in the plan or context.
-- The artifact cannot be reviewed because required code, data, or requirements
-  are missing.
-- `latent_missed` blockers keep appearing after consecutive full sweeps,
-  indicating `review_process_defect`.
-- Revisions repeatedly introduce new unrelated critical/major blockers in the
-  same section, indicating artifact instability rather than review failure.
-- The outer Goal/harness budget is exhausted.
+- No confirmed blockers → converged, `passed`. Minor/suggestion findings are
+  recorded as non-blocking notes; they do not reopen the loop.
+- A confirmed blocker → add to ledger, continue (budget permitting).
+- Maximum 2 held-out sweeps per review. If the second held-out sweep still
+  finds a confirmed blocker, return `blocked` with the ledger — a plan that
+  keeps failing fresh eyes needs a human, not a third sweep.
 
-When blocked, include unresolved ledger items, the attempted changes, and the
-specific decision or missing evidence needed to resume.
+### 11. Stop Conditions
+
+Return `blocked` when any of these holds:
+
+- Iteration budget exhausted (`budget_exhausted`).
+- Carryover blockers (open before the last revision) did not strictly shrink
+  across consecutive iterations from iteration 3 onward (plateau).
+- Same blocker open after 2 material revisions with no new fixable evidence.
+- Reviewers oscillate between incompatible requirements not resolvable by
+  technical evidence.
+- Remaining blockers need a product/legal/security/release decision
+  (headless), or the user left decision questions unanswered.
+- Required code, data, or requirements are missing (`missing_evidence`).
+- `latentMissedStreak >= 2` (`review_process_defect`).
+- Revisions repeatedly introduce new critical/major blockers in the same
+  section (artifact instability).
+- Second held-out sweep found a confirmed blocker.
+
+When blocked, include unresolved ledger items, attempted changes, and the
+specific decision or evidence needed to resume.
 
 ## Gate Logic
 
-Use score and ledger state together:
-
 | Condition | harnessStatus | Next action |
 | --- | --- | --- |
-| Open critical/major blockers exist and are fixable | `continue` | Revise blockers and run another full sweep |
-| `unresolvedDecisionItems > 0` or `unresolvedEvidenceItems > 0` | `blocked` | Stop with `needs_decision` or `missing_evidence` |
-| New blocker has `novelIssueSource=revision_introduced` | `continue` | Add an open blocker to the ledger and revise again |
-| New blocker has `novelIssueSource=scope_expansion` | `blocked` | Stop with `needs_decision` or `missing_evidence`, or restart with a new surface |
-| New blocker has `novelIssueSource=unsupported` | no status change | Record as non-blocking or stale |
-| `latentMissedBlockerStreak >= 2` and `escapedBlockerStreak >= 2` | `blocked` | Stop with `review_process_defect` |
-| No open blockers, held-out sweep not yet run | `continue` | Run held-out sweep |
-| No open blockers after held-out sweep | `passed` | Stop |
-| Plateau, oscillation, repeated `latent_missed` blockers, missing evidence, or external budget | `blocked` | Stop with unresolved ledger or review process defect |
+| Confirmed open critical/major blockers, fixable, budget remains | `continue` | Revise, fresh full sweep |
+| Finding refuted by verifier | no change | Downgrade to suggestion, record refutation |
+| `needs_decision` items, interactive | `continue` | Decision checkpoint (one batched ask) |
+| `needs_decision` items, headless or already asked | `blocked` | Stop with decision list |
+| `latentMissedStreak >= 2` | `blocked` | Stop with `review_process_defect` |
+| No open blockers, held-out not yet run | `continue` | Held-out sweep |
+| No confirmed blockers after held-out | `passed` | Stop |
+| Budget exhausted / plateau / oscillation / instability / 2nd held-out blocker | `blocked` | Stop with unresolved ledger |
 
-Review scores are reviewer opinions. The Issue Ledger is the convergence state.
+Review scores are reviewer opinions. The verified Issue Ledger is the
+convergence state.
 
 ## Harness Output Contract
 
-Every iteration must end with one JSON block:
+Every iteration ends with one JSON block:
 
 ```json
 {
-  "schemaVersion": "lunatalk.review-loop.v1",
+  "schemaVersion": "lunatalk.review-loop.v2",
   "reviewType": "plan",
-  "iteration": 4,
+  "iteration": 3,
+  "budget": {"maxSweeps": 5, "sweepsUsed": 3},
   "harnessStatus": "continue|passed|blocked",
   "reason": "short reason for the status",
   "reasonCode": "open_blockers|held_out_required|converged|plateau|oscillation|artifact_instability|missing_evidence|needs_decision|review_process_defect|reviewer_failure|budget_exhausted",
-  "activeReviewers": ["A", "B", "C"],
+  "activeReviewers": ["A", "B", "C", "D"],
   "surfaceId": "stable hash or short name for the bounded review surface",
-  "scores": {"A": 1, "B": 2, "C": 1},
+  "scores": {"A": 1, "B": 2, "C": 1, "D": -1},
   "convergence": {
     "openBlockers": 1,
+    "confirmedFindings": 3,
+    "refutedFindings": 2,
     "unresolvedDecisionItems": 0,
     "unresolvedEvidenceItems": 0,
     "newBlockers": 0,
     "reopenedBlockers": 0,
-    "escapedBlockers": 0,
-    "escapedBlockerStreak": 0,
-    "latentMissedBlockerStreak": 0,
+    "latentMissedStreak": 0,
     "novelIssuesBySource": {
       "revision_introduced": 0,
       "latent_missed": 0,
@@ -302,9 +376,14 @@ Every iteration must end with one JSON block:
       "unsupported": 0
     },
     "maxMaterialRevisionAttempts": 1,
-    "heldOutSweepComplete": false,
+    "heldOutSweepsUsed": 0,
     "plateauDetected": false,
     "reviewProcessDefect": false
+  },
+  "userCheckpoints": {
+    "intakeAsked": false,
+    "decisionAsked": false,
+    "recordedAssumptions": []
   },
   "attributionEvidence": {
     "originalSurfaceSnapshot": "<path-or-hash-or-artifact-id>",
@@ -313,32 +392,37 @@ Every iteration must end with one JSON block:
   },
   "ledger": [],
   "nextAction": {
-    "type": "revise|fresh_full_sweep|held_out_sweep|stop",
+    "type": "revise|fresh_full_sweep|held_out_sweep|ask_user|stop",
     "summary": "what the harness should do next"
   }
 }
 ```
 
-The harness must store this JSON as the Cell result and use it to decide whether
-to schedule the next loop iteration.
+The harness stores this JSON as the Cell result and uses it to schedule (or
+not schedule) the next iteration.
 
 ## Failure Handling
 
 - Retry a failed reviewer once with the same artifact and role.
-- If a reviewer still fails, mark that role as a coverage gap and continue only
-  if fewer than half of active reviewers failed.
-- If half or more active reviewers fail, return `blocked` with reason
-  reasonCode `reviewer_failure`; do not spin.
-- JSON parse failure is a reviewer failure.
+- If it still fails, mark the role as a coverage gap and continue only if
+  fewer than half of active reviewers failed; otherwise return `blocked` with
+  `reviewer_failure`.
+- Verifier failure: retry once; if it still fails, treat the affected findings
+  as `needs_decision` rather than silently confirming or dropping them.
+- JSON parse failure is a reviewer failure (fallback layers in
+  `references/scoring-rubric.md`).
 
 ## References
 
-- `references/reviewer-prompts.md`: role-specific reviewer prompts.
-- `references/scoring-rubric.md`: scoring, severity, and JSON parsing.
+- `references/reviewer-prompts.md`: role rubrics, adversarial preamble,
+  verifier prompt, Reviewer D LunaTalk UI rubric.
+- `references/scoring-rubric.md`: scoring, severity, verification verdicts,
+  JSON parsing.
 - `references/report-template.md`: final report format.
 
 ## Eval Seeds
 
 Use `evals/evals.json` with Skill Creator when improving this skill. The evals
-cover missed-blocker discovery, anti-anchoring, held-out convergence, and
-plateau exit behavior.
+cover termination under churn, adversarial refutation of weak findings, UI
+design-system depth, checkpoint batching, missed-blocker discovery,
+anti-anchoring, held-out convergence, and plateau exit.

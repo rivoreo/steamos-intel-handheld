@@ -2,14 +2,38 @@
   "skill_name": "plan-review",
   "evals": [
     {
+      "id": "plan-review-terminates-under-churn",
+      "prompt": "Run a plan review loop on the attached design document. Assume every fresh sweep keeps producing new plausible major findings and revisions never reduce the open blocker count. Continue the automated review responsibly and show each iteration's harness JSON.",
+      "expected_output": "The loop must terminate within the iteration budget (default 5 sweeps). It should stop earlier via the monotonic-progress plateau rule (open blockers not strictly decreasing from iteration 3 onward), and at the latest return harnessStatus=blocked with reasonCode=budget_exhausted or plateau plus the unresolved ledger. It must never run unbounded rounds or treat a missing budget as unlimited.",
+      "files": ["fixtures/churny-plan.md"]
+    },
+    {
+      "id": "plan-review-adversarial-refutation",
+      "prompt": "Review the attached plan. One reviewer returns a major finding that the plan 'might have performance problems under load, consider adding caching' with no section citation, and another major finding disputing a stated ASSUMPTION line. Run the finding-verification step and decide what blocks.",
+      "expected_output": "Both findings go to the verifier. The vague no-evidence finding and the assumption-disputing finding are REFUTED and downgraded to suggestions with the refutation recorded; neither drives another iteration. Only verifier-CONFIRMED critical/major findings become open blockers.",
+      "files": ["fixtures/solid-plan.md"]
+    },
+    {
+      "id": "plan-review-ui-design-system-depth",
+      "prompt": "Run a plan review on the attached LunaTalk mobile feature plan that adds a new bookmarks page. Activate the UX/UI reviewer and produce its findings.",
+      "expected_output": "Reviewer D reads DESIGN.md and lunatalk-ui-review (plus surface-matched UI skills / ui-ux-pro-max) before reviewing, runs the screen-by-state matrix, and catches concrete design-system violations with rule citations: px-instead-of-rpx sizes, off-tier border radius, hardcoded one-off colors instead of tokens, a full-screen loading mask proposal, missing empty/error states, and missing desktop parity. Findings cite the specific DESIGN.md or skill rule, not generic UX advice.",
+      "files": ["fixtures/ui-violating-plan.md"]
+    },
+    {
+      "id": "plan-review-checkpoint-batching",
+      "prompt": "Start a plan review on the attached plan whose context summary has no acceptance criteria and leaves the pricing tier undecided. You are running headless with no user available. Run the loop.",
+      "expected_output": "The intake checkpoint records the gaps as explicit ASSUMPTION lines in the surface (it does not stall waiting for a human). Ambiguity does not resurface as oscillating findings because reviewers treat stated assumptions as given. The pricing-tier item ends as needs_decision, and the loop returns blocked with reasonCode=needs_decision and the exact decision list, asking at most once. No mid-sweep or per-finding user questions.",
+      "files": ["fixtures/ambiguous-plan.md"]
+    },
+    {
       "id": "plan-review-discovers-missed-blockers",
       "prompt": "Review a technical design for a new authenticated API. The first pass found an i18n gap, then the author fixed it, but the plan still omits ownership checks and retry behavior. Run the plan review loop until it converges.",
-      "expected_output": "The review should keep using fresh full sweeps after revisions, discover the remaining ownership/retry blockers, track them in an Issue Ledger, and return harnessStatus=continue until blockers are resolved."
+      "expected_output": "The review should keep using fresh full sweeps after revisions, discover the remaining ownership/retry blockers, verify them as CONFIRMED, track them in an Issue Ledger, and return harnessStatus=continue until blockers are resolved."
     },
     {
       "id": "plan-review-held-out-pass",
       "prompt": "A plan has passed all normal reviewers after two revisions. Run the final convergence step without giving the new reviewer the previous Issue Ledger.",
-      "expected_output": "The workflow should run a held-out sweep over the full final plan, pass only if it finds no evidence-backed critical/major blockers, and emit harnessStatus=passed with heldOutSweepComplete=true."
+      "expected_output": "The workflow should run a held-out sweep over the full final plan, pass only if it finds no verifier-confirmed critical/major blockers, and emit harnessStatus=passed. At most 2 held-out sweeps; a confirmed blocker on the second one returns blocked, not a third sweep."
     },
     {
       "id": "plan-review-plateau-exit",
@@ -19,17 +43,28 @@
     {
       "id": "plan-review-repeated-escaped-blockers",
       "prompt": "A bounded plan review has already completed a discovery sweep and a verification sweep. Each subsequent fresh full sweep finds a brand-new critical blocker that existed from the start and should have been caught earlier. Continue the automated review responsibly.",
-      "expected_output": "The workflow should classify late novel blockers that existed inside the original bounded surface as novelIssueSource=latent_missed, audit whether the review surface/rubric missed them, and if latent_missed blockers keep appearing after consecutive full sweeps, stop with harnessStatus=blocked, reasonCode=review_process_defect, and reviewProcessDefect=true rather than continuing forever."
+      "expected_output": "The workflow should classify late novel blockers that existed inside the original bounded surface as novelIssueSource=latent_missed, and once latentMissedStreak reaches 2 across consecutive sweeps, stop with harnessStatus=blocked, reasonCode=review_process_defect, and reviewProcessDefect=true rather than continuing forever."
     },
     {
       "id": "plan-review-revision-introduced-vs-latent-missed",
       "prompt": "A plan review is scoped to one technical design document. Iteration 2 fixes auth but introduces a new migration rollback gap in the same document. Iteration 3 finds a different critical API ownership gap that was already present in the original document. Continue the automated plan review responsibly.",
-      "expected_output": "The new rollback gap should be classified as novelIssueSource=revision_introduced and remain in the normal revise loop. The original ownership gap should be classified as novelIssueSource=latent_missed; only repeated latent_missed blockers should count toward review_process_defect."
+      "expected_output": "The new rollback gap should be classified as novelIssueSource=revision_introduced and remain in the normal revise loop (resetting latentMissedStreak). The original ownership gap should be classified as novelIssueSource=latent_missed; only repeated latent_missed blockers count toward review_process_defect."
     },
     {
       "id": "plan-review-whole-document-not-whole-repo",
       "prompt": "Review only docs/td/new-feature.md. The changed section is small, but an older section in the same document contradicts the acceptance criteria. Another unrelated YAML workflow file has a possible typo. Continue the automated plan review responsibly.",
-      "expected_output": "The review should inspect the entire bounded document and catch the contradiction in older content, while refusing to promote the unrelated YAML workflow issue to an open blocker because it is outside the bounded review surface."
+      "expected_output": "The review should inspect the entire bounded document and catch the contradiction in older content, while refusing to promote the unrelated YAML workflow issue to an open blocker because it is outside the bounded review surface (scope_expansion)."
+    },
+    {
+      "id": "plan-review-abe-discovery",
+      "prompt": "Run a plan review discovery sweep on the attached role-card comment system design. Reviewers A, B, C, and E must review for real (D may be brief). Verify findings and emit the iteration-1 harness JSON.",
+      "expected_output": "Reviewers catch the seeded non-UI flaws with evidence: A — MongoDB/new dependency introduced into a MySQL Go codebase without justification, and per-card Mongo queries in the list endpoint (N+1); B — DELETE endpoint missing ownership/authorization, comment text rendered as raw HTML (XSS), moderation fail-open bypass, unpaginated unbounded list; E — unmeasurable success criterion with no KPI. Findings survive the verifier as CONFIRMED; the loop returns continue with open blockers.",
+      "files": ["fixtures/flawed-api-plan.md"]
+    },
+    {
+      "id": "plan-review-domain-skill-packs",
+      "prompt": "Run a plan review on a design that changes the LunaTalk chat prompt structure and context compaction thresholds. Decide what domain knowledge the reviewers need before spawning them.",
+      "expected_output": "The surface-freezing step maps the plan's domain to the chat-framework skill and injects it as required reading for reviewers A and B, so their findings cite framework-specific semantics (cache stability, billing/window implications) rather than generic architecture advice."
     }
   ]
 }

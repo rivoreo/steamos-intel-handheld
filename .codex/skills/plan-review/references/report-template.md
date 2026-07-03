@@ -18,9 +18,11 @@ Use this template when generating the consolidated review report after the loop 
 | E | Product & Business Value | +N | APPROVE |
 
 **Overall Result**: APPROVED / APPROVED WITH NOTES / BLOCKED
-**Review Iterations**: N
+**Review Iterations**: N (budget: N/5 sweeps used)
 **Harness Status**: passed / blocked
 **Active Reviewers**: N/5 (list any deactivated reviewers and reason)
+**Findings**: N confirmed / N refuted / N needs-decision
+**User Checkpoints**: intake asked yes/no · decisions asked yes/no · assumptions recorded: [list or none]
 
 ## Key Strengths
 
@@ -38,6 +40,14 @@ Items from +1 reviewers that the author should consider (not required):
 
 ### From Reviewer Y
 - [Suggestion with recommendation]
+
+## Refuted Findings (if any)
+
+Blocker candidates the verifier refuted — kept for transparency, none block:
+
+| Reviewer | Original Severity | Finding | Refutation |
+|----------|-------------------|---------|------------|
+| [X] | major | [claim] | [quoted plan text or surface rule that refuted it] |
 
 ## Disputed Items (if any)
 

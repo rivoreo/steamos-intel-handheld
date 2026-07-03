@@ -1,5 +1,22 @@
 # Scoring Rubric & Output Format
 
+## Verification Verdicts (applied after reviewer output)
+
+Reviewer findings are blocker *candidates*. The verifier (see
+`reviewer-prompts.md`) assigns each critical/major finding one verdict before
+it can enter the Issue Ledger as a blocker:
+
+| Verdict | Ledger effect |
+|---------|---------------|
+| `CONFIRMED` | Becomes an open blocker; counts toward gate logic |
+| `REFUTED` | Downgraded to suggestion with `status: refuted`; never blocks; refutation rationale stored in `disposition` |
+| `NEEDS_DECISION` | `status: needs_decision`; routed to the decision checkpoint, never revised blindly |
+
+A reviewer's -1/-2 score therefore does not by itself force another
+iteration: if all of that reviewer's critical/major findings are refuted, the
+effective state is "approve with comments". Record the original score in
+`scores` unchanged — the ledger, not the score, is the convergence state.
+
 ## Score Definitions
 
 | Score | Label | Meaning | Blocking? |
