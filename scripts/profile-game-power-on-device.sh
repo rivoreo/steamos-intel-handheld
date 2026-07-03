@@ -32,6 +32,7 @@ CPU_CAP_CORE_SHARE_THRESHOLD='$cpu_cap_core_share_threshold' \
 REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
 set -euo pipefail
 MANGOHUD_OUTPUT_DIR="$REMOTE_ROOT/mangohud-logs"
+chmod 0755 "$REMOTE_ROOT"
 
 wait_for_power_service() {
   for _ in $(seq 1 45); do

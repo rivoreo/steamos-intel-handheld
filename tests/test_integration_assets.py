@@ -414,6 +414,7 @@ def test_game_power_profile_wrapper_supports_controlled_mangohud_capture():
     assert 'if [ "$CAPTURE_MODE" = "controlled" ]; then' in script
     assert "MANGOHUD_CONFIG=" in script
     assert "output_folder=$MANGOHUD_OUTPUT_DIR" in script
+    assert 'chmod 0755 "$REMOTE_ROOT"' in script
     assert "gamescope-mangoapp.service.d" in script
     assert "mangohudctl set log_session true" in script
     assert "mangohudctl set log_session false" in script
