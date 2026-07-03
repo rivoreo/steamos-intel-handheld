@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import re
+import sys
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -414,3 +417,183 @@ def _sample_core_pressure_high(sample: GamePowerSample) -> bool:
         and sample.rapl.core_share is not None
         and sample.rapl.core_share >= 0.38
     )
+
+
+class GamePowerGovernor:
+    def __init__(
+        self,
+        *,
+        config: GamePowerConfig,
+        observer: object,
+        actuator: object,
+    ) -> None:
+        self.config = config
+        self.observer = observer
+        self.actuator = actuator
+        self.controller = GamePowerController(config)
+        self._snapshot: object | None = None
+        self._write_failed = False
+
+    async def run_iterations(self, count: int) -> None:
+        for _ in range(count):
+            await self.run_once()
+
+    async def run_forever(self) -> None:
+        try:
+            while True:
+                await self.run_once()
+        finally:
+            self.restore()
+
+    async def run_once(self) -> GamePowerDecision:
+        sample = await self.observer.sample()
+        decision = self.controller.evaluate(sample)
+        self._apply_decision(decision)
+        print(_format_decision(sample, decision), flush=True)
+        return decision
+
+    def restore(self) -> None:
+        if self._snapshot is not None:
+            self.actuator.restore(self._snapshot)
+            self._snapshot = None
+
+    def _apply_decision(self, decision: GamePowerDecision) -> None:
+        if self._write_failed:
+            return
+        if decision.action in {GamePowerAction.IDLE, GamePowerAction.OBSERVE_ONLY}:
+            return
+        if decision.action == GamePowerAction.RESTORE:
+            self.restore()
+            return
+        try:
+            if self._snapshot is None:
+                self._snapshot = self.actuator.snapshot()
+            if decision.action == GamePowerAction.GPU_PRIORITY_EPP:
+                self.actuator.apply(epp=self.config.epp)
+            elif decision.action == GamePowerAction.GPU_PRIORITY_CPU_CAP:
+                self.actuator.apply(
+                    epp=self.config.epp,
+                    pcore_max_khz=self.config.pcore_max_khz,
+                    ecore_max_khz=self.config.ecore_max_khz,
+                )
+        except Exception as exc:
+            print(
+                "game-power: active write failed; restoring and disabling writes: "
+                f"{exc}",
+                file=sys.stderr,
+            )
+            self.restore()
+            self._write_failed = True
+
+
+def _format_decision(sample: GamePowerSample, decision: GamePowerDecision) -> str:
+    package_w = sample.rapl.package_w if sample.rapl else None
+    core_w = sample.rapl.core_w if sample.rapl else None
+    uncore_w = sample.rapl.uncore_w if sample.rapl else None
+    return (
+        f"game-power appid={sample.appid or '-'} action={decision.action.value} "
+        f"reason={decision.reason!r} package_w={_fmt_w(package_w)} "
+        f"core_w={_fmt_w(core_w)} uncore_w={_fmt_w(uncore_w)}"
+    )
+
+
+def _fmt_w(value: float | None) -> str:
+    return "-" if value is None else f"{value:.2f}"
+
+
+class SystemGamePowerObserver:
+    def __init__(
+        self,
+        *,
+        sysfs_root: str | Path = "/sys",
+        proc_root: str | Path = "/proc",
+        poll_s: float = 2.0,
+    ) -> None:
+        self.rapl = RaplObserver(sysfs_root=sysfs_root)
+        self.proc_root = Path(proc_root)
+        self.poll_s = poll_s
+        self._previous_rapl: EnergyReading | None = None
+
+    async def sample(self) -> GamePowerSample:
+        start = self._previous_rapl or self.rapl.read()
+        await asyncio.sleep(self.poll_s)
+        end = self.rapl.read()
+        self._previous_rapl = end
+        try:
+            rapl = compute_rapl_power_window(start, end)
+        except ValueError:
+            rapl = None
+        return GamePowerSample(
+            appid=None,
+            rapl=rapl,
+            pl1_w=_read_current_pl1_w(self.rapl.sysfs_root),
+            fdinfo_busy={},
+        )
+
+
+def _read_current_pl1_w(sysfs_root: Path) -> int | None:
+    domain = sysfs_root / "class" / "powercap" / "intel-rapl:0"
+    for name_file in sorted(domain.glob("constraint_*_name")):
+        if _read_text(name_file) != "long_term":
+            continue
+        power_file = domain / f"{name_file.name.removesuffix('_name')}_power_limit_uw"
+        value = _read_optional_int(power_file)
+        return value // MICROJOULES_PER_JOULE if value is not None else None
+    value = _read_optional_int(domain / "constraint_0_power_limit_uw")
+    return value // MICROJOULES_PER_JOULE if value is not None else None
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mode",
+        choices=[mode.value for mode in GamePowerMode],
+        default=GamePowerMode.OBSERVE.value,
+    )
+    parser.add_argument("--duration-s", type=float, default=30.0)
+    parser.add_argument("--poll-s", type=float, default=2.0)
+    parser.add_argument("--epp", default="balance_power")
+    parser.add_argument("--pcore-max-mhz", type=int, default=3200)
+    parser.add_argument("--ecore-max-mhz", type=int, default=2800)
+    parser.add_argument("--cpu-cap", action="store_true")
+    parser.add_argument("--target-appid")
+    parser.add_argument("--sysfs-root", default="/sys")
+    parser.add_argument("--proc-root", default="/proc")
+    return parser
+
+
+def config_from_args(args: argparse.Namespace) -> GamePowerConfig:
+    return GamePowerConfig(
+        mode=GamePowerMode(args.mode),
+        poll_s=args.poll_s,
+        epp=args.epp,
+        pcore_max_khz=args.pcore_max_mhz * 1000,
+        ecore_max_khz=args.ecore_max_mhz * 1000,
+        cpu_cap_enabled=bool(args.cpu_cap),
+        target_appid=args.target_appid,
+    )
+
+
+async def run_cli(args: argparse.Namespace) -> None:
+    config = config_from_args(args)
+    observer = SystemGamePowerObserver(
+        sysfs_root=args.sysfs_root,
+        proc_root=args.proc_root,
+        poll_s=config.poll_s,
+    )
+    actuator = CpuPolicyActuator(discover_cpu_policies(args.sysfs_root))
+    governor = GamePowerGovernor(config=config, observer=observer, actuator=actuator)
+    iterations = max(1, int(args.duration_s / config.poll_s))
+    try:
+        await governor.run_iterations(iterations)
+    finally:
+        governor.restore()
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    asyncio.run(run_cli(args))
+
+
+if __name__ == "__main__":
+    main()

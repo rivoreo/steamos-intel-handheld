@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from steamos_intel_handheld import game_power
 from steamos_intel_handheld.game_power import (
     CpuPolicyActuator,
     CpuPolicyClass,
@@ -8,6 +9,7 @@ from steamos_intel_handheld.game_power import (
     GamePowerAction,
     GamePowerConfig,
     GamePowerController,
+    GamePowerGovernor,
     GamePowerMode,
     GamePowerSample,
     RaplObserver,
@@ -241,3 +243,79 @@ def test_controller_uses_cpu_cap_when_enabled_and_epp_is_not_enough():
     decision = controller.evaluate(make_sample(core_w=10.0, render_busy=0.90))
 
     assert decision.action == GamePowerAction.GPU_PRIORITY_CPU_CAP
+
+
+class FakeObserver:
+    def __init__(self, samples):
+        self.samples = list(samples)
+
+    async def sample(self):
+        return self.samples.pop(0)
+
+
+class RecordingActuator:
+    def __init__(self):
+        self.events = []
+        self.snapshot_value = object()
+
+    def snapshot(self):
+        self.events.append(("snapshot",))
+        return self.snapshot_value
+
+    def apply(self, *, epp, pcore_max_khz=None, ecore_max_khz=None):
+        self.events.append(("apply", epp, pcore_max_khz, ecore_max_khz))
+
+    def restore(self, snapshot):
+        self.events.append(("restore", snapshot))
+
+
+class FailingActuator(RecordingActuator):
+    def apply(self, *, epp, pcore_max_khz=None, ecore_max_khz=None):
+        self.events.append(("apply-failed", epp, pcore_max_khz, ecore_max_khz))
+        raise OSError("simulated sysfs write failure")
+
+
+def test_build_parser_defaults_game_power_cli_to_observe_for_standalone_probe():
+    args = game_power.build_parser().parse_args([])
+    config = game_power.config_from_args(args)
+
+    assert config.mode == GamePowerMode.OBSERVE
+    assert config.cpu_cap_enabled is False
+
+
+def test_governor_applies_epp_and_restores_when_controller_requests_restore():
+    config = GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY)
+    observer = FakeObserver(
+        [
+            make_sample(),
+            make_sample(),
+            make_sample(appid=None),
+            make_sample(appid=None),
+            make_sample(appid=None),
+        ]
+    )
+    actuator = RecordingActuator()
+    governor = GamePowerGovernor(config=config, observer=observer, actuator=actuator)
+
+    import asyncio
+
+    asyncio.run(governor.run_iterations(5))
+
+    assert ("snapshot",) in actuator.events
+    assert ("apply", "balance_power", None, None) in actuator.events
+    assert ("restore", actuator.snapshot_value) in actuator.events
+
+
+def test_governor_restores_snapshot_when_active_write_fails():
+    config = GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY)
+    observer = FakeObserver([make_sample(), make_sample()])
+    actuator = FailingActuator()
+    governor = GamePowerGovernor(config=config, observer=observer, actuator=actuator)
+
+    import asyncio
+
+    asyncio.run(governor.run_iterations(2))
+
+    assert ("snapshot",) in actuator.events
+    assert ("apply-failed", "balance_power", None, None) in actuator.events
+    assert ("restore", actuator.snapshot_value) in actuator.events
