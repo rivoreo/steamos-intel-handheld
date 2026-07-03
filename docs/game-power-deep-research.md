@@ -630,9 +630,9 @@ Current implementation note:
 `steamos-intel-handheld-game-power-profile aggregate` now emits an
 `affinity_experiment_plan` alongside `candidate_affinity_roles`. This converts
 the research into a next-run decision artifact. A `ready-for-guarded-experiment`
-plan means the profiler has enough repeated evidence to test a soft compact
-foreground-role placement variant next; it does not mean production hard
-affinity should be enabled.
+plan means the profiler has enough repeated performance, role-stability, and
+rollback-snapshot evidence to test a soft compact foreground-role placement
+variant next; it does not mean production hard affinity should be enabled.
 
 Source:
 https://docs.kernel.org/admin-guide/cgroup-v2.html
@@ -657,7 +657,9 @@ policy runner starts. The snapshot is still read-only. It records foreground
 Steam-app TIDs, original `Cpus_allowed` / `Cpus_allowed_list` masks, cgroup
 membership, and cgroup files for `cpu.uclamp.*`, `cpu.weight`, `cpu.max`, and
 `cpuset.*`. The summarizer records the snapshot's thread count, cgroup count,
-and file list in `summary.json`.
+and file list in `summary.json`, and the aggregate planner refuses to mark an
+affinity experiment ready unless every aggregated baseline and candidate run
+has a non-empty restore-affinity snapshot.
 
 ### Academic And Research Literature
 

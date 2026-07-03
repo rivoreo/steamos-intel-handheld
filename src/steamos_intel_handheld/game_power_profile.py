@@ -180,6 +180,10 @@ class PolicyAggregate:
     avg_render_busy_median: float | None = None
     cpu_pressure_some_avg10_peak_median: float | None = None
     cpu_pressure_full_avg10_peak_median: float | None = None
+    restore_affinity_snapshot_count: int = 0
+    restore_affinity_thread_count_median: float | None = None
+    restore_affinity_cgroup_count_median: float | None = None
+    restore_affinity_files: list[str] | None = None
 
 
 class PolicyVerdict(str, Enum):
@@ -985,6 +989,16 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
         cpu_pressure_full_avg10_peak_median=_median(
             [run.cpu_pressure_full_avg10_peak for run in runs]
         ),
+        restore_affinity_snapshot_count=sum(
+            1 for run in runs if _run_has_restore_affinity_snapshot(run)
+        ),
+        restore_affinity_thread_count_median=_median(
+            [run.restore_affinity_thread_count for run in runs]
+        ),
+        restore_affinity_cgroup_count_median=_median(
+            [run.restore_affinity_cgroup_count for run in runs]
+        ),
+        restore_affinity_files=_aggregate_restore_affinity_files(runs),
     )
 
 
@@ -1123,6 +1137,22 @@ def compare_policy_aggregates(
         PolicyVerdict.INCONCLUSIVE,
         "candidate medians did not meet improvement or rejection thresholds",
     )
+
+
+def _run_has_restore_affinity_snapshot(run: RunSummary) -> bool:
+    return (
+        (run.restore_affinity_thread_count or 0) > 0
+        and (run.restore_affinity_cgroup_count or 0) > 0
+        and bool(run.restore_affinity_files)
+    )
+
+
+def _aggregate_restore_affinity_files(runs: list[RunSummary]) -> list[str]:
+    files: set[str] = set()
+    for run in runs:
+        if run.restore_affinity_files:
+            files.update(run.restore_affinity_files)
+    return sorted(files)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1436,6 +1466,14 @@ def build_affinity_experiment_plan(
     if candidate.restored_count != candidate.sample_count:
         ready = False
         reasons.append("candidate restore verification is incomplete")
+    if (
+        baseline.restore_affinity_snapshot_count == baseline.sample_count
+        and candidate.restore_affinity_snapshot_count == candidate.sample_count
+    ):
+        reasons.append("restore-affinity snapshots are available for every aggregated run")
+    else:
+        ready = False
+        reasons.append("restore-affinity snapshots are missing for aggregated runs")
 
     if not candidate_roles:
         ready = False

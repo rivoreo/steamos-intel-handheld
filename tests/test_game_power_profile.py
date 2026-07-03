@@ -1713,6 +1713,13 @@ def test_profile_cli_aggregate_builds_guarded_affinity_experiment_plan(tmp_path)
                     "capture_mode": "controlled",
                     "avg_fps": avg_fps,
                     "one_percent_low_fps": low_fps,
+                    "restore_affinity_thread_count": 3,
+                    "restore_affinity_cgroup_count": 1,
+                    "restore_affinity_files": [
+                        "cpu.uclamp.max",
+                        "cpu.uclamp.min",
+                        "cpuset.cpus.effective",
+                    ],
                     "restored": True,
                 }
             )
@@ -1774,6 +1781,9 @@ def test_profile_cli_aggregate_builds_guarded_affinity_experiment_plan(tmp_path)
     assert plan["mode"] == "ready-for-guarded-experiment"
     assert plan["write_policy"] == "disabled"
     assert plan["strategy"] == "adaptive-compact-preferred-set"
+    assert json.loads(result.stdout)["comparisons"][0]["candidate"][
+        "restore_affinity_snapshot_count"
+    ] == 2
     assert plan["candidates"][0] == {
         "role_key": "foreground-game:worker-thread",
         "comm": "Worker Thread",
@@ -1791,6 +1801,96 @@ def test_profile_cli_aggregate_builds_guarded_affinity_experiment_plan(tmp_path)
     }
     assert "candidate policy comparison is better" in plan["reasons"]
     assert "hard per-TID affinity remains profiler-only" in plan["reasons"]
+    assert "restore-affinity snapshots are available for every aggregated run" in plan[
+        "reasons"
+    ]
+
+
+def test_profile_cli_aggregate_requires_restore_snapshot_for_guarded_affinity_plan(
+    tmp_path,
+):
+    runs = [
+        ("001-off", "off", 54.0, 40.0, None),
+        ("002-gpu", "gpu-priority", 55.0, 43.0, (2.0, 90.0, 12.0)),
+        ("003-off", "off", 55.0, 40.5, None),
+        ("004-gpu", "gpu-priority", 56.0, 44.0, (2.4, 110.0, 14.0)),
+    ]
+    for dirname, policy, avg_fps, low_fps, role_values in runs:
+        run_dir = tmp_path / dirname
+        run_dir.mkdir()
+        (run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "appid": "1091500",
+                    "tdp_w": 22,
+                    "policy": policy,
+                    "capture_mode": "controlled",
+                    "avg_fps": avg_fps,
+                    "one_percent_low_fps": low_fps,
+                    "restored": True,
+                }
+            )
+        )
+        if role_values is None:
+            continue
+        cpu_time, wait_ms, harm = role_values
+        (run_dir / "affinity-advice.json").write_text(
+            json.dumps(
+                {
+                    "mode": "observe-only",
+                    "role_candidates": [
+                        {
+                            "role_key": "foreground-game:worker-thread",
+                            "comm": "Worker Thread",
+                            "cgroup_role": "foreground-game",
+                            "classification": "latency-hot",
+                            "thread_count": 2,
+                            "tids": [201, 202],
+                            "cpu_time_s_delta": cpu_time,
+                            "migration_delta": 5,
+                            "runqueue_wait_ms_delta": wait_ms,
+                            "runqueue_wait_per_slice_ms_max": 4.0,
+                            "migration_harm_score_max": harm,
+                            "cpus_seen": [0, 1, 2, 3],
+                            "preferred_cpu_overlap": [0, 1],
+                            "suggested_action": "prefer-latency-cpus",
+                        }
+                    ],
+                }
+            )
+        )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "aggregate",
+            "--root",
+            str(tmp_path),
+            "--baseline-policy",
+            "off",
+            "--candidate-policy",
+            "gpu-priority",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--min-runs",
+            "2",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    comparison = json.loads(result.stdout)["comparisons"][0]
+    plan = comparison["affinity_experiment_plan"]
+    assert comparison["candidate"]["restore_affinity_snapshot_count"] == 0
+    assert plan["mode"] == "observe-only"
+    assert "restore-affinity snapshots are missing for aggregated runs" in plan[
+        "reasons"
+    ]
 
 
 def test_profile_cli_aggregate_keeps_cpu_cap_tuning_variants_separate(tmp_path):
