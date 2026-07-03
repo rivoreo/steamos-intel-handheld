@@ -275,6 +275,9 @@ steamos-intel-handheld-game-power-profile aggregate \
   --candidate-policy gpu-priority-cpu-cap \
   --appid 1091500 \
   --tdp-w 22 \
+  --duration-s 60 \
+  --warmup-s 10 \
+  --poll-s 2 \
   --min-runs 3
 ```
 

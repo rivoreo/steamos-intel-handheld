@@ -535,6 +535,9 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--candidate-policy", action="append", required=True)
     aggregate.add_argument("--appid")
     aggregate.add_argument("--tdp-w", type=int)
+    aggregate.add_argument("--duration-s", type=float)
+    aggregate.add_argument("--warmup-s", type=float)
+    aggregate.add_argument("--poll-s", type=float)
     aggregate.add_argument(
         "--capture-mode",
         choices=[mode.value for mode in CaptureMode],
@@ -610,6 +613,12 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
             continue
         if args.tdp_w is not None and summary.tdp_w != args.tdp_w:
             continue
+        if args.duration_s is not None and summary.duration_s != args.duration_s:
+            continue
+        if args.warmup_s is not None and summary.warmup_s != args.warmup_s:
+            continue
+        if args.poll_s is not None and summary.poll_s != args.poll_s:
+            continue
         if summary.capture_mode != capture_mode:
             continue
         if summary.policy != args.baseline_policy and summary.policy not in args.candidate_policy:
@@ -620,13 +629,13 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
     for summary in summaries:
         groups[_profile_group_key(summary)].append(summary)
 
-    baseline_keys_by_context: dict[tuple[str, int], list[tuple[object, ...]]] = defaultdict(
+    baseline_keys_by_context: dict[tuple[object, ...], list[tuple[object, ...]]] = defaultdict(
         list
     )
     for key in groups:
-        appid, tdp_w, policy = key[:3]
+        _appid, _tdp_w, policy = key[:3]
         if policy == args.baseline_policy:
-            baseline_keys_by_context[(str(appid), int(tdp_w))].append(key)
+            baseline_keys_by_context[_comparison_context_key(key)].append(key)
 
     comparisons = []
     candidate_keys = sorted(
@@ -635,7 +644,7 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
     )
     for candidate_key in candidate_keys:
         appid, tdp_w, _candidate_policy = candidate_key[:3]
-        baseline_keys = baseline_keys_by_context.get((str(appid), int(tdp_w)), [])
+        baseline_keys = baseline_keys_by_context.get(_comparison_context_key(candidate_key), [])
         for baseline_key in sorted(baseline_keys, key=_sortable_group_key):
             baseline_runs = groups[baseline_key]
             candidate_runs = groups[candidate_key]
@@ -695,6 +704,10 @@ def _profile_group_key(run: RunSummary) -> tuple[object, ...]:
         *_experiment_settings(run),
         *_effective_tunables(run),
     )
+
+
+def _comparison_context_key(group_key: tuple[object, ...]) -> tuple[object, ...]:
+    return (group_key[0], group_key[1], *group_key[3:6])
 
 
 def _experiment_settings(run: RunSummary) -> tuple[float | None, float | None, float | None]:

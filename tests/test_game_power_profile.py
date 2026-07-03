@@ -788,8 +788,43 @@ def test_profile_cli_aggregate_keeps_capture_durations_separate(tmp_path):
     )
 
     payload = json.loads(result.stdout)
+    assert len(payload["comparisons"]) == 2
+    assert all(
+        item["baseline"]["duration_s"] == item["candidate"]["duration_s"]
+        for item in payload["comparisons"]
+    )
     durations = {item["candidate"]["duration_s"] for item in payload["comparisons"]}
     assert durations == {15.0, 60.0}
+
+    filtered = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "aggregate",
+            "--root",
+            str(tmp_path),
+            "--baseline-policy",
+            "off",
+            "--candidate-policy",
+            "gpu-priority",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--duration-s",
+            "15",
+            "--min-runs",
+            "1",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    filtered_payload = json.loads(filtered.stdout)
+    assert len(filtered_payload["comparisons"]) == 1
+    assert filtered_payload["comparisons"][0]["candidate"]["duration_s"] == 15.0
 
 
 def test_parse_pressure_file_reads_some_and_full_avg10():
