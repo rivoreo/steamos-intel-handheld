@@ -332,6 +332,32 @@ def test_device_verifier_reports_mangohud_gpu_memory_fdinfo():
     assert "MangoHud GPU memory fdinfo" in script
     assert "drm-resident-gtt" in script
     assert "drm-resident-system0" in script
+
+
+def test_game_power_device_verifier_is_registered_as_guarded_harness_check():
+    payload = tomllib.loads((ROOT / "harness.toml").read_text())
+    checks = {check["id"]: check for check in payload["checks"]}
+
+    check = checks["game-power-device"]
+    assert check["command"] == "scripts/verify-game-power-on-device.sh root@10.100.0.19"
+    assert check["tier"] == "guarded"
+    assert check["safe_for_agents"] is False
+    assert check["expectation"] == "blocked"
+    assert "root-ssh" in check["requires"]
+    assert "handheld" in check["requires"]
+    assert "foreground-game" in check["requires"]
+
+
+def test_game_power_device_verifier_restores_cpu_policy_snapshot():
+    script = (ROOT / "scripts/verify-game-power-on-device.sh").read_text()
+
+    assert "snapshot_cpu_policy()" in script
+    assert "restore_cpu_policy()" in script
+    assert "assert_cpu_policy_restored()" in script
+    assert 'trap restore_cpu_policy EXIT' in script
+    assert 'diff -u "$snapshot" "$after"' in script
+    assert "steamos-intel-handheld-game-power --mode observe" in script
+    assert "steamos-intel-handheld-game-power --mode gpu-priority" in script
     assert "drm-resident-vram0" in script
 
 

@@ -23,6 +23,17 @@ expected_duration = "about 1-5 minutes after the target is reachable"
 evidence = "Full verifier output from the target handheld."
 
 [[checks]]
+id = "game-power-device"
+description = "Real foreground-game validation for the game-aware CPU/iGPU shared-power governor."
+command = "scripts/verify-game-power-on-device.sh root@10.100.0.19"
+requires = ["root-ssh", "handheld", "foreground-game"]
+safe_for_agents = false
+tier = "guarded"
+expectation = "blocked"
+expected_duration = "about 1-3 minutes after a Steam game is running"
+evidence = "Observe and gpu-priority outputs plus a clean CPU policy restore diff."
+
+[[checks]]
 id = "release-artifact"
 description = "Unsigned GitLab-style pacman repository artifact shape check."
 command = "scripts/verify-gitlab-pacman-artifact.sh /path/to/downloaded/artifact"
