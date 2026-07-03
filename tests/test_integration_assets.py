@@ -390,6 +390,8 @@ def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
     assert "restore_service_game_power_mode()" in script
     assert "provider_tdp()" in script
     assert "set_provider_tdp()" in script
+    assert "wait_for_power_provider()" in script
+    assert 'set_provider_tdp "$current"' in script
     assert 'trap restore_state EXIT' in script
     assert "--game-power-mode $mode" in script
     assert "set_service_game_power_mode off" in script

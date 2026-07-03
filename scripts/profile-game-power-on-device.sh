@@ -76,6 +76,20 @@ set_provider_tdp() {
     TdpLimit u "$1"
 }
 
+wait_for_power_provider() {
+  local current
+  for _ in $(seq 1 45); do
+    if current="$(provider_tdp 2>/dev/null)" \
+      && [ -n "$current" ] \
+      && set_provider_tdp "$current" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "timed out waiting for PowerControl TDP provider" >&2
+  return 1
+}
+
 set_service_game_power_mode() {
   local mode="$1"
   install -d -m 0755 /run/systemd/system/steamos-intel-handheld-power-control.service.d
@@ -87,6 +101,7 @@ EOF
   systemctl daemon-reload
   systemctl restart steamos-intel-handheld-power-control.service
   wait_for_power_service
+  wait_for_power_provider
 }
 
 restore_service_game_power_mode() {
@@ -95,12 +110,17 @@ restore_service_game_power_mode() {
   systemctl daemon-reload
   systemctl restart steamos-intel-handheld-power-control.service
   wait_for_power_service
+  wait_for_power_provider
 }
 
 restore_state() {
   restore_cpu_policy || true
   if [ -f "$REMOTE_ROOT/tdp.initial" ]; then
-    set_provider_tdp "$(cat "$REMOTE_ROOT/tdp.initial")" || true
+    if wait_for_power_provider >/dev/null 2>&1; then
+      set_provider_tdp "$(cat "$REMOTE_ROOT/tdp.initial")" || true
+    else
+      echo "skipping TDP restore because PowerControl provider is unavailable" >&2
+    fi
   fi
   restore_service_game_power_mode || true
 }
@@ -149,6 +169,7 @@ if [ "$CAPTURE_MODE" != "imported" ]; then
 fi
 
 wait_for_power_service
+wait_for_power_provider
 snapshot_cpu_policy >"$REMOTE_ROOT/cpu-policy.initial"
 provider_tdp >"$REMOTE_ROOT/tdp.initial"
 trap restore_state EXIT
