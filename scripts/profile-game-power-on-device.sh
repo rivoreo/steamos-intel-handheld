@@ -762,22 +762,46 @@ def cgroup_fs_path(relative):
     return cgroup_root.joinpath(*parts)
 
 
+def foreground_app_cgroup(text):
+    return f"app-steam-app{appid}" in text
+
+
+def restore_snapshot_relevant_cgroup(cgroup, comm):
+    lowered = f"{cgroup} {comm or ''}".lower()
+    tokens = (
+        f"app-steam-app{appid}",
+        "app-steam-client",
+        "steamwebhelper",
+        "steam",
+        "gamescope",
+        "mangoapp",
+        "/user.slice/",
+        "/system.slice/",
+    )
+    return any(token in lowered for token in tokens)
+
+
 threads = []
 cgroups = {}
 for cgroup_file in proc.glob("[0-9]*/cgroup"):
     cgroup_text = read_text(cgroup_file)
-    if not cgroup_text or f"app-steam-app{appid}" not in cgroup_text:
+    if not cgroup_text:
         continue
     pid_dir = cgroup_file.parent
     try:
         pid = int(pid_dir.name)
     except ValueError:
         continue
+    comm = read_text(pid_dir / "comm")
+    if not restore_snapshot_relevant_cgroup(cgroup_text, comm):
+        continue
     normalized = normalize_cgroup(cgroup_text)
     relative = cgroup_relative_path(cgroup_text)
     fs_path = cgroup_fs_path(relative)
     if fs_path is not None:
         cgroups[normalized] = fs_path
+    if not foreground_app_cgroup(cgroup_text):
+        continue
     for task_dir in (pid_dir / "task").glob("[0-9]*"):
         try:
             tid = int(task_dir.name)

@@ -742,10 +742,15 @@ Each guarded device profile run now writes `restore-affinity.json` before the
 policy runner starts. The snapshot is still read-only. It records foreground
 Steam-app TIDs, original `Cpus_allowed` / `Cpus_allowed_list` masks, cgroup
 membership, and cgroup files for `cpu.uclamp.*`, `cpu.weight`, `cpu.max`, and
-`cpuset.*`. The summarizer records the snapshot's thread count, cgroup count,
-and file list in `summary.json`, and the aggregate planner refuses to mark an
-affinity experiment ready unless every aggregated baseline and candidate run
-has a non-empty restore-affinity snapshot.
+`cpuset.*`. It also records cgroup controller files for Steam,
+gamescope/mangoapp, user, and system helper cgroups without treating helper
+TIDs as affinity targets. The summarizer records the snapshot's thread count,
+cgroup count, cgroup paths, global file list, and per-cgroup file list in
+`summary.json`. The aggregate planner refuses to mark an affinity experiment
+ready unless every aggregated baseline and candidate run has a non-empty
+restore-affinity snapshot, and refuses to mark a background shaping candidate
+ready unless that candidate's own cgroup has CPU-controller restore coverage in
+every run where it was observed.
 
 Source:
 https://docs.kernel.org/scheduler/sched-util-clamp.html
@@ -1407,8 +1412,9 @@ ITMT priority is an input to the preferred-set ranking, not something to ignore.
 - `background-shaping.json`: observe-only cgroup candidates for background or
   helper work to shape before touching foreground game thread affinity.
 - `restore-affinity.json`: read-only pre-run rollback seed containing
-  foreground thread affinity masks, cgroup membership, and cgroup
-  `cpu.uclamp.*`, `cpu.weight`, `cpu.max`, and `cpuset.*` files.
+  foreground thread affinity masks, cgroup membership, and per-cgroup
+  `cpu.uclamp.*`, `cpu.weight`, `cpu.max`, and `cpuset.*` files for foreground
+  and relevant helper cgroups.
 - Aggregate reports now include `baseline_affinity_roles` and
   `candidate_affinity_roles` when sibling `affinity-advice.json` files exist.
   These summaries keep median CPU time, migration count, runqueue wait,
@@ -1418,8 +1424,9 @@ ITMT priority is an input to the preferred-set ranking, not something to ignore.
   `candidate_background_shaping_candidates`, and
   `background_shaping_experiment_plan` when sibling `background-shaping.json`
   files exist. These summaries keep stable non-foreground cgroup keys, median
-  CPU time, median process count, command names, run coverage, and a disabled
-  write policy for a future guarded background-helper soft-cap experiment.
+  CPU time, median process count, command names, run coverage, per-candidate
+  restore snapshot coverage, and a disabled write policy for a future guarded
+  background-helper soft-cap experiment.
 
 ### Profiler Artifacts To Add Next
 
@@ -1509,8 +1516,9 @@ unstable-or-unknown:
   emits per-policy background/helper cgroup stability summaries plus
   `background_shaping_experiment_plan`. A background plan is marked
   `ready-for-guarded-experiment` only when repeated controlled runs, restore
-  checks, cgroup CPU-controller snapshot coverage, a better policy verdict, and
-  stable helper-cgroup evidence all pass. The write policy remains disabled.
+  checks, candidate-cgroup CPU-controller snapshot coverage, a better policy
+  verdict, and stable helper-cgroup evidence all pass. The write policy remains
+  disabled.
 - The guarded profiler now emits `thread-schedstat.jsonl` for each run by
   sampling read-only `/proc/<pid>/task/<tid>/schedstat` for foreground Steam
   app cgroups. This is the first automatic-affinity latency signal because it

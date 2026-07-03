@@ -286,8 +286,12 @@ artifacts. Summaries then include `fps_target`,
 `fps_target_met`, and repeated comparisons can accept a candidate that sustains
 the target while reducing package power. `restore-affinity.json` snapshots the
 foreground app's original thread affinity masks plus cgroup `cpu.uclamp.*`,
-`cpu.weight`, `cpu.max`, and `cpuset.*` files before a run; it is the rollback
-seed for future guarded affinity/uclamp/cpuset writer experiments.
+`cpu.weight`, `cpu.max`, and `cpuset.*` files before a run. It also snapshots
+the same cgroup controller files for Steam, gamescope/mangoapp, user, and
+system helper cgroups that may become background-shaping candidates. Foreground
+thread masks and helper cgroup files are kept separate: helper TIDs are not used
+as affinity targets. The snapshot is the rollback seed for future guarded
+affinity/uclamp/cpuset writer experiments.
 Controlled capture temporarily installs a
 runtime user-service drop-in for `gamescope-mangoapp.service`, restarts
 `mangoapp`, and uses `mangohudctl` to start and stop one logging session per
@@ -334,9 +338,11 @@ also emits `baseline_background_shaping_candidates`,
 `candidate_background_shaping_candidates`, and
 `background_shaping_experiment_plan`. That plan remains write-disabled and only
 identifies whether a future guarded background-helper `cpu.weight` or
-`cpu.uclamp.max` soft-cap experiment is justified. AppID is an experiment
-grouping key; production game-power policy should remain a generic
-telemetry-driven governor rather than a per-game table.
+`cpu.uclamp.max` soft-cap experiment is justified. A background candidate is not
+eligible for that plan unless its own cgroup appears in `restore-affinity.json`
+with CPU-controller restore files in every run where the candidate was observed.
+AppID is an experiment grouping key; production game-power policy should remain
+a generic telemetry-driven governor rather than a per-game table.
 
 ## Repository layout
 

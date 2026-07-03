@@ -30,6 +30,9 @@ AFFINITY_ROLE_MIN_RUNQUEUE_WAIT_MS = 25.0
 BACKGROUND_SHAPING_MIN_RUN_COVERAGE = 0.67
 BACKGROUND_SHAPING_MIN_OBSERVED_RUNS = 2
 BACKGROUND_SHAPING_MIN_CPU_TIME_S = 1.0
+CGROUP_CPU_CONTROLLER_RESTORE_FILES = frozenset(
+    {"cpu.uclamp.max", "cpu.uclamp.min", "cpu.weight", "cpu.max"}
+)
 
 
 @dataclass(frozen=True)
@@ -91,7 +94,9 @@ class ProcessCgroupSummary:
 class RestoreAffinitySummary:
     thread_count: int
     cgroup_count: int
+    cgroups: list[str]
     files: list[str]
+    cgroup_files: dict[str, list[str]]
 
 
 @dataclass(frozen=True)
@@ -143,7 +148,9 @@ class RunSummary:
     thread_schedstat_hot_threads: list[dict[str, object]] | None = None
     restore_affinity_thread_count: int | None = None
     restore_affinity_cgroup_count: int | None = None
+    restore_affinity_cgroups: list[str] | None = None
     restore_affinity_files: list[str] | None = None
+    restore_affinity_cgroup_files: dict[str, list[str]] | None = None
     actions: dict[str, int] | None = None
     restored: bool = False
 
@@ -186,7 +193,9 @@ class PolicyAggregate:
     restore_affinity_snapshot_count: int = 0
     restore_affinity_thread_count_median: float | None = None
     restore_affinity_cgroup_count_median: float | None = None
+    restore_affinity_cgroups: list[str] | None = None
     restore_affinity_files: list[str] | None = None
+    restore_affinity_cgroup_files: dict[str, list[str]] | None = None
 
 
 class PolicyVerdict(str, Enum):
@@ -630,18 +639,28 @@ def summarize_restore_affinity_json(path: str | Path) -> RestoreAffinitySummary:
     if not isinstance(cgroups, list):
         cgroups = []
 
+    cgroup_paths: set[str] = set()
     files: set[str] = set()
+    cgroup_files_by_path: dict[str, list[str]] = {}
     for cgroup in cgroups:
         if not isinstance(cgroup, dict):
             continue
+        cgroup_path = _optional_str(cgroup.get("cgroup"))
+        if cgroup_path:
+            cgroup_paths.add(cgroup_path)
         cgroup_files = cgroup.get("files")
         if isinstance(cgroup_files, dict):
-            files.update(str(key) for key in cgroup_files)
+            file_names = sorted(str(key) for key in cgroup_files)
+            files.update(file_names)
+            if cgroup_path:
+                cgroup_files_by_path[cgroup_path] = file_names
 
     return RestoreAffinitySummary(
         thread_count=len(threads),
         cgroup_count=len(cgroups),
+        cgroups=sorted(cgroup_paths),
         files=sorted(files),
+        cgroup_files=dict(sorted(cgroup_files_by_path.items())),
     )
 
 
@@ -821,7 +840,11 @@ def merge_run_summary(
         restore_affinity_cgroup_count=(
             restore_affinity.cgroup_count if restore_affinity else None
         ),
+        restore_affinity_cgroups=restore_affinity.cgroups if restore_affinity else None,
         restore_affinity_files=restore_affinity.files if restore_affinity else None,
+        restore_affinity_cgroup_files=(
+            restore_affinity.cgroup_files if restore_affinity else None
+        ),
         actions=power.actions if power else None,
         restored=restored,
     )
@@ -1001,7 +1024,9 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
         restore_affinity_cgroup_count_median=_median(
             [run.restore_affinity_cgroup_count for run in runs]
         ),
+        restore_affinity_cgroups=_aggregate_restore_affinity_cgroups(runs),
         restore_affinity_files=_aggregate_restore_affinity_files(runs),
+        restore_affinity_cgroup_files=_aggregate_restore_affinity_cgroup_files(runs),
     )
 
 
@@ -1156,6 +1181,32 @@ def _aggregate_restore_affinity_files(runs: list[RunSummary]) -> list[str]:
         if run.restore_affinity_files:
             files.update(run.restore_affinity_files)
     return sorted(files)
+
+
+def _aggregate_restore_affinity_cgroups(runs: list[RunSummary]) -> list[str]:
+    cgroups: set[str] = set()
+    for run in runs:
+        if run.restore_affinity_cgroups:
+            cgroups.update(run.restore_affinity_cgroups)
+    return sorted(cgroups)
+
+
+def _aggregate_restore_affinity_cgroup_files(
+    runs: list[RunSummary],
+) -> dict[str, list[str]]:
+    files_by_cgroup: dict[str, set[str]] = {}
+    for run in runs:
+        if not run.restore_affinity_cgroup_files:
+            continue
+        for cgroup, files in run.restore_affinity_cgroup_files.items():
+            if not isinstance(files, list):
+                continue
+            state = files_by_cgroup.setdefault(cgroup, set())
+            state.update(str(item) for item in files)
+    return {
+        cgroup: sorted(files)
+        for cgroup, files in sorted(files_by_cgroup.items())
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1628,6 +1679,13 @@ def build_background_shaping_experiment_plan(
         )
     else:
         ready = False
+        if any(
+            not _background_candidate_has_restore_coverage(item)
+            for item in candidate_candidates
+        ):
+            reasons.append(
+                "candidate background cgroups are missing from restore-affinity snapshots"
+            )
         reasons.append("no background/helper cgroup passed guarded-shaping gates")
 
     return {
@@ -1641,7 +1699,7 @@ def build_background_shaping_experiment_plan(
 
 def _aggregate_has_cgroup_cpu_controller_restore(aggregate: PolicyAggregate) -> bool:
     files = set(aggregate.restore_affinity_files or [])
-    return bool(files.intersection({"cpu.uclamp.max", "cpu.weight", "cpu.max"}))
+    return bool(files.intersection(CGROUP_CPU_CONTROLLER_RESTORE_FILES))
 
 
 def _background_candidate_is_ready_for_guarded_experiment(
@@ -1659,10 +1717,20 @@ def _background_candidate_is_ready_for_guarded_experiment(
         BACKGROUND_SHAPING_MIN_CPU_TIME_S
     ):
         return False
+    if not _background_candidate_has_restore_coverage(candidate):
+        return False
     return candidate.get("suggested_action") in {
         "future-cpu-weight-candidate",
         "future-uclamp-max-candidate",
     }
+
+
+def _background_candidate_has_restore_coverage(candidate: dict[str, object]) -> bool:
+    observed = _optional_int(candidate.get("observed_run_count")) or 0
+    restore_observed = _optional_int(
+        candidate.get("restore_snapshot_observed_run_count")
+    ) or 0
+    return observed > 0 and restore_observed == observed
 
 
 def _guarded_background_shaping_candidate(
@@ -1678,6 +1746,12 @@ def _guarded_background_shaping_candidate(
         "fallback": "restore-original-cgroup-cpu-controller-state",
         "observed_run_count": candidate.get("observed_run_count"),
         "run_coverage": candidate.get("run_coverage"),
+        "restore_snapshot_observed_run_count": candidate.get(
+            "restore_snapshot_observed_run_count"
+        ),
+        "restore_snapshot_run_coverage": candidate.get(
+            "restore_snapshot_run_coverage"
+        ),
         "cpu_time_s_delta_median": candidate.get("cpu_time_s_delta_median"),
     }
 
@@ -1774,6 +1848,7 @@ def aggregate_background_shaping_candidates(
         return []
     candidates: dict[str, dict[str, object]] = {}
     for summary_path in summary_paths:
+        run = _load_run_summary(summary_path)
         advice_path = summary_path.with_name("background-shaping.json")
         if not advice_path.is_file():
             continue
@@ -1799,12 +1874,17 @@ def aggregate_background_shaping_candidates(
                     "classification": classification,
                     "suggested_action": "observe",
                     "observed_run_count": 0,
+                    "restore_snapshot_observed_run_count": 0,
                     "cpu_time_s_delta": [],
                     "process_count": [],
                     "commands": set(),
                 },
             )
             state["observed_run_count"] = int(state["observed_run_count"]) + 1
+            if _run_has_cgroup_cpu_controller_restore(run, cgroup):
+                state["restore_snapshot_observed_run_count"] = (
+                    int(state["restore_snapshot_observed_run_count"]) + 1
+                )
             _append_float(state["cpu_time_s_delta"], item.get("cpu_time_s_delta"))
             _append_float(state["process_count"], item.get("process_count"))
             commands = state["commands"]
@@ -1849,6 +1929,7 @@ def _finalize_aggregate_background_shaping_candidate(
     total_runs: int,
 ) -> dict[str, object]:
     observed = int(candidate["observed_run_count"])
+    restore_observed = int(candidate["restore_snapshot_observed_run_count"])
     commands = candidate.get("commands")
     return {
         "candidate_key": candidate.get("candidate_key"),
@@ -1857,10 +1938,20 @@ def _finalize_aggregate_background_shaping_candidate(
         "suggested_action": candidate.get("suggested_action"),
         "observed_run_count": observed,
         "run_coverage": round(observed / total_runs, 3) if total_runs > 0 else 0.0,
+        "restore_snapshot_observed_run_count": restore_observed,
+        "restore_snapshot_run_coverage": (
+            round(restore_observed / observed, 3) if observed > 0 else 0.0
+        ),
         "cpu_time_s_delta_median": _median(candidate["cpu_time_s_delta"]),
         "process_count_median": _median(candidate["process_count"]),
         "commands": sorted(commands) if isinstance(commands, set) else [],
     }
+
+
+def _run_has_cgroup_cpu_controller_restore(run: RunSummary, cgroup: str) -> bool:
+    files_by_cgroup = run.restore_affinity_cgroup_files or {}
+    files = files_by_cgroup.get(cgroup) or []
+    return bool(set(files).intersection(CGROUP_CPU_CONTROLLER_RESTORE_FILES))
 
 
 def _finalize_aggregate_affinity_role(

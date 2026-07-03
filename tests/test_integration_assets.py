@@ -467,10 +467,15 @@ def test_game_power_profile_wrapper_records_affinity_restore_snapshot():
     script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
 
     assert "snapshot_affinity_restore_state()" in script
+    assert "restore_snapshot_relevant_cgroup" in script
+    assert "foreground_app_cgroup" in script
     assert 'snapshot_affinity_restore_state "$run_dir/restore-affinity.json"' in script
     assert "--restore-affinity-json" in script
     assert '"$run_dir/restore-affinity.json"' in script
     assert "Cpus_allowed_list" in script
+    assert "app-steam-client" in script
+    assert "gamescope" in script
+    assert "mangoapp" in script
     assert "cpu.uclamp.min" in script
     assert "cpu.uclamp.max" in script
     assert "cpu.weight" in script
