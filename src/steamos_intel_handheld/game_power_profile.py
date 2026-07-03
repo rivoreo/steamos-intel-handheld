@@ -1255,7 +1255,7 @@ def run_compare(args: argparse.Namespace) -> PolicyComparison:
 
 def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
     capture_mode = CaptureMode(args.capture_mode)
-    summaries = []
+    records: list[tuple[Path, RunSummary]] = []
     for path in _discover_summary_paths(args.root):
         summary = _load_run_summary(path)
         if args.appid and summary.appid != args.appid:
@@ -1279,11 +1279,13 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
             continue
         if summary.policy != args.baseline_policy and summary.policy not in args.candidate_policy:
             continue
-        summaries.append(summary)
+        records.append((path, summary))
 
     groups: dict[tuple[object, ...], list[RunSummary]] = defaultdict(list)
-    for summary in summaries:
+    paths_by_group: dict[tuple[object, ...], list[Path]] = defaultdict(list)
+    for path, summary in records:
         groups[_profile_group_key(summary)].append(summary)
+        paths_by_group[_profile_group_key(summary)].append(path)
 
     baseline_keys_by_context: dict[tuple[object, ...], list[tuple[object, ...]]] = defaultdict(
         list
@@ -1317,6 +1319,12 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
                     "tdp_w": tdp_w,
                     "baseline": asdict(baseline),
                     "candidate": asdict(candidate),
+                    "baseline_affinity_roles": aggregate_affinity_roles(
+                        paths_by_group[baseline_key]
+                    ),
+                    "candidate_affinity_roles": aggregate_affinity_roles(
+                        paths_by_group[candidate_key]
+                    ),
                     "comparison": asdict(comparison),
                 }
             )
@@ -1335,6 +1343,117 @@ def _load_run_summary(path: str | Path) -> RunSummary:
     if "capture_mode" in payload:
         payload["capture_mode"] = CaptureMode(payload["capture_mode"])
     return RunSummary(**payload)
+
+
+def aggregate_affinity_roles(summary_paths: list[Path]) -> list[dict[str, object]]:
+    if not summary_paths:
+        return []
+    roles: dict[str, dict[str, object]] = {}
+    for summary_path in summary_paths:
+        advice_path = summary_path.with_name("affinity-advice.json")
+        if not advice_path.is_file():
+            continue
+        try:
+            payload = json.loads(advice_path.read_text())
+        except json.JSONDecodeError:
+            continue
+        for item in payload.get("role_candidates") or []:
+            if not isinstance(item, dict):
+                continue
+            role_key = _optional_str(item.get("role_key"))
+            if role_key is None:
+                continue
+            role = roles.setdefault(
+                role_key,
+                {
+                    "role_key": role_key,
+                    "comm": item.get("comm"),
+                    "cgroup_role": item.get("cgroup_role"),
+                    "classification": "throughput-worker",
+                    "suggested_action": "observe",
+                    "observed_run_count": 0,
+                    "thread_count": [],
+                    "cpu_time_s_delta": [],
+                    "migration_delta": [],
+                    "runqueue_wait_ms_delta": [],
+                    "runqueue_wait_per_slice_ms_max": [],
+                    "migration_harm_score_max": [],
+                    "cpus_seen": set(),
+                    "preferred_cpu_overlap": set(),
+                },
+            )
+            role["observed_run_count"] = int(role["observed_run_count"]) + 1
+            _append_float(role["thread_count"], item.get("thread_count"))
+            _append_float(role["cpu_time_s_delta"], item.get("cpu_time_s_delta"))
+            _append_float(role["migration_delta"], item.get("migration_delta"))
+            _append_float(
+                role["runqueue_wait_ms_delta"],
+                item.get("runqueue_wait_ms_delta"),
+            )
+            _append_float(
+                role["runqueue_wait_per_slice_ms_max"],
+                item.get("runqueue_wait_per_slice_ms_max"),
+            )
+            _append_float(
+                role["migration_harm_score_max"],
+                item.get("migration_harm_score_max"),
+            )
+            _extend_int_set(role["cpus_seen"], item.get("cpus_seen"))
+            _extend_int_set(role["preferred_cpu_overlap"], item.get("preferred_cpu_overlap"))
+            classification = _optional_str(item.get("classification"))
+            if _classification_rank(classification) > _classification_rank(
+                _optional_str(role.get("classification"))
+            ):
+                role["classification"] = classification
+            if item.get("suggested_action") == "prefer-latency-cpus":
+                role["suggested_action"] = "prefer-latency-cpus"
+
+    candidates = [
+        _finalize_aggregate_affinity_role(role, total_runs=len(summary_paths))
+        for role in roles.values()
+    ]
+    candidates.sort(
+        key=lambda item: (
+            -int(item["observed_run_count"]),
+            -float(item["migration_harm_score_max_median"] or 0.0),
+            -float(item["runqueue_wait_ms_delta_median"] or 0.0),
+            str(item["role_key"]),
+        )
+    )
+    return candidates
+
+
+def _finalize_aggregate_affinity_role(
+    role: dict[str, object],
+    *,
+    total_runs: int,
+) -> dict[str, object]:
+    cpus_seen = role.get("cpus_seen")
+    preferred_overlap = role.get("preferred_cpu_overlap")
+    observed = int(role["observed_run_count"])
+    return {
+        "role_key": role.get("role_key"),
+        "comm": role.get("comm"),
+        "cgroup_role": role.get("cgroup_role"),
+        "classification": role.get("classification"),
+        "suggested_action": role.get("suggested_action"),
+        "observed_run_count": observed,
+        "run_coverage": round(observed / total_runs, 3) if total_runs > 0 else 0.0,
+        "thread_count_median": _median(role["thread_count"]),
+        "cpu_time_s_delta_median": _median(role["cpu_time_s_delta"]),
+        "migration_delta_median": _median(role["migration_delta"]),
+        "runqueue_wait_ms_delta_median": _median(role["runqueue_wait_ms_delta"]),
+        "runqueue_wait_per_slice_ms_max_median": _median(
+            role["runqueue_wait_per_slice_ms_max"]
+        ),
+        "migration_harm_score_max_median": _median(
+            role["migration_harm_score_max"]
+        ),
+        "cpus_seen": sorted(cpus_seen) if isinstance(cpus_seen, set) else [],
+        "preferred_cpu_overlap": (
+            sorted(preferred_overlap) if isinstance(preferred_overlap, set) else []
+        ),
+    }
 
 
 def _discover_summary_paths(roots: list[str]) -> list[Path]:

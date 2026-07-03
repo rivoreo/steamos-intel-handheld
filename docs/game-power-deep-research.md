@@ -841,6 +841,10 @@ The governor should classify threads by behavior over a sliding window:
 - Store cross-run affinity evidence by role key plus AppID/topology/kernel/
   Proton/TDP/FPS-target fingerprint. Do not cache raw TID, because it is a
   launch-local implementation detail rather than a stable game behavior.
+- Aggregate role evidence across repeated controlled runs before acting. A role
+  should be considered for any write-mode experiment only if it has good
+  run-coverage in the same AppID/TDP/FPS-target/topology bucket and the
+  aggregated FPS/power comparison is not already rejected.
 
 ## Decky Plugin Control Surface
 
@@ -1187,6 +1191,11 @@ ITMT priority is an input to the preferred-set ranking, not something to ignore.
   scopes.
 - `background-shaping.json`: observe-only cgroup candidates for background or
   helper work to shape before touching foreground game thread affinity.
+- Aggregate reports now include `baseline_affinity_roles` and
+  `candidate_affinity_roles` when sibling `affinity-advice.json` files exist.
+  These summaries keep median CPU time, migration count, runqueue wait,
+  runqueue-wait-per-slice, migration harm, run coverage, and CPU-set overlap
+  per stable role key across the included runs.
 
 ### Profiler Artifacts To Add Next
 
@@ -1270,6 +1279,10 @@ unstable-or-unknown:
   runqueue wait, seen CPUs, preferred CPU overlap, and suggested action across
   matching TIDs. This is the first cross-run unit for automatic affinity A/B
   analysis.
+- The aggregate CLI now reads sibling `affinity-advice.json` files next to each
+  included `summary.json` and emits per-policy role stability summaries. This
+  lets repeated A/B reports show both the policy-level FPS/power result and the
+  scheduler roles that were consistently latency-hot during those runs.
 - The guarded profiler now emits `thread-schedstat.jsonl` for each run by
   sampling read-only `/proc/<pid>/task/<tid>/schedstat` for foreground Steam
   app cgroups. This is the first automatic-affinity latency signal because it

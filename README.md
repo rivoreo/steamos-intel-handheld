@@ -317,9 +317,12 @@ steamos-intel-handheld-game-power-profile aggregate \
 effective CPU-cap tunables, and capture timing. It uses median FPS/power
 metrics, and only recommends a candidate when every included run is controlled,
 every restore check passed, and both baseline and candidate have enough
-repeated samples. AppID is an experiment grouping key; production game-power
-policy should remain a generic telemetry-driven governor rather than a
-per-game table.
+repeated samples. When sibling `affinity-advice.json` files are present, the
+aggregate output also includes `baseline_affinity_roles` and
+`candidate_affinity_roles`, which summarize how often stable role candidates
+appeared across the included runs and their median migration/runqueue-wait
+scores. AppID is an experiment grouping key; production game-power policy
+should remain a generic telemetry-driven governor rather than a per-game table.
 
 ## Repository layout
 
