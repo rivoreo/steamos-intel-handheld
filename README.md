@@ -237,6 +237,16 @@ By default the guarded wrapper runs an imported-log capture at 22W for:
 - `off`
 - `gpu-priority`
 
+To include the stronger CPU max-frequency cap candidate, opt into it in the
+profile matrix instead of changing the installed default:
+
+```bash
+PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap" \
+PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000 \
+PROFILE_GAME_POWER_ECORE_MAX_MHZ=2200 \
+scripts/profile-game-power-on-device.sh root@10.100.0.19
+```
+
 The wrapper temporarily forces the installed service governor to `off`, so the
 standalone profiler controls the test policy and the `off` run is a real
 baseline. Results are copied into `.cache/game-power/profiles/`. Each run

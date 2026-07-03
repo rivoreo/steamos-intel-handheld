@@ -300,6 +300,66 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert summary["restored"] is True
 
 
+def test_profile_cli_summarize_records_policy_tunables(tmp_path):
+    mangohud = tmp_path / "mangohud.csv"
+    output = tmp_path / "profile"
+    write_csv(
+        mangohud,
+        ["Average FPS", "1% Min FPS", "0.1% Min FPS", "Average Frame Time"],
+        [
+            {
+                "Average FPS": "31.9",
+                "1% Min FPS": "29.7",
+                "0.1% Min FPS": "29.3",
+                "Average Frame Time": "31.3",
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "summarize",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--policy",
+            "gpu-priority-cpu-cap",
+            "--capture-mode",
+            "imported",
+            "--mangohud-csv",
+            str(mangohud),
+            "--epp",
+            "balance_power",
+            "--pcore-max-mhz",
+            "3000",
+            "--ecore-max-mhz",
+            "2200",
+            "--cpu-cap-enabled",
+            "true",
+            "--output",
+            str(output),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    summary = json.loads((output / "summary.json").read_text())
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["epp"] == "balance_power"
+    assert manifest["pcore_max_mhz"] == 3000
+    assert manifest["ecore_max_mhz"] == 2200
+    assert manifest["cpu_cap_enabled"] is True
+    assert summary["epp"] == "balance_power"
+    assert summary["pcore_max_mhz"] == 3000
+    assert summary["ecore_max_mhz"] == 2200
+    assert summary["cpu_cap_enabled"] is True
+
+
 def test_profile_cli_compare_reads_two_summary_files(tmp_path):
     baseline = tmp_path / "off-summary.json"
     candidate = tmp_path / "gpu-summary.json"

@@ -404,6 +404,19 @@ def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
     assert '"$target:$remote_root/."' in script
 
 
+def test_game_power_profile_wrapper_supports_cpu_cap_policy_variants():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert "PROFILE_GAME_POWER_EPP" in script
+    assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ" in script
+    assert "PROFILE_GAME_POWER_ECORE_MAX_MHZ" in script
+    assert "gpu-priority-cpu-cap" in script
+    assert "--cpu-cap" in script
+    assert '--pcore-max-mhz "$PCORE_MAX_MHZ"' in script
+    assert '--ecore-max-mhz "$ECORE_MAX_MHZ"' in script
+    assert '--cpu-cap-enabled "$cpu_cap_enabled"' in script
+
+
 def test_device_verifier_checks_profile_aware_tdp_policy_and_tau():
     script = (ROOT / "scripts/verify-on-device.sh").read_text()
 
@@ -566,6 +579,8 @@ def test_docs_describe_game_power_governor_default_on_and_reversible():
     assert "--game-power-mode gpu-priority" in readme
     assert "restores the previous CPU EPP and frequency limits" in readme
     assert "scripts/verify-game-power-on-device.sh root@10.100.0.19" in readme
+    assert 'PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap"' in readme
+    assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000" in readme
     assert "Game power governor" in design
     assert "enabled by default" in design
     assert "does not raise PL1 automatically" in design

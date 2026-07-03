@@ -14,6 +14,9 @@ duration_s="${PROFILE_GAME_POWER_DURATION_S:-60}"
 warmup_s="${PROFILE_GAME_POWER_WARMUP_S:-10}"
 poll_s="${PROFILE_GAME_POWER_POLL_S:-2}"
 capture_mode="${PROFILE_GAME_POWER_CAPTURE_MODE:-imported}"
+epp="${PROFILE_GAME_POWER_EPP:-balance_power}"
+pcore_max_mhz="${PROFILE_GAME_POWER_PCORE_MAX_MHZ:-3200}"
+ecore_max_mhz="${PROFILE_GAME_POWER_ECORE_MAX_MHZ:-2800}"
 local_root="${PROFILE_GAME_POWER_OUTPUT_ROOT:-.cache/game-power/profiles}"
 mkdir -p "$local_root"
 
@@ -22,7 +25,8 @@ remote_root="$(ssh "$target" "mktemp -d /tmp/game-power-profile.XXXXXX")"
 ssh "$target" \
   "APPID='$appid' TDP_LEVELS='$tdp_levels' POLICIES='$policies' \
 DURATION_S='$duration_s' WARMUP_S='$warmup_s' POLL_S='$poll_s' \
-CAPTURE_MODE='$capture_mode' REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
+CAPTURE_MODE='$capture_mode' EPP='$epp' PCORE_MAX_MHZ='$pcore_max_mhz' \
+ECORE_MAX_MHZ='$ecore_max_mhz' REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
 set -euo pipefail
 
 wait_for_power_service() {
@@ -185,8 +189,26 @@ for tdp in $TDP_LEVELS; do
     provider_tdp >"$run_dir/tdp.before"
 
     case "$policy" in
-      off) mode="observe" ;;
-      gpu-priority) mode="gpu-priority" ;;
+      off)
+        mode="observe"
+        cpu_cap_enabled=false
+        policy_args=(--epp "$EPP")
+      ;;
+      gpu-priority)
+        mode="gpu-priority"
+        cpu_cap_enabled=false
+        policy_args=(--epp "$EPP")
+      ;;
+      gpu-priority-cpu-cap)
+        mode="gpu-priority"
+        cpu_cap_enabled=true
+        policy_args=(
+          --epp "$EPP"
+          --cpu-cap
+          --pcore-max-mhz "$PCORE_MAX_MHZ"
+          --ecore-max-mhz "$ECORE_MAX_MHZ"
+        )
+      ;;
       *)
         echo "unsupported PROFILE_GAME_POWER_POLICIES entry: $policy" >&2
         exit 2
@@ -200,7 +222,8 @@ for tdp in $TDP_LEVELS; do
       --duration-s "$DURATION_S" \
       --poll-s "$POLL_S" \
       --target-appid "$APPID" \
-      --output-format jsonl >"$run_dir/game-power.jsonl"
+      --output-format jsonl \
+      "${policy_args[@]}" >"$run_dir/game-power.jsonl"
     wait "$pressure_pid" || true
 
     csv="$(latest_mangohud_csv)"
@@ -226,6 +249,10 @@ for tdp in $TDP_LEVELS; do
       --mangohud-csv "$run_dir/mangohud.csv" \
       --game-power-jsonl "$run_dir/game-power.jsonl" \
       --pressure-jsonl "$run_dir/cgroup-pressure.jsonl" \
+      --epp "$EPP" \
+      --pcore-max-mhz "$PCORE_MAX_MHZ" \
+      --ecore-max-mhz "$ECORE_MAX_MHZ" \
+      --cpu-cap-enabled "$cpu_cap_enabled" \
       --restored "$restored" \
       --output "$run_dir"
   done

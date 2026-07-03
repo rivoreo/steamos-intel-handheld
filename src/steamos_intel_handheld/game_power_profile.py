@@ -49,6 +49,10 @@ class RunSummary:
     tdp_w: int
     policy: str
     capture_mode: CaptureMode = CaptureMode.IMPORTED
+    epp: str | None = None
+    pcore_max_mhz: int | None = None
+    ecore_max_mhz: int | None = None
+    cpu_cap_enabled: bool | None = None
     avg_fps: float | None = None
     one_percent_low_fps: float | None = None
     point_one_percent_low_fps: float | None = None
@@ -171,6 +175,10 @@ def merge_run_summary(
     fps: MangoHudFpsSummary,
     power: GamePowerLogSummary | None,
     pressure: dict[str, float] | None = None,
+    epp: str | None = None,
+    pcore_max_mhz: int | None = None,
+    ecore_max_mhz: int | None = None,
+    cpu_cap_enabled: bool | None = None,
     restored: bool,
 ) -> RunSummary:
     pressure = pressure or {}
@@ -179,6 +187,10 @@ def merge_run_summary(
         tdp_w=tdp_w,
         policy=policy,
         capture_mode=fps.capture_mode,
+        epp=epp,
+        pcore_max_mhz=pcore_max_mhz,
+        ecore_max_mhz=ecore_max_mhz,
+        cpu_cap_enabled=cpu_cap_enabled,
         avg_fps=fps.avg_fps,
         one_percent_low_fps=fps.one_percent_low_fps,
         point_one_percent_low_fps=fps.point_one_percent_low_fps,
@@ -289,6 +301,10 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--mangohud-summary-csv")
     summarize.add_argument("--game-power-jsonl")
     summarize.add_argument("--pressure-jsonl")
+    summarize.add_argument("--epp")
+    summarize.add_argument("--pcore-max-mhz", type=int)
+    summarize.add_argument("--ecore-max-mhz", type=int)
+    summarize.add_argument("--cpu-cap-enabled", choices=["true", "false"])
     summarize.add_argument("--output", required=True)
     summarize.add_argument("--restored", choices=["true", "false"], default="true")
 
@@ -316,6 +332,10 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "tdp_w": args.tdp_w,
         "policy": args.policy,
         "capture_mode": capture_mode.value,
+        "epp": args.epp,
+        "pcore_max_mhz": args.pcore_max_mhz,
+        "ecore_max_mhz": args.ecore_max_mhz,
+        "cpu_cap_enabled": _optional_bool(args.cpu_cap_enabled),
     }
     summary = merge_run_summary(
         appid=args.appid,
@@ -324,6 +344,10 @@ def run_summarize(args: argparse.Namespace) -> Path:
         fps=fps,
         power=power,
         pressure=pressure,
+        epp=args.epp,
+        pcore_max_mhz=args.pcore_max_mhz,
+        ecore_max_mhz=args.ecore_max_mhz,
+        cpu_cap_enabled=_optional_bool(args.cpu_cap_enabled),
         restored=args.restored == "true",
     )
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -354,6 +378,12 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, list):
         return [_json_ready(item) for item in value]
     return value
+
+
+def _optional_bool(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    return value == "true"
 
 
 def parse_pressure_file(text: str) -> dict[str, dict[str, float]]:
