@@ -427,15 +427,19 @@ def test_game_power_profile_wrapper_supports_cpu_cap_policy_variants():
     script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
 
     assert "PROFILE_GAME_POWER_REPEATS" in script
+    assert "PROFILE_GAME_POWER_CPU_CAP_VARIANTS" in script
+    assert "parse_cpu_cap_variant()" in script
+    assert "CPU_CAP_VARIANTS_EFFECTIVE" in script
+    assert "variant_label:pcore_mhz:ecore_mhz:threshold" in script
     assert "PROFILE_GAME_POWER_EPP" in script
     assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ" in script
     assert "PROFILE_GAME_POWER_ECORE_MAX_MHZ" in script
     assert "PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD" in script
     assert "gpu-priority-cpu-cap" in script
     assert "--cpu-cap" in script
-    assert '--pcore-max-mhz "$PCORE_MAX_MHZ"' in script
-    assert '--ecore-max-mhz "$ECORE_MAX_MHZ"' in script
-    assert '--cpu-cap-core-share-threshold "$CPU_CAP_CORE_SHARE_THRESHOLD"' in script
+    assert '--pcore-max-mhz "$variant_pcore_max_mhz"' in script
+    assert '--ecore-max-mhz "$variant_ecore_max_mhz"' in script
+    assert '--cpu-cap-core-share-threshold "$variant_core_share_threshold"' in script
     assert '--cpu-cap-enabled "$cpu_cap_enabled"' in script
     assert '--duration-s "$DURATION_S"' in script
     assert '--warmup-s "$WARMUP_S"' in script
@@ -607,6 +611,7 @@ def test_docs_describe_game_power_governor_default_on_and_reversible():
     assert 'PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap"' in readme
     assert "PROFILE_GAME_POWER_CAPTURE_MODE=controlled" in readme
     assert "PROFILE_GAME_POWER_REPEATS=3" in readme
+    assert "PROFILE_GAME_POWER_CPU_CAP_VARIANTS=" in readme
     assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000" in readme
     assert "PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD=0.30" in readme
     assert "steamos-intel-handheld-game-power-profile aggregate" in readme

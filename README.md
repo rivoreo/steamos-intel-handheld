@@ -244,6 +244,7 @@ profile matrix instead of changing the installed default:
 PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
 PROFILE_GAME_POWER_REPEATS=3 \
 PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap" \
+PROFILE_GAME_POWER_CPU_CAP_VARIANTS="loose:3400:2600:0.35 balanced:3200:2400:0.35 conservative:3000:2200:0.30" \
 PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000 \
 PROFILE_GAME_POWER_ECORE_MAX_MHZ=2200 \
 PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD=0.30 \
@@ -282,9 +283,12 @@ steamos-intel-handheld-game-power-profile aggregate \
 ```
 
 `aggregate` scans `summary.json` files, groups runs by AppID, TDP, and policy,
-uses median FPS/power metrics, and only recommends a candidate when every
-included run is controlled, every restore check passed, and both baseline and
-candidate have enough repeated samples.
+effective CPU-cap tunables, and capture timing. It uses median FPS/power
+metrics, and only recommends a candidate when every included run is controlled,
+every restore check passed, and both baseline and candidate have enough
+repeated samples. AppID is an experiment grouping key; production game-power
+policy should remain a generic telemetry-driven governor rather than a
+per-game table.
 
 ## Repository layout
 
