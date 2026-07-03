@@ -340,6 +340,8 @@ def test_profile_cli_summarize_records_policy_tunables(tmp_path):
             "2200",
             "--cpu-cap-enabled",
             "true",
+            "--cpu-cap-core-share-threshold",
+            "0.31",
             "--output",
             str(output),
         ],
@@ -354,10 +356,12 @@ def test_profile_cli_summarize_records_policy_tunables(tmp_path):
     assert manifest["pcore_max_mhz"] == 3000
     assert manifest["ecore_max_mhz"] == 2200
     assert manifest["cpu_cap_enabled"] is True
+    assert manifest["cpu_cap_core_share_threshold"] == 0.31
     assert summary["epp"] == "balance_power"
     assert summary["pcore_max_mhz"] == 3000
     assert summary["ecore_max_mhz"] == 2200
     assert summary["cpu_cap_enabled"] is True
+    assert summary["cpu_cap_core_share_threshold"] == 0.31
 
 
 def test_profile_cli_compare_reads_two_summary_files(tmp_path):

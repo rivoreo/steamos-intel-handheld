@@ -366,6 +366,8 @@ def test_game_power_device_verifier_restores_cpu_policy_snapshot():
     assert 'diff -u "$snapshot" "$after"' in script
     assert "steamos-intel-handheld-game-power --mode observe" in script
     assert "steamos-intel-handheld-game-power --mode gpu-priority" in script
+    assert "VERIFY_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD" in script
+    assert '--cpu-cap-core-share-threshold "$cpu_cap_core_share_threshold"' in script
     assert "drm-resident-vram0" in script
 
 
@@ -410,10 +412,12 @@ def test_game_power_profile_wrapper_supports_cpu_cap_policy_variants():
     assert "PROFILE_GAME_POWER_EPP" in script
     assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ" in script
     assert "PROFILE_GAME_POWER_ECORE_MAX_MHZ" in script
+    assert "PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD" in script
     assert "gpu-priority-cpu-cap" in script
     assert "--cpu-cap" in script
     assert '--pcore-max-mhz "$PCORE_MAX_MHZ"' in script
     assert '--ecore-max-mhz "$ECORE_MAX_MHZ"' in script
+    assert '--cpu-cap-core-share-threshold "$CPU_CAP_CORE_SHARE_THRESHOLD"' in script
     assert '--cpu-cap-enabled "$cpu_cap_enabled"' in script
 
 
@@ -581,6 +585,7 @@ def test_docs_describe_game_power_governor_default_on_and_reversible():
     assert "scripts/verify-game-power-on-device.sh root@10.100.0.19" in readme
     assert 'PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap"' in readme
     assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000" in readme
+    assert "PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD=0.30" in readme
     assert "Game power governor" in design
     assert "enabled by default" in design
     assert "does not raise PL1 automatically" in design

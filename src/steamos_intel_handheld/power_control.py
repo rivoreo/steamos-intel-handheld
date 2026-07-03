@@ -1099,6 +1099,7 @@ def build_game_power_config(args: argparse.Namespace) -> GamePowerConfig:
         pcore_max_khz=args.game_power_pcore_max_mhz * 1000,
         ecore_max_khz=args.game_power_ecore_max_mhz * 1000,
         cpu_cap_enabled=args.game_power_cpu_cap == "on",
+        cpu_cap_core_share_threshold=args.game_power_cpu_cap_core_share_threshold,
         target_appid=args.game_power_target_appid,
     )
 
@@ -1174,6 +1175,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--game-power-pcore-max-mhz", type=int, default=3200)
     parser.add_argument("--game-power-ecore-max-mhz", type=int, default=2800)
     parser.add_argument("--game-power-cpu-cap", choices=["on", "off"], default="off")
+    parser.add_argument("--game-power-cpu-cap-core-share-threshold", type=float, default=0.38)
     parser.add_argument("--game-power-target-appid")
     parser.add_argument("--user", default="deck")
     parser.add_argument("--wait-timeout-s", type=int, default=600)

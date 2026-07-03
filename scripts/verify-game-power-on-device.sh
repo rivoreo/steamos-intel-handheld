@@ -14,6 +14,7 @@ epp="${VERIFY_GAME_POWER_EPP:-balance_power}"
 cpu_cap="${VERIFY_GAME_POWER_CPU_CAP:-off}"
 pcore_max_mhz="${VERIFY_GAME_POWER_PCORE_MAX_MHZ:-3200}"
 ecore_max_mhz="${VERIFY_GAME_POWER_ECORE_MAX_MHZ:-2800}"
+cpu_cap_core_share_threshold="${VERIFY_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD:-0.38}"
 
 ssh "$target" \
   "VERIFY_GAME_POWER_DURATION_S='$duration_s' \
@@ -23,6 +24,7 @@ VERIFY_GAME_POWER_EPP='$epp' \
 VERIFY_GAME_POWER_CPU_CAP='$cpu_cap' \
 VERIFY_GAME_POWER_PCORE_MAX_MHZ='$pcore_max_mhz' \
 VERIFY_GAME_POWER_ECORE_MAX_MHZ='$ecore_max_mhz' \
+VERIFY_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD='$cpu_cap_core_share_threshold' \
 bash -s" <<'REMOTE'
 set -euo pipefail
 
@@ -33,6 +35,7 @@ epp="${VERIFY_GAME_POWER_EPP}"
 cpu_cap="${VERIFY_GAME_POWER_CPU_CAP}"
 pcore_max_mhz="${VERIFY_GAME_POWER_PCORE_MAX_MHZ}"
 ecore_max_mhz="${VERIFY_GAME_POWER_ECORE_MAX_MHZ}"
+cpu_cap_core_share_threshold="${VERIFY_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD}"
 tmpdir="$(mktemp -d)"
 snapshot="$tmpdir/cpu-policy.before"
 after="$tmpdir/cpu-policy.after"
@@ -112,6 +115,7 @@ if [ "$cpu_cap" = "on" ]; then
     --cpu-cap
     --pcore-max-mhz "$pcore_max_mhz"
     --ecore-max-mhz "$ecore_max_mhz"
+    --cpu-cap-core-share-threshold "$cpu_cap_core_share_threshold"
   )
 fi
 

@@ -17,6 +17,7 @@ capture_mode="${PROFILE_GAME_POWER_CAPTURE_MODE:-imported}"
 epp="${PROFILE_GAME_POWER_EPP:-balance_power}"
 pcore_max_mhz="${PROFILE_GAME_POWER_PCORE_MAX_MHZ:-3200}"
 ecore_max_mhz="${PROFILE_GAME_POWER_ECORE_MAX_MHZ:-2800}"
+cpu_cap_core_share_threshold="${PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD:-0.38}"
 local_root="${PROFILE_GAME_POWER_OUTPUT_ROOT:-.cache/game-power/profiles}"
 mkdir -p "$local_root"
 
@@ -26,7 +27,9 @@ ssh "$target" \
   "APPID='$appid' TDP_LEVELS='$tdp_levels' POLICIES='$policies' \
 DURATION_S='$duration_s' WARMUP_S='$warmup_s' POLL_S='$poll_s' \
 CAPTURE_MODE='$capture_mode' EPP='$epp' PCORE_MAX_MHZ='$pcore_max_mhz' \
-ECORE_MAX_MHZ='$ecore_max_mhz' REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
+ECORE_MAX_MHZ='$ecore_max_mhz' \
+CPU_CAP_CORE_SHARE_THRESHOLD='$cpu_cap_core_share_threshold' \
+REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
 set -euo pipefail
 
 wait_for_power_service() {
@@ -207,6 +210,7 @@ for tdp in $TDP_LEVELS; do
           --cpu-cap
           --pcore-max-mhz "$PCORE_MAX_MHZ"
           --ecore-max-mhz "$ECORE_MAX_MHZ"
+          --cpu-cap-core-share-threshold "$CPU_CAP_CORE_SHARE_THRESHOLD"
         )
       ;;
       *)
@@ -253,6 +257,7 @@ for tdp in $TDP_LEVELS; do
       --pcore-max-mhz "$PCORE_MAX_MHZ" \
       --ecore-max-mhz "$ECORE_MAX_MHZ" \
       --cpu-cap-enabled "$cpu_cap_enabled" \
+      --cpu-cap-core-share-threshold "$CPU_CAP_CORE_SHARE_THRESHOLD" \
       --restored "$restored" \
       --output "$run_dir"
   done

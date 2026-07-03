@@ -244,6 +244,7 @@ profile matrix instead of changing the installed default:
 PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap" \
 PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000 \
 PROFILE_GAME_POWER_ECORE_MAX_MHZ=2200 \
+PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD=0.30 \
 scripts/profile-game-power-on-device.sh root@10.100.0.19
 ```
 

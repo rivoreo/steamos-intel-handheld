@@ -328,6 +328,7 @@ class GamePowerConfig:
     pcore_max_khz: int = 3_200_000
     ecore_max_khz: int = 2_800_000
     cpu_cap_enabled: bool = False
+    cpu_cap_core_share_threshold: float = 0.38
     target_appid: str | None = None
     package_pressure_ratio: float = 0.94
     core_share_threshold: float = 0.30
@@ -382,7 +383,10 @@ class GamePowerController:
             )
 
         self._active = True
-        if self.config.cpu_cap_enabled and _sample_core_pressure_high(sample):
+        if self.config.cpu_cap_enabled and _sample_core_pressure_high(
+            sample,
+            self.config.cpu_cap_core_share_threshold,
+        ):
             return GamePowerDecision(
                 GamePowerAction.GPU_PRIORITY_CPU_CAP,
                 "package limited with high core pressure",
@@ -412,11 +416,11 @@ class GamePowerController:
         return has_gpu_activity
 
 
-def _sample_core_pressure_high(sample: GamePowerSample) -> bool:
+def _sample_core_pressure_high(sample: GamePowerSample, threshold: float) -> bool:
     return (
         sample.rapl is not None
         and sample.rapl.core_share is not None
-        and sample.rapl.core_share >= 0.38
+        and sample.rapl.core_share >= threshold
     )
 
 
@@ -601,6 +605,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pcore-max-mhz", type=int, default=3200)
     parser.add_argument("--ecore-max-mhz", type=int, default=2800)
     parser.add_argument("--cpu-cap", action="store_true")
+    parser.add_argument("--cpu-cap-core-share-threshold", type=float, default=0.38)
     parser.add_argument("--target-appid")
     parser.add_argument("--output-format", choices=["text", "jsonl"], default="text")
     parser.add_argument("--sysfs-root", default="/sys")
@@ -616,6 +621,7 @@ def config_from_args(args: argparse.Namespace) -> GamePowerConfig:
         pcore_max_khz=args.pcore_max_mhz * 1000,
         ecore_max_khz=args.ecore_max_mhz * 1000,
         cpu_cap_enabled=bool(args.cpu_cap),
+        cpu_cap_core_share_threshold=args.cpu_cap_core_share_threshold,
         target_appid=args.target_appid,
     )
 

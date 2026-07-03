@@ -53,6 +53,7 @@ class RunSummary:
     pcore_max_mhz: int | None = None
     ecore_max_mhz: int | None = None
     cpu_cap_enabled: bool | None = None
+    cpu_cap_core_share_threshold: float | None = None
     avg_fps: float | None = None
     one_percent_low_fps: float | None = None
     point_one_percent_low_fps: float | None = None
@@ -179,6 +180,7 @@ def merge_run_summary(
     pcore_max_mhz: int | None = None,
     ecore_max_mhz: int | None = None,
     cpu_cap_enabled: bool | None = None,
+    cpu_cap_core_share_threshold: float | None = None,
     restored: bool,
 ) -> RunSummary:
     pressure = pressure or {}
@@ -191,6 +193,7 @@ def merge_run_summary(
         pcore_max_mhz=pcore_max_mhz,
         ecore_max_mhz=ecore_max_mhz,
         cpu_cap_enabled=cpu_cap_enabled,
+        cpu_cap_core_share_threshold=cpu_cap_core_share_threshold,
         avg_fps=fps.avg_fps,
         one_percent_low_fps=fps.one_percent_low_fps,
         point_one_percent_low_fps=fps.point_one_percent_low_fps,
@@ -305,6 +308,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--pcore-max-mhz", type=int)
     summarize.add_argument("--ecore-max-mhz", type=int)
     summarize.add_argument("--cpu-cap-enabled", choices=["true", "false"])
+    summarize.add_argument("--cpu-cap-core-share-threshold", type=float)
     summarize.add_argument("--output", required=True)
     summarize.add_argument("--restored", choices=["true", "false"], default="true")
 
@@ -336,6 +340,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "pcore_max_mhz": args.pcore_max_mhz,
         "ecore_max_mhz": args.ecore_max_mhz,
         "cpu_cap_enabled": _optional_bool(args.cpu_cap_enabled),
+        "cpu_cap_core_share_threshold": args.cpu_cap_core_share_threshold,
     }
     summary = merge_run_summary(
         appid=args.appid,
@@ -348,6 +353,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         pcore_max_mhz=args.pcore_max_mhz,
         ecore_max_mhz=args.ecore_max_mhz,
         cpu_cap_enabled=_optional_bool(args.cpu_cap_enabled),
+        cpu_cap_core_share_threshold=args.cpu_cap_core_share_threshold,
         restored=args.restored == "true",
     )
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")

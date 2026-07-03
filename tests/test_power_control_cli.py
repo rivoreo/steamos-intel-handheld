@@ -100,6 +100,8 @@ def test_parser_configures_game_power_gpu_priority_options():
             "2400",
             "--game-power-cpu-cap",
             "on",
+            "--game-power-cpu-cap-core-share-threshold",
+            "0.31",
             "--game-power-target-appid",
             "1091500",
         ]
@@ -112,6 +114,7 @@ def test_parser_configures_game_power_gpu_priority_options():
     assert config.pcore_max_khz == 3_000_000
     assert config.ecore_max_khz == 2_400_000
     assert config.cpu_cap_enabled is True
+    assert config.cpu_cap_core_share_threshold == 0.31
     assert config.target_appid == "1091500"
 
 

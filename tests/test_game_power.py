@@ -248,6 +248,20 @@ def test_controller_uses_cpu_cap_when_enabled_and_epp_is_not_enough():
     assert decision.action == GamePowerAction.GPU_PRIORITY_CPU_CAP
 
 
+def test_controller_cpu_cap_threshold_is_configurable_for_profile_sweeps():
+    config = GamePowerConfig(
+        mode=GamePowerMode.GPU_PRIORITY,
+        cpu_cap_enabled=True,
+        cpu_cap_core_share_threshold=0.30,
+    )
+    controller = GamePowerController(config)
+
+    controller.evaluate(make_sample(core_w=6.8, package_w=22.0, render_busy=0.90))
+    decision = controller.evaluate(make_sample(core_w=6.8, package_w=22.0, render_busy=0.90))
+
+    assert decision.action == GamePowerAction.GPU_PRIORITY_CPU_CAP
+
+
 class FakeObserver:
     def __init__(self, samples):
         self.samples = list(samples)
@@ -284,6 +298,16 @@ def test_build_parser_defaults_game_power_cli_to_observe_for_standalone_probe():
 
     assert config.mode == GamePowerMode.OBSERVE
     assert config.cpu_cap_enabled is False
+
+
+def test_build_parser_accepts_cpu_cap_core_share_threshold():
+    args = game_power.build_parser().parse_args(
+        ["--cpu-cap", "--cpu-cap-core-share-threshold", "0.31"]
+    )
+    config = game_power.config_from_args(args)
+
+    assert config.cpu_cap_enabled is True
+    assert config.cpu_cap_core_share_threshold == 0.31
 
 
 def test_format_decision_jsonl_contains_policy_sample_fields():
