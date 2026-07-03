@@ -400,8 +400,10 @@ def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
     assert "--game-power-mode $mode" in script
     assert "set_service_game_power_mode off" in script
     assert "sample_cgroup_pressure()" in script
+    assert "sample_thread_affinity()" in script
     assert "--output-format jsonl" in script
     assert "--pressure-jsonl" in script
+    assert "--thread-affinity-jsonl" in script
     assert "steamos-intel-handheld-game-power-profile summarize" in script
     assert "capture_mode" in script
     assert ".cache/game-power/profiles" in script

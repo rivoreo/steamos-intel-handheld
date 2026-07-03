@@ -328,6 +328,111 @@ PY
   done
 }
 
+sample_thread_affinity() {
+  local output="$1"
+  local seconds="$2"
+  local start elapsed
+  start="$(date +%s)"
+  : >"$output"
+  while true; do
+    elapsed=$(($(date +%s) - start))
+    [ "$elapsed" -gt "$seconds" ] && break
+    python3 - "$elapsed" "$APPID" >>"$output" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+elapsed = float(sys.argv[1])
+appid = sys.argv[2]
+clock_ticks = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+payload = {"elapsed_s": elapsed, "threads": []}
+
+
+def read_text(path):
+    try:
+        return path.read_text()
+    except OSError:
+        return ""
+
+
+def parse_status(text):
+    parsed = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        parsed[key] = value.strip()
+    return parsed
+
+
+def parse_stat(text):
+    if not text:
+        return None
+    end = text.rfind(")")
+    if end < 0:
+        return None
+    fields = text[end + 2 :].split()
+    try:
+        utime = int(fields[11])
+        stime = int(fields[12])
+        processor = int(fields[36]) if len(fields) > 36 else None
+    except (IndexError, ValueError):
+        return None
+    return {
+        "cpu_time_s": (utime + stime) / clock_ticks,
+        "current_cpu": processor,
+    }
+
+
+def parse_sched_migrations(text):
+    for line in text.splitlines():
+        if line.strip().startswith("nr_migrations"):
+            try:
+                return int(line.split(":", 1)[1].strip())
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+proc = pathlib.Path("/proc")
+for cgroup_path in proc.glob("[0-9]*/cgroup"):
+    cgroup = read_text(cgroup_path)
+    if f"app-steam-app{appid}" not in cgroup:
+        continue
+    pid_dir = cgroup_path.parent
+    for task_dir in (pid_dir / "task").glob("[0-9]*"):
+        tid_text = task_dir.name
+        try:
+            tid = int(tid_text)
+        except ValueError:
+            continue
+        status = parse_status(read_text(task_dir / "status"))
+        stat = parse_stat(read_text(task_dir / "stat"))
+        if stat is None:
+            continue
+        payload["threads"].append(
+            {
+                "tid": tid,
+                "comm": status.get("Name"),
+                "cpu_time_s": round(float(stat["cpu_time_s"]), 6),
+                "migration_count": parse_sched_migrations(read_text(task_dir / "sched")),
+                "voluntary_ctxt_switches": status.get("voluntary_ctxt_switches"),
+                "nonvoluntary_ctxt_switches": status.get(
+                    "nonvoluntary_ctxt_switches"
+                ),
+                "current_cpu": stat["current_cpu"],
+                "affinity": status.get("Cpus_allowed_list"),
+                "cgroup": cgroup.strip().replace("\n", ";"),
+            }
+        )
+
+print(json.dumps(payload, sort_keys=True))
+PY
+    sleep 1
+  done
+}
+
 if [ "$CAPTURE_MODE" != "imported" ] && [ "$CAPTURE_MODE" != "controlled" ]; then
   echo "unsupported PROFILE_GAME_POWER_CAPTURE_MODE: $CAPTURE_MODE" >&2
   exit 2
@@ -399,6 +504,8 @@ for repeat in $(seq 1 "$REPEATS"); do
         start_mangohud_capture "$run_dir"
         sample_cgroup_pressure "$run_dir/cgroup-pressure.jsonl" "$DURATION_S" &
         pressure_pid="$!"
+        sample_thread_affinity "$run_dir/thread-affinity.jsonl" "$DURATION_S" &
+        thread_affinity_pid="$!"
         if ! /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power \
           --mode "$mode" \
           --duration-s "$DURATION_S" \
@@ -408,10 +515,12 @@ for repeat in $(seq 1 "$REPEATS"); do
           "${policy_args[@]}" >"$run_dir/game-power.jsonl"; then
           stop_mangohud_capture || true
           wait "$pressure_pid" || true
+          wait "$thread_affinity_pid" || true
           exit 1
         fi
         stop_mangohud_capture
         wait "$pressure_pid" || true
+        wait "$thread_affinity_pid" || true
 
         collect_mangohud_csv "$run_dir"
 
@@ -436,6 +545,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           "${mangohud_args[@]}" \
           --game-power-jsonl "$run_dir/game-power.jsonl" \
           --pressure-jsonl "$run_dir/cgroup-pressure.jsonl" \
+          --thread-affinity-jsonl "$run_dir/thread-affinity.jsonl" \
           --epp "$EPP" \
           --pcore-max-mhz "$variant_pcore_max_mhz" \
           --ecore-max-mhz "$variant_ecore_max_mhz" \

@@ -679,6 +679,31 @@ A generic game affinity layer should be an observer/advisor first, then a
 controlled experiment path, then a policy. It should not ship as fixed per-game
 pinning rules.
 
+The 2026-07-04 research conclusion is that "automatic affinity" should be
+implemented as adaptive placement, not as a universal hard-pin rule. Public
+interfaces and research point in the same direction:
+
+- Linux `sched_setaffinity()` is per-thread and can avoid migration-related
+  cache loss, but it is a hard eligibility mask and can be further restricted
+  by cpuset state.
+- Windows CPU Sets model the safer default: process/thread CPU preferences are
+  reconciled by the OS, and restrictive affinity masks take precedence only
+  when explicitly set.
+- Linux cgroup v2 cpusets can express compact CPU eligibility for scopes, but
+  exclusive or isolated partitions are disruptive and should remain guarded
+  experiments.
+- Affinity Tailor's demand-sized compact sets and sched_ext/LAVD's
+  latency-criticality model are better generic shapes than static per-game
+  pinning.
+
+Current implementation state: the guarded device profiler now emits
+`thread-affinity.jsonl` for the foreground Steam app cgroup. It samples TID,
+thread name, CPU-time counter, migration counter, voluntary and involuntary
+context-switch counters, current CPU, affinity mask, and cgroup path. The
+summary ranks hot threads by CPU-time delta and preserves migration/context
+switch deltas. This is intentionally observe-only; it creates the evidence
+needed for later affinity A/B experiments without changing scheduler state.
+
 ### Signals To Collect
 
 - TID inventory from `/proc/<pid>/task`, including `comm`, parent process,

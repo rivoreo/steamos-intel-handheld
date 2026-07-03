@@ -10,6 +10,7 @@ from steamos_intel_handheld.game_power_profile import (
     MangoHudFpsSummary,
     PolicyVerdict,
     RunSummary,
+    ThreadAffinitySummary,
     aggregate_run_summaries,
     compare_policy_aggregates,
     compare_run_summaries,
@@ -18,6 +19,7 @@ from steamos_intel_handheld.game_power_profile import (
     parse_mangohud_summary_csv,
     parse_pressure_file,
     summarize_pressure_jsonl,
+    summarize_thread_affinity_jsonl,
 )
 
 
@@ -152,6 +154,86 @@ def test_parse_game_power_jsonl_averages_power_and_counts_actions(tmp_path):
     assert summary.avg_core_share == round(6.5 / 21.0, 3)
     assert summary.avg_uncore_share == round(8.5 / 21.0, 3)
     assert summary.actions == {"gpu-priority-epp": 1, "restore": 1}
+
+
+def test_summarize_thread_affinity_jsonl_ranks_hot_threads_by_cpu_and_migrations(
+    tmp_path,
+):
+    path = tmp_path / "thread-affinity.jsonl"
+    rows = [
+        {
+            "elapsed_s": 0.0,
+            "threads": [
+                {
+                    "tid": 101,
+                    "comm": "GameThread",
+                    "cpu_time_s": 10.0,
+                    "migration_count": 3,
+                    "voluntary_ctxt_switches": 20,
+                    "nonvoluntary_ctxt_switches": 4,
+                    "current_cpu": 0,
+                    "affinity": "0-5",
+                    "cgroup": "app-steam-app1091500.scope",
+                },
+                {
+                    "tid": 102,
+                    "comm": "Worker",
+                    "cpu_time_s": 4.0,
+                    "migration_count": 1,
+                    "voluntary_ctxt_switches": 7,
+                    "nonvoluntary_ctxt_switches": 1,
+                    "current_cpu": 4,
+                    "affinity": "0-5",
+                    "cgroup": "app-steam-app1091500.scope",
+                },
+            ],
+        },
+        {
+            "elapsed_s": 2.0,
+            "threads": [
+                {
+                    "tid": 101,
+                    "comm": "GameThread",
+                    "cpu_time_s": 13.5,
+                    "migration_count": 8,
+                    "voluntary_ctxt_switches": 31,
+                    "nonvoluntary_ctxt_switches": 9,
+                    "current_cpu": 2,
+                    "affinity": "0-5",
+                    "cgroup": "app-steam-app1091500.scope",
+                },
+                {
+                    "tid": 102,
+                    "comm": "Worker",
+                    "cpu_time_s": 4.4,
+                    "migration_count": 2,
+                    "voluntary_ctxt_switches": 8,
+                    "nonvoluntary_ctxt_switches": 1,
+                    "current_cpu": 4,
+                    "affinity": "0-5",
+                    "cgroup": "app-steam-app1091500.scope",
+                },
+            ],
+        },
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    summary = summarize_thread_affinity_jsonl(path)
+
+    assert isinstance(summary, ThreadAffinitySummary)
+    assert summary.samples == 2
+    assert summary.observed_threads == 2
+    assert summary.hot_threads[0] == {
+        "tid": 101,
+        "comm": "GameThread",
+        "cpu_time_s_delta": 3.5,
+        "migration_delta": 5,
+        "voluntary_ctxt_switches_delta": 11,
+        "nonvoluntary_ctxt_switches_delta": 5,
+        "cpus_seen": [0, 2],
+        "affinity_masks": ["0-5"],
+        "cgroup": "app-steam-app1091500.scope",
+    }
 
 
 def test_compare_run_summaries_accepts_better_one_percent_low_without_avg_regression():
@@ -377,6 +459,7 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     mangohud = tmp_path / "mangohud.csv"
     game_power = tmp_path / "game-power.jsonl"
     pressure = tmp_path / "cgroup-pressure.jsonl"
+    thread_affinity = tmp_path / "thread-affinity.jsonl"
     output = tmp_path / "profile"
     write_csv(
         mangohud,
@@ -406,6 +489,46 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
         )
         + "\n"
     )
+    thread_affinity.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {
+                    "elapsed_s": 0.0,
+                    "threads": [
+                        {
+                            "tid": 101,
+                            "comm": "GameThread",
+                            "cpu_time_s": 10.0,
+                            "migration_count": 3,
+                            "voluntary_ctxt_switches": 20,
+                            "nonvoluntary_ctxt_switches": 4,
+                            "current_cpu": 0,
+                            "affinity": "0-5",
+                            "cgroup": "app-steam-app1091500.scope",
+                        }
+                    ],
+                },
+                {
+                    "elapsed_s": 2.0,
+                    "threads": [
+                        {
+                            "tid": 101,
+                            "comm": "GameThread",
+                            "cpu_time_s": 13.5,
+                            "migration_count": 8,
+                            "voluntary_ctxt_switches": 31,
+                            "nonvoluntary_ctxt_switches": 9,
+                            "current_cpu": 2,
+                            "affinity": "0-5",
+                            "cgroup": "app-steam-app1091500.scope",
+                        }
+                    ],
+                },
+            ]
+        )
+        + "\n"
+    )
 
     result = subprocess.run(
         [
@@ -427,6 +550,8 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
             str(game_power),
             "--pressure-jsonl",
             str(pressure),
+            "--thread-affinity-jsonl",
+            str(thread_affinity),
             "--output",
             str(output),
         ],
@@ -445,6 +570,10 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert summary["avg_uncore_w"] == 9.0
     assert summary["cpu_pressure_some_avg10_peak"] == 2.5
     assert summary["cpu_pressure_full_avg10_peak"] == 0.4
+    assert summary["thread_affinity_samples"] == 2
+    assert summary["thread_affinity_observed_threads"] == 1
+    assert summary["thread_affinity_hot_threads"][0]["migration_delta"] == 5
+    assert summary["thread_affinity_hot_threads"][0]["nonvoluntary_ctxt_switches_delta"] == 5
     assert summary["restored"] is True
 
 

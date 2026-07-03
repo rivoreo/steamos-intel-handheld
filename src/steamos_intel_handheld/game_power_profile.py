@@ -45,6 +45,13 @@ class GamePowerLogSummary:
 
 
 @dataclass(frozen=True)
+class ThreadAffinitySummary:
+    samples: int
+    observed_threads: int
+    hot_threads: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
 class RunSummary:
     appid: str
     tdp_w: int
@@ -72,6 +79,9 @@ class RunSummary:
     avg_render_busy: float | None = None
     cpu_pressure_some_avg10_peak: float | None = None
     cpu_pressure_full_avg10_peak: float | None = None
+    thread_affinity_samples: int | None = None
+    thread_affinity_observed_threads: int | None = None
+    thread_affinity_hot_threads: list[dict[str, object]] | None = None
     actions: dict[str, int] | None = None
     restored: bool = False
 
@@ -204,6 +214,98 @@ def parse_game_power_jsonl(path: str | Path) -> GamePowerLogSummary:
     )
 
 
+def summarize_thread_affinity_jsonl(
+    path: str | Path,
+    *,
+    hot_thread_limit: int = 5,
+) -> ThreadAffinitySummary:
+    samples = 0
+    threads: dict[int, dict[str, object]] = {}
+    with Path(path).open() as handle:
+        for line in handle:
+            text = line.strip()
+            if not text:
+                continue
+            samples += 1
+            row = json.loads(text)
+            for item in row.get("threads") or []:
+                if not isinstance(item, dict):
+                    continue
+                tid = _optional_int(item.get("tid"))
+                if tid is None:
+                    continue
+                state = threads.setdefault(
+                    tid,
+                    {
+                        "tid": tid,
+                        "comm": None,
+                        "cgroup": None,
+                        "cpu_first": None,
+                        "cpu_last": None,
+                        "migration_first": None,
+                        "migration_last": None,
+                        "voluntary_ctxt_switches_first": None,
+                        "voluntary_ctxt_switches_last": None,
+                        "nonvoluntary_ctxt_switches_first": None,
+                        "nonvoluntary_ctxt_switches_last": None,
+                        "cpus_seen": set(),
+                        "affinity_masks": set(),
+                    },
+                )
+                comm = _optional_str(item.get("comm"))
+                if comm:
+                    state["comm"] = comm
+                cgroup = _optional_str(item.get("cgroup"))
+                if cgroup:
+                    state["cgroup"] = cgroup
+                cpu_time_s = _float(item.get("cpu_time_s"))
+                if cpu_time_s is not None:
+                    if state["cpu_first"] is None:
+                        state["cpu_first"] = cpu_time_s
+                    state["cpu_last"] = cpu_time_s
+                migrations = _optional_int(item.get("migration_count"))
+                if migrations is not None:
+                    if state["migration_first"] is None:
+                        state["migration_first"] = migrations
+                    state["migration_last"] = migrations
+                voluntary_switches = _optional_int(item.get("voluntary_ctxt_switches"))
+                if voluntary_switches is not None:
+                    if state["voluntary_ctxt_switches_first"] is None:
+                        state["voluntary_ctxt_switches_first"] = voluntary_switches
+                    state["voluntary_ctxt_switches_last"] = voluntary_switches
+                involuntary_switches = _optional_int(
+                    item.get("nonvoluntary_ctxt_switches")
+                )
+                if involuntary_switches is not None:
+                    if state["nonvoluntary_ctxt_switches_first"] is None:
+                        state["nonvoluntary_ctxt_switches_first"] = involuntary_switches
+                    state["nonvoluntary_ctxt_switches_last"] = involuntary_switches
+                current_cpu = _optional_int(item.get("current_cpu"))
+                if current_cpu is not None:
+                    cpus_seen = state["cpus_seen"]
+                    assert isinstance(cpus_seen, set)
+                    cpus_seen.add(current_cpu)
+                affinity = _optional_str(item.get("affinity"))
+                if affinity:
+                    affinity_masks = state["affinity_masks"]
+                    assert isinstance(affinity_masks, set)
+                    affinity_masks.add(affinity)
+
+    hot_threads = [_thread_hotspot(state) for state in threads.values()]
+    hot_threads.sort(
+        key=lambda item: (
+            -float(item["cpu_time_s_delta"]),
+            -int(item["migration_delta"]),
+            int(item["tid"]),
+        )
+    )
+    return ThreadAffinitySummary(
+        samples=samples,
+        observed_threads=len(threads),
+        hot_threads=hot_threads[:hot_thread_limit],
+    )
+
+
 def merge_run_summary(
     *,
     appid: str,
@@ -212,6 +314,7 @@ def merge_run_summary(
     fps: MangoHudFpsSummary,
     power: GamePowerLogSummary | None,
     pressure: dict[str, float] | None = None,
+    thread_affinity: ThreadAffinitySummary | None = None,
     epp: str | None = None,
     pcore_max_mhz: int | None = None,
     ecore_max_mhz: int | None = None,
@@ -250,6 +353,11 @@ def merge_run_summary(
         avg_render_busy=power.avg_render_busy if power else None,
         cpu_pressure_some_avg10_peak=pressure.get("cpu_pressure_some_avg10_peak"),
         cpu_pressure_full_avg10_peak=pressure.get("cpu_pressure_full_avg10_peak"),
+        thread_affinity_samples=thread_affinity.samples if thread_affinity else None,
+        thread_affinity_observed_threads=(
+            thread_affinity.observed_threads if thread_affinity else None
+        ),
+        thread_affinity_hot_threads=thread_affinity.hot_threads if thread_affinity else None,
         actions=power.actions if power else None,
         restored=restored,
     )
@@ -514,6 +622,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--mangohud-summary-csv")
     summarize.add_argument("--game-power-jsonl")
     summarize.add_argument("--pressure-jsonl")
+    summarize.add_argument("--thread-affinity-jsonl")
     summarize.add_argument("--epp")
     summarize.add_argument("--pcore-max-mhz", type=int)
     summarize.add_argument("--ecore-max-mhz", type=int)
@@ -558,6 +667,11 @@ def run_summarize(args: argparse.Namespace) -> Path:
 
     power = parse_game_power_jsonl(args.game_power_jsonl) if args.game_power_jsonl else None
     pressure = summarize_pressure_jsonl(args.pressure_jsonl) if args.pressure_jsonl else None
+    thread_affinity = (
+        summarize_thread_affinity_jsonl(args.thread_affinity_jsonl)
+        if args.thread_affinity_jsonl
+        else None
+    )
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -573,6 +687,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "duration_s": args.duration_s,
         "warmup_s": args.warmup_s,
         "poll_s": args.poll_s,
+        "thread_affinity_jsonl": bool(args.thread_affinity_jsonl),
     }
     summary = merge_run_summary(
         appid=args.appid,
@@ -581,6 +696,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         fps=fps,
         power=power,
         pressure=pressure,
+        thread_affinity=thread_affinity,
         epp=args.epp,
         pcore_max_mhz=args.pcore_max_mhz,
         ecore_max_mhz=args.ecore_max_mhz,
@@ -748,6 +864,55 @@ def _optional_bool(value: str | None) -> bool | None:
     if value is None:
         return None
     return value == "true"
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _thread_hotspot(state: dict[str, object]) -> dict[str, object]:
+    cpu_first = _float(state.get("cpu_first"))
+    cpu_last = _float(state.get("cpu_last"))
+    migration_first = _optional_int(state.get("migration_first"))
+    migration_last = _optional_int(state.get("migration_last"))
+    voluntary_first = _optional_int(state.get("voluntary_ctxt_switches_first"))
+    voluntary_last = _optional_int(state.get("voluntary_ctxt_switches_last"))
+    involuntary_first = _optional_int(state.get("nonvoluntary_ctxt_switches_first"))
+    involuntary_last = _optional_int(state.get("nonvoluntary_ctxt_switches_last"))
+    cpus_seen = state.get("cpus_seen")
+    affinity_masks = state.get("affinity_masks")
+    return {
+        "tid": int(state["tid"]),
+        "comm": state.get("comm"),
+        "cpu_time_s_delta": round(max(0.0, (cpu_last or 0.0) - (cpu_first or 0.0)), 3),
+        "migration_delta": max(0, (migration_last or 0) - (migration_first or 0)),
+        "voluntary_ctxt_switches_delta": max(
+            0, (voluntary_last or 0) - (voluntary_first or 0)
+        ),
+        "nonvoluntary_ctxt_switches_delta": max(
+            0, (involuntary_last or 0) - (involuntary_first or 0)
+        ),
+        "cpus_seen": sorted(cpus_seen) if isinstance(cpus_seen, set) else [],
+        "affinity_masks": (
+            sorted(affinity_masks) if isinstance(affinity_masks, set) else []
+        ),
+        "cgroup": state.get("cgroup"),
+    }
 
 
 def parse_pressure_file(text: str) -> dict[str, dict[str, float]]:

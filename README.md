@@ -255,8 +255,11 @@ The wrapper temporarily forces the installed service governor to `off`, so the
 standalone profiler controls the test policy and the `off` run is a real
 baseline. Results are copied into `.cache/game-power/profiles/`. Each run
 directory contains `manifest.json`, `summary.json`, `game-power.jsonl`,
-`cgroup-pressure.jsonl`, CPU policy snapshots, TDP snapshots, and the MangoHud
-CSV/summary used for FPS analysis. Controlled capture temporarily installs a
+`cgroup-pressure.jsonl`, `thread-affinity.jsonl`, CPU policy snapshots, TDP
+snapshots, and the MangoHud CSV/summary used for FPS analysis. The
+thread-affinity capture is observe-only and records per-thread CPU time,
+migration, context-switch, current-CPU, affinity-mask, and cgroup samples for
+future automatic-affinity research. Controlled capture temporarily installs a
 runtime user-service drop-in for `gamescope-mangoapp.service`, restarts
 `mangoapp`, and uses `mangohudctl` to start and stop one logging session per
 policy run. The drop-in is removed and `mangoapp` is restarted again during
