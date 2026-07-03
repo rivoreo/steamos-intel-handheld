@@ -263,6 +263,24 @@ restore.
 Imported captures are useful for parser and comparison development, but they do
 not prove an automated A/B result. A policy recommendation requires controlled
 capture, exact restore, and repeated runs that meet the comparison thresholds.
+After collecting repeated controlled runs, aggregate the profile root instead of
+trusting a single short sample:
+
+```bash
+steamos-intel-handheld-game-power-profile aggregate \
+  --root .cache/game-power/profiles \
+  --baseline-policy off \
+  --candidate-policy gpu-priority \
+  --candidate-policy gpu-priority-cpu-cap \
+  --appid 1091500 \
+  --tdp-w 22 \
+  --min-runs 3
+```
+
+`aggregate` scans `summary.json` files, groups runs by AppID, TDP, and policy,
+uses median FPS/power metrics, and only recommends a candidate when every
+included run is controlled, every restore check passed, and both baseline and
+candidate have enough repeated samples.
 
 ## Repository layout
 

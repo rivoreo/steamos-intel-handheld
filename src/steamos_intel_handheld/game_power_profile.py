@@ -7,10 +7,11 @@ import argparse
 import csv
 import json
 import math
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
-from statistics import mean
+from statistics import mean, median
 from typing import Any
 
 
@@ -70,6 +71,35 @@ class RunSummary:
     cpu_pressure_full_avg10_peak: float | None = None
     actions: dict[str, int] | None = None
     restored: bool = False
+
+
+@dataclass(frozen=True)
+class PolicyAggregate:
+    appid: str
+    tdp_w: int
+    policy: str
+    capture_mode: CaptureMode
+    sample_count: int
+    restored_count: int
+    epp: str | None = None
+    pcore_max_mhz: int | None = None
+    ecore_max_mhz: int | None = None
+    cpu_cap_enabled: bool = False
+    cpu_cap_core_share_threshold: float | None = None
+    avg_fps_median: float | None = None
+    one_percent_low_fps_median: float | None = None
+    point_one_percent_low_fps_median: float | None = None
+    avg_frametime_ms_median: float | None = None
+    p95_frametime_ms_median: float | None = None
+    p99_frametime_ms_median: float | None = None
+    avg_package_w_median: float | None = None
+    avg_core_w_median: float | None = None
+    avg_uncore_w_median: float | None = None
+    avg_core_share_median: float | None = None
+    avg_uncore_share_median: float | None = None
+    avg_render_busy_median: float | None = None
+    cpu_pressure_some_avg10_peak_median: float | None = None
+    cpu_pressure_full_avg10_peak_median: float | None = None
 
 
 class PolicyVerdict(str, Enum):
@@ -287,6 +317,167 @@ def compare_run_summaries(baseline: RunSummary, candidate: RunSummary) -> Policy
     )
 
 
+def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
+    if not runs:
+        raise ValueError("cannot aggregate an empty run set")
+    first = runs[0]
+    first_tunables = _effective_tunables(first)
+    for run in runs[1:]:
+        if run.appid != first.appid:
+            raise ValueError("cannot aggregate runs with different appids")
+        if run.tdp_w != first.tdp_w:
+            raise ValueError("cannot aggregate runs with different TDP values")
+        if run.policy != first.policy:
+            raise ValueError("cannot aggregate runs with different policies")
+        if run.capture_mode != first.capture_mode:
+            raise ValueError("cannot aggregate runs with different capture modes")
+        if _effective_tunables(run) != first_tunables:
+            raise ValueError("cannot aggregate runs with different effective tunables")
+    epp, pcore_max_mhz, ecore_max_mhz, cpu_cap_enabled, threshold = first_tunables
+    return PolicyAggregate(
+        appid=first.appid,
+        tdp_w=first.tdp_w,
+        policy=first.policy,
+        capture_mode=first.capture_mode,
+        sample_count=len(runs),
+        restored_count=sum(1 for run in runs if run.restored),
+        epp=epp,
+        pcore_max_mhz=pcore_max_mhz,
+        ecore_max_mhz=ecore_max_mhz,
+        cpu_cap_enabled=cpu_cap_enabled,
+        cpu_cap_core_share_threshold=threshold,
+        avg_fps_median=_median([run.avg_fps for run in runs]),
+        one_percent_low_fps_median=_median([run.one_percent_low_fps for run in runs]),
+        point_one_percent_low_fps_median=_median(
+            [run.point_one_percent_low_fps for run in runs]
+        ),
+        avg_frametime_ms_median=_median([run.avg_frametime_ms for run in runs]),
+        p95_frametime_ms_median=_median([run.p95_frametime_ms for run in runs]),
+        p99_frametime_ms_median=_median([run.p99_frametime_ms for run in runs]),
+        avg_package_w_median=_median([run.avg_package_w for run in runs]),
+        avg_core_w_median=_median([run.avg_core_w for run in runs]),
+        avg_uncore_w_median=_median([run.avg_uncore_w for run in runs]),
+        avg_core_share_median=_median([run.avg_core_share for run in runs]),
+        avg_uncore_share_median=_median([run.avg_uncore_share for run in runs]),
+        avg_render_busy_median=_median([run.avg_render_busy for run in runs]),
+        cpu_pressure_some_avg10_peak_median=_median(
+            [run.cpu_pressure_some_avg10_peak for run in runs]
+        ),
+        cpu_pressure_full_avg10_peak_median=_median(
+            [run.cpu_pressure_full_avg10_peak for run in runs]
+        ),
+    )
+
+
+def compare_policy_aggregates(
+    baseline: PolicyAggregate,
+    candidate: PolicyAggregate,
+    *,
+    min_runs: int = 3,
+) -> PolicyComparison:
+    if baseline.appid != candidate.appid or baseline.tdp_w != candidate.tdp_w:
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.REJECTED,
+            "baseline and candidate do not target the same appid/TDP",
+        )
+    if baseline.sample_count < min_runs or candidate.sample_count < min_runs:
+        baseline_unit = "run" if baseline.sample_count == 1 else "runs"
+        candidate_unit = "run" if candidate.sample_count == 1 else "runs"
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.INCONCLUSIVE,
+            (
+                f"baseline has {baseline.sample_count} {baseline_unit} and candidate has "
+                f"{candidate.sample_count} {candidate_unit}; min-runs is {min_runs}"
+            ),
+        )
+    if baseline.capture_mode != CaptureMode.CONTROLLED:
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.NEEDS_CONTROLLED_CAPTURE,
+            "baseline aggregate uses imported capture; controlled A/B capture is required",
+        )
+    if candidate.capture_mode != CaptureMode.CONTROLLED:
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.NEEDS_CONTROLLED_CAPTURE,
+            "candidate aggregate uses imported capture; controlled A/B capture is required",
+        )
+    if (
+        baseline.restored_count != baseline.sample_count
+        or candidate.restored_count != candidate.sample_count
+    ):
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.REJECTED,
+            "restore verification did not pass for every aggregated run",
+        )
+
+    low_gain = _percent_change(
+        baseline.one_percent_low_fps_median,
+        candidate.one_percent_low_fps_median,
+    )
+    avg_gain = _percent_change(baseline.avg_fps_median, candidate.avg_fps_median)
+    p99_gain = _lower_is_better_change(
+        baseline.p99_frametime_ms_median,
+        candidate.p99_frametime_ms_median,
+    )
+
+    if low_gain is not None and low_gain >= 5.0 and (avg_gain is None or avg_gain >= -2.0):
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.BETTER,
+            (
+                f"median 1% low improved by {low_gain:.1f}% "
+                f"with median average FPS change {avg_gain or 0:.1f}%"
+            ),
+        )
+    if p99_gain is not None and p99_gain >= 5.0 and (avg_gain is None or avg_gain >= -2.0):
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.BETTER,
+            (
+                f"median p99 frametime improved by {p99_gain:.1f}% "
+                f"with median average FPS change {avg_gain or 0:.1f}%"
+            ),
+        )
+    if avg_gain is not None and avg_gain >= 5.0 and (low_gain is None or low_gain >= -2.0):
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.BETTER,
+            f"median average FPS improved by {avg_gain:.1f}% without low-percentile regression",
+        )
+    if low_gain is not None and low_gain < -3.0:
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.REJECTED,
+            f"median 1% low worsened by {abs(low_gain):.1f}%",
+        )
+    if p99_gain is not None and p99_gain < -3.0:
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.REJECTED,
+            f"median p99 frametime worsened by {abs(p99_gain):.1f}%",
+        )
+    return PolicyComparison(
+        baseline.policy,
+        candidate.policy,
+        PolicyVerdict.INCONCLUSIVE,
+        "candidate medians did not meet improvement or rejection thresholds",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -315,6 +506,19 @@ def build_parser() -> argparse.ArgumentParser:
     compare = subcommands.add_parser("compare")
     compare.add_argument("--baseline", required=True)
     compare.add_argument("--candidate", required=True)
+
+    aggregate = subcommands.add_parser("aggregate")
+    aggregate.add_argument("--root", action="append", required=True)
+    aggregate.add_argument("--baseline-policy", default="off")
+    aggregate.add_argument("--candidate-policy", action="append", required=True)
+    aggregate.add_argument("--appid")
+    aggregate.add_argument("--tdp-w", type=int)
+    aggregate.add_argument(
+        "--capture-mode",
+        choices=[mode.value for mode in CaptureMode],
+        default=CaptureMode.CONTROLLED.value,
+    )
+    aggregate.add_argument("--min-runs", type=int, default=3)
     return parser
 
 
@@ -369,11 +573,114 @@ def run_compare(args: argparse.Namespace) -> PolicyComparison:
     return compare_run_summaries(baseline, candidate)
 
 
+def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
+    capture_mode = CaptureMode(args.capture_mode)
+    summaries = []
+    for path in _discover_summary_paths(args.root):
+        summary = _load_run_summary(path)
+        if args.appid and summary.appid != args.appid:
+            continue
+        if args.tdp_w is not None and summary.tdp_w != args.tdp_w:
+            continue
+        if summary.capture_mode != capture_mode:
+            continue
+        if summary.policy != args.baseline_policy and summary.policy not in args.candidate_policy:
+            continue
+        summaries.append(summary)
+
+    groups: dict[tuple[object, ...], list[RunSummary]] = defaultdict(list)
+    for summary in summaries:
+        groups[_profile_group_key(summary)].append(summary)
+
+    baseline_keys_by_context: dict[tuple[str, int], list[tuple[object, ...]]] = defaultdict(
+        list
+    )
+    for key in groups:
+        appid, tdp_w, policy = key[:3]
+        if policy == args.baseline_policy:
+            baseline_keys_by_context[(str(appid), int(tdp_w))].append(key)
+
+    comparisons = []
+    candidate_keys = sorted(
+        (key for key in groups if key[2] in args.candidate_policy),
+        key=_sortable_group_key,
+    )
+    for candidate_key in candidate_keys:
+        appid, tdp_w, _candidate_policy = candidate_key[:3]
+        baseline_keys = baseline_keys_by_context.get((str(appid), int(tdp_w)), [])
+        for baseline_key in sorted(baseline_keys, key=_sortable_group_key):
+            baseline_runs = groups[baseline_key]
+            candidate_runs = groups[candidate_key]
+            baseline = aggregate_run_summaries(baseline_runs)
+            candidate = aggregate_run_summaries(candidate_runs)
+            comparison = compare_policy_aggregates(
+                baseline,
+                candidate,
+                min_runs=args.min_runs,
+            )
+            comparisons.append(
+                {
+                    "appid": appid,
+                    "tdp_w": tdp_w,
+                    "baseline": asdict(baseline),
+                    "candidate": asdict(candidate),
+                    "comparison": asdict(comparison),
+                }
+            )
+
+    return {
+        "baseline_policy": args.baseline_policy,
+        "candidate_policies": args.candidate_policy,
+        "capture_mode": capture_mode,
+        "min_runs": args.min_runs,
+        "comparisons": comparisons,
+    }
+
+
 def _load_run_summary(path: str | Path) -> RunSummary:
     payload = json.loads(Path(path).read_text())
     if "capture_mode" in payload:
         payload["capture_mode"] = CaptureMode(payload["capture_mode"])
     return RunSummary(**payload)
+
+
+def _discover_summary_paths(roots: list[str]) -> list[Path]:
+    paths: list[Path] = []
+    for root in roots:
+        path = Path(root)
+        if path.is_file():
+            paths.append(path)
+            continue
+        summary = path / "summary.json"
+        if summary.is_file():
+            paths.append(summary)
+            continue
+        paths.extend(sorted(path.rglob("summary.json")))
+    return sorted(paths)
+
+
+def _profile_group_key(run: RunSummary) -> tuple[object, ...]:
+    return (run.appid, run.tdp_w, run.policy, *_effective_tunables(run))
+
+
+def _effective_tunables(
+    run: RunSummary,
+) -> tuple[str | None, int | None, int | None, bool, float | None]:
+    if run.policy == "off":
+        return (None, None, None, False, None)
+    if run.cpu_cap_enabled:
+        return (
+            run.epp,
+            run.pcore_max_mhz,
+            run.ecore_max_mhz,
+            True,
+            run.cpu_cap_core_share_threshold,
+        )
+    return (run.epp, None, None, False, None)
+
+
+def _sortable_group_key(key: tuple[object, ...]) -> tuple[str, ...]:
+    return tuple("" if item is None else str(item) for item in key)
 
 
 def _json_ready(value: Any) -> Any:
@@ -440,6 +747,10 @@ def main(argv: list[str] | None = None) -> None:
         comparison = run_compare(args)
         print(json.dumps(_json_ready(asdict(comparison)), sort_keys=True))
         return
+    if args.command == "aggregate":
+        report = run_aggregate(args)
+        print(json.dumps(_json_ready(report), sort_keys=True))
+        return
     raise SystemExit(f"unsupported command: {args.command}")
 
 
@@ -478,6 +789,11 @@ def _append_float(values: list[float], value: object) -> None:
 
 def _avg(values: list[float]) -> float | None:
     return round(mean(values), 3) if values else None
+
+
+def _median(values: list[float | None]) -> float | None:
+    parsed = [value for value in values if value is not None]
+    return round(median(parsed), 3) if parsed else None
 
 
 def _ratio(part: float | None, total: float | None) -> float | None:

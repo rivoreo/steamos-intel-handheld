@@ -604,6 +604,8 @@ def test_docs_describe_game_power_governor_default_on_and_reversible():
     assert "PROFILE_GAME_POWER_CAPTURE_MODE=controlled" in readme
     assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000" in readme
     assert "PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD=0.30" in readme
+    assert "steamos-intel-handheld-game-power-profile aggregate" in readme
+    assert "--min-runs 3" in readme
     assert "Game power governor" in design
     assert "enabled by default" in design
     assert "does not raise PL1 automatically" in design

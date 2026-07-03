@@ -10,6 +10,8 @@ from steamos_intel_handheld.game_power_profile import (
     MangoHudFpsSummary,
     PolicyVerdict,
     RunSummary,
+    aggregate_run_summaries,
+    compare_policy_aggregates,
     compare_run_summaries,
     parse_game_power_jsonl,
     parse_mangohud_fps_csv,
@@ -225,6 +227,152 @@ def test_compare_run_summaries_rejects_imported_baseline_as_non_automated_ab():
     assert "baseline" in verdict.reason
 
 
+def test_aggregate_run_summaries_uses_medians_and_counts_restore_state():
+    runs = [
+        RunSummary(
+            appid="1091500",
+            tdp_w=22,
+            policy="off",
+            capture_mode=CaptureMode.CONTROLLED,
+            avg_fps=54.0,
+            one_percent_low_fps=40.0,
+            avg_package_w=22.0,
+            avg_core_share=0.31,
+            restored=True,
+        ),
+        RunSummary(
+            appid="1091500",
+            tdp_w=22,
+            policy="off",
+            capture_mode=CaptureMode.CONTROLLED,
+            avg_fps=56.0,
+            one_percent_low_fps=42.0,
+            avg_package_w=21.8,
+            avg_core_share=0.29,
+            restored=False,
+        ),
+        RunSummary(
+            appid="1091500",
+            tdp_w=22,
+            policy="off",
+            capture_mode=CaptureMode.CONTROLLED,
+            avg_fps=120.0,
+            one_percent_low_fps=12.0,
+            avg_package_w=22.4,
+            avg_core_share=0.35,
+            restored=True,
+        ),
+    ]
+
+    aggregate = aggregate_run_summaries(runs)
+
+    assert aggregate.appid == "1091500"
+    assert aggregate.tdp_w == 22
+    assert aggregate.policy == "off"
+    assert aggregate.capture_mode == CaptureMode.CONTROLLED
+    assert aggregate.sample_count == 3
+    assert aggregate.restored_count == 2
+    assert aggregate.avg_fps_median == 56.0
+    assert aggregate.one_percent_low_fps_median == 40.0
+    assert aggregate.avg_package_w_median == 22.0
+    assert aggregate.avg_core_share_median == 0.31
+
+
+def test_compare_policy_aggregates_requires_repeated_controlled_runs():
+    baseline = aggregate_run_summaries(
+        [
+            RunSummary(
+                appid="1091500",
+                tdp_w=22,
+                policy="off",
+                capture_mode=CaptureMode.CONTROLLED,
+                avg_fps=54.0,
+                one_percent_low_fps=40.0,
+                restored=True,
+            )
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [
+            RunSummary(
+                appid="1091500",
+                tdp_w=22,
+                policy="gpu-priority",
+                capture_mode=CaptureMode.CONTROLLED,
+                avg_fps=57.0,
+                one_percent_low_fps=44.0,
+                restored=True,
+            ),
+            RunSummary(
+                appid="1091500",
+                tdp_w=22,
+                policy="gpu-priority",
+                capture_mode=CaptureMode.CONTROLLED,
+                avg_fps=58.0,
+                one_percent_low_fps=45.0,
+                restored=True,
+            ),
+        ]
+    )
+
+    verdict = compare_policy_aggregates(baseline, candidate, min_runs=2)
+
+    assert verdict.verdict == PolicyVerdict.INCONCLUSIVE
+    assert "baseline has 1 run" in verdict.reason
+
+
+def test_compare_policy_aggregates_accepts_median_low_improvement():
+    baseline = aggregate_run_summaries(
+        [
+            RunSummary(
+                appid="1091500",
+                tdp_w=22,
+                policy="off",
+                capture_mode=CaptureMode.CONTROLLED,
+                avg_fps=54.0,
+                one_percent_low_fps=40.0,
+                restored=True,
+            ),
+            RunSummary(
+                appid="1091500",
+                tdp_w=22,
+                policy="off",
+                capture_mode=CaptureMode.CONTROLLED,
+                avg_fps=55.0,
+                one_percent_low_fps=40.5,
+                restored=True,
+            ),
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [
+            RunSummary(
+                appid="1091500",
+                tdp_w=22,
+                policy="gpu-priority",
+                capture_mode=CaptureMode.CONTROLLED,
+                avg_fps=55.0,
+                one_percent_low_fps=43.0,
+                restored=True,
+            ),
+            RunSummary(
+                appid="1091500",
+                tdp_w=22,
+                policy="gpu-priority",
+                capture_mode=CaptureMode.CONTROLLED,
+                avg_fps=56.0,
+                one_percent_low_fps=44.0,
+                restored=True,
+            ),
+        ]
+    )
+
+    verdict = compare_policy_aggregates(baseline, candidate, min_runs=2)
+
+    assert verdict.verdict == PolicyVerdict.BETTER
+    assert "median 1% low improved" in verdict.reason
+
+
 def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     mangohud = tmp_path / "mangohud.csv"
     game_power = tmp_path / "game-power.jsonl"
@@ -415,6 +563,127 @@ def test_profile_cli_compare_reads_two_summary_files(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["verdict"] == "better"
     assert payload["candidate_policy"] == "gpu-priority"
+
+
+def test_profile_cli_aggregate_scans_profile_root_and_compares_repeated_runs(tmp_path):
+    runs = [
+        ("001-off", "off", 54.0, 40.0),
+        ("002-gpu", "gpu-priority", 55.0, 43.0),
+        ("003-off", "off", 55.0, 40.5),
+        ("004-gpu", "gpu-priority", 56.0, 44.0),
+    ]
+    for dirname, policy, avg_fps, low_fps in runs:
+        run_dir = tmp_path / dirname
+        run_dir.mkdir()
+        (run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "appid": "1091500",
+                    "tdp_w": 22,
+                    "policy": policy,
+                    "capture_mode": "controlled",
+                    "avg_fps": avg_fps,
+                    "one_percent_low_fps": low_fps,
+                    "restored": True,
+                }
+            )
+        )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "aggregate",
+            "--root",
+            str(tmp_path),
+            "--baseline-policy",
+            "off",
+            "--candidate-policy",
+            "gpu-priority",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--min-runs",
+            "2",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["min_runs"] == 2
+    assert payload["comparisons"][0]["comparison"]["verdict"] == "better"
+    assert payload["comparisons"][0]["baseline"]["sample_count"] == 2
+    assert payload["comparisons"][0]["candidate"]["sample_count"] == 2
+    assert payload["comparisons"][0]["candidate"]["one_percent_low_fps_median"] == 43.5
+
+
+def test_profile_cli_aggregate_keeps_cpu_cap_tuning_variants_separate(tmp_path):
+    runs = [
+        ("001-off", "off", 54.0, 40.0, False, 3000, 2200, 0.30),
+        ("002-cap-a", "gpu-priority-cpu-cap", 56.0, 43.0, True, 3000, 2200, 0.30),
+        ("003-cap-b", "gpu-priority-cpu-cap", 58.0, 45.0, True, 3200, 2400, 0.35),
+    ]
+    for dirname, policy, avg_fps, low_fps, cpu_cap, pcore, ecore, threshold in runs:
+        run_dir = tmp_path / dirname
+        run_dir.mkdir()
+        (run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "appid": "1091500",
+                    "tdp_w": 22,
+                    "policy": policy,
+                    "capture_mode": "controlled",
+                    "epp": "balance_power",
+                    "pcore_max_mhz": pcore,
+                    "ecore_max_mhz": ecore,
+                    "cpu_cap_enabled": cpu_cap,
+                    "cpu_cap_core_share_threshold": threshold,
+                    "avg_fps": avg_fps,
+                    "one_percent_low_fps": low_fps,
+                    "restored": True,
+                }
+            )
+        )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "aggregate",
+            "--root",
+            str(tmp_path),
+            "--baseline-policy",
+            "off",
+            "--candidate-policy",
+            "gpu-priority-cpu-cap",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--min-runs",
+            "1",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert len(payload["comparisons"]) == 2
+    candidate_caps = {
+        (
+            item["candidate"]["pcore_max_mhz"],
+            item["candidate"]["ecore_max_mhz"],
+            item["candidate"]["cpu_cap_core_share_threshold"],
+        )
+        for item in payload["comparisons"]
+    }
+    assert candidate_caps == {(3000, 2200, 0.3), (3200, 2400, 0.35)}
 
 
 def test_parse_pressure_file_reads_some_and_full_avg10():
