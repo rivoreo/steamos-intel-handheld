@@ -5,6 +5,10 @@ game-power governor. It is intentionally research-first: runtime policy changes
 must be derived from this evidence, not from a single Cyberpunk 2077 scene or a
 fixed CPU cap assumption.
 
+Research persistence rule: after a new source or design insight materially
+changes the scheduler direction, append it here before relying on conversation
+context. This document is the recovery point after context compaction.
+
 ## Research Goal
 
 Design a generic SteamOS game-power governor for Intel handhelds that:
@@ -155,6 +159,67 @@ stay compatible with GameMode concepts: temporary activation, exact restore,
 and process-scoped controls rather than permanent system-wide state.
 
 Source:
+https://github.com/flightlessmango/MangoHud
+
+Key finding:
+MangoHud monitors FPS, frame timing, CPU/GPU load, CPU/GPU watts, CPU MHz, and
+benchmark percentiles. In gamescope sessions it must be used through
+`mangoapp`; normal MangoHud injection with gamescope is not supported. Its
+options also include Intel core-type display, CPU frames-per-joule efficiency,
+and gamescope app frametime/latency debug output.
+
+Design impact:
+MangoHud/mangoapp is a strong profiler and artifact source, especially for
+percentiles and before/after evidence. It should not be the only runtime source
+for control-loop decisions if a lower-latency gamescope or Steam target signal
+is available.
+
+Source:
+https://github.com/NGnius/PowerTools
+
+Key finding:
+PowerTools is an existing Decky power-user plugin. It can disable CPU threads
+and SMT, set CPU frequencies, set GPU frequency and power controls, show battery
+data, and persist per-game settings under a game-id keyed config file.
+
+Design impact:
+There is clear user demand for power-user Steam UI controls. However, this
+project should avoid copying direct write behavior into the Decky layer. The
+plugin should ask the root service to apply reversible policy and should present
+per-game state as experiment history, not as hard-coded policy.
+
+Source:
+https://github.com/aarron-lee/SimpleDeckyTDP
+
+Key finding:
+SimpleDeckyTDP ships per-game TDP profiles, TDP limits, power governor/EPP
+controls, SMT, CPU boost, AC/suspend-resume handling, and polling. Intel support
+is experimental and is explicitly built around the `intel_pstate` scaling
+driver. Its docs warn that CPU boost can cause excessive power draw on some
+handhelds and that overlapping control surfaces can conflict.
+
+Design impact:
+The game-power governor should feature-detect `intel_pstate`, EPP, boost, and
+TDP controls instead of assuming them. It also needs conflict detection for
+other Decky/system performance tools so two controllers do not fight over the
+same package-power contract.
+
+Source:
+https://github.com/hhd-dev/hhd
+
+Key finding:
+Handheld Daemon provides Linux hardware enablement for many Windows handhelds,
+including TDP controls, fan curves, controller emulation, SteamOS shortcuts, RGB,
+and a gamescope overlay/desktop app. Its supported devices list includes MSI
+Claw variants.
+
+Design impact:
+The governor should behave like one part of the handheld power stack, not like
+the only owner of the device. Runtime code should expose a clear API boundary,
+detect known competing services when possible, and preserve exact restore
+semantics so it can coexist with HHD/adjustor-style control stacks.
+
+Source:
 https://wiki.deckbrew.xyz/en/plugin-dev/getting-started
 
 Key finding:
@@ -185,6 +250,22 @@ require clean metadata, license handling, reproducible builds, and a conservativ
 permission story.
 
 ### Linux Scheduler And Power Interfaces
+
+Source:
+https://docs.kernel.org/scheduler/sched-capacity.html
+
+Key finding:
+Linux capacity-aware scheduling models heterogeneous CPUs as different capacity
+classes. CPU capacity depends on microarchitecture and maximum frequency. The
+scheduler uses CPU and frequency invariant task utilization and checks whether a
+task fits the CPU capacity. `uclamp` can influence this placement by clamping
+the utilization value seen by CFS.
+
+Design impact:
+P-core/E-core behavior must be modeled from topology and measurements, not from
+one global CPU frequency knob. The governor should record per-policy
+`affected_cpus`, `cpu_capacity`, current/max frequency, EPP, task/cgroup
+utilization pressure, and FPS outcome before choosing caps or placement hints.
 
 Source:
 https://docs.kernel.org/scheduler/sched-util-clamp.html
@@ -261,6 +342,33 @@ this device:
   assumed.
 
 Source:
+https://raw.githubusercontent.com/torvalds/linux/master/drivers/thermal/intel/intel_hfi.c
+
+Key finding:
+Intel's Hardware Feedback Interface reports per-CPU performance and energy
+efficiency capability information. Hardware may update those capabilities as
+power limits or thermal constraints change, and the driver relays updates to
+userspace.
+
+Design impact:
+If the target kernel exposes HFI signals, they are the right dynamic input for
+per-core Max-Q and performance/efficiency classification. If not available, the
+fallback is static `cpu_capacity` plus measured per-policy efficiency curves.
+
+Source:
+https://raw.githubusercontent.com/torvalds/linux/master/arch/x86/kernel/itmt.c
+
+Key finding:
+Intel Turbo Boost Max Technology support lets the scheduler prefer logical CPUs
+whose cores have higher turbo capability by assigning scheduler core priorities.
+
+Design impact:
+The governor should observe existing kernel priority/topology information and
+avoid fighting the scheduler's own asymmetric-capacity choices. Manual affinity
+or pinning should remain an experiment until evidence shows it improves frame
+pacing without hurting portability.
+
+Source:
 https://docs.kernel.org/admin-guide/pm/intel_pstate.html
 
 Key finding:
@@ -286,6 +394,169 @@ Design impact:
 The governor should keep SteamOS TDP/PL1 as the package contract and use
 RAPL deltas as low-frequency attribution, not as an instantaneous per-frame
 control input.
+
+Source:
+https://docs.kernel.org/scheduler/sched-ext.html
+
+Key finding:
+sched_ext lets user space load BPF-defined schedulers, group CPUs, and switch
+the BPF scheduler on and off dynamically. The kernel restores default scheduling
+when errors or stalls are detected, and state is visible under
+`/sys/kernel/sched_ext`.
+
+Design impact:
+sched_ext is a future research lane, not the first default policy. It could
+eventually express "foreground game gets low-latency capacity, background work
+uses idle capacity" more directly than cgroup hints, but only when the target
+kernel enables it and the profiler proves improvement beyond EPP/uclamp/cgroup
+controls.
+
+Source:
+https://raw.githubusercontent.com/sched-ext/scx/main/scheds/rust/scx_lavd/README.md
+
+Key finding:
+`scx_lavd` is a sched_ext scheduler implementing latency-criticality aware
+virtual deadline scheduling. It measures task latency criticality and uses that
+information for deadline, time-slice, and other scheduling decisions. It is
+motivated by gaming, targets high throughput with low tail latency, and creates
+separate scheduling domains by LLC, core type, and NUMA domain.
+
+Design impact:
+This is the clearest upstream-adjacent direction for a truly generic game
+scheduler. It does not require per-game hard-coded affinity. The first step for
+this repo should be compatibility/profiling, not bundling it as default, because
+the current device state previously reported sched_ext disabled.
+
+Source:
+https://raw.githubusercontent.com/sched-ext/scx/main/OVERVIEW.md
+
+Key finding:
+sched_ext's overview frames modern scheduling as harder because of
+heterogeneous CPUs, dynamic frequency scaling, chiplet/cache topology, strict
+mobile/VR latency requirements, and stacked workloads. It also describes
+experiments where machine learning predicted whether a task would soon yield so
+the scheduler could decide whether to keep it on the current CPU rather than
+migrating it to an idle CPU.
+
+Design impact:
+Automatic game affinity should be behavior-driven, not rule-table-driven. Useful
+features include recent wake/sleep cadence, run-queue delay, yield probability,
+CPU migration rate, last CPU, core type, LLC domain, and frame-time correlation.
+
+### Thread Affinity And Core Placement
+
+Source:
+https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html
+
+Key finding:
+Linux affinity is per thread. Restricting a thread to one CPU can reduce cache
+invalidation from migration, but the kernel may further intersect the requested
+mask with cpuset constraints. Setting affinity can require `CAP_SYS_NICE` when
+controlling another user's thread.
+
+Design impact:
+Hard affinity is powerful but dangerous. The governor must snapshot existing
+per-thread affinity masks before experiments, restore them exactly, and avoid
+default hard pinning because it can reduce available CPU time or fight cpuset
+state.
+
+Source:
+https://man7.org/linux/man-pages/man3/pthread_setaffinity_np.3.html
+
+Key finding:
+Thread-level affinity can be set from inside a process with
+`pthread_setaffinity_np()`. New threads inherit a copy of the creator's CPU
+affinity mask.
+
+Design impact:
+External affinity control cannot assume only current threads matter. A game can
+spawn new render, streaming, or shader threads after the governor starts. Any
+advisor must track `/proc/<pid>/task` continuously and avoid one-shot setup.
+
+Source:
+https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html
+
+Key finding:
+cgroup v2 cpuset files define the CPUs granted to a cgroup. `cpuset.cpus` can
+inherit from ancestors, `cpuset.cpus.effective` shows the actual CPUs available,
+and partition roots can create exclusive or isolated CPU partitions.
+
+Design impact:
+The generic first step is cgroup-level soft shaping and compact CPU sets, not
+per-TID hard pinning. Steam app cgroups give a reversible boundary for
+foreground game plus background scopes, while exclusive/isolated partitions are
+too disruptive for the default handheld policy.
+
+Source:
+https://learn.microsoft.com/en-us/windows/win32/procthread/cpu-sets
+
+Key finding:
+Windows CPU Sets provide a soft affinity API compatible with OS power
+management. Process default CPU sets can move background threads to a subset of
+processors, while thread-selected CPU sets override the process default. Hard
+affinity masks still take precedence over conflicting CPU Set assignments.
+
+Design impact:
+The Windows direction is a useful model for SteamOS: prefer soft preferred CPU
+sets and background-thread containment over hard masks. The closest Linux
+equivalents are cgroup cpuset/uclamp hints today and sched_ext placement hints
+later.
+
+Source:
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadaffinitymask
+
+Key finding:
+Windows hard affinity masks restrict where a thread can run, but Microsoft
+warns that setting a mask can reduce processor time and that in most cases the
+system should select the processor.
+
+Design impact:
+This supports the same safety rule on Linux: hard pinning should be opt-in,
+measured, reversible, and limited to hot threads whose migration correlates with
+frame-time misses.
+
+Source:
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadidealprocessor
+
+Key finding:
+Windows exposes a preferred processor API. The OS schedules the thread on that
+processor whenever possible, rather than making it the only legal CPU.
+
+Design impact:
+The ideal algorithm for this project should act more like "preferred
+processor/CPU set" than "only CPU". If Linux lacks a direct per-thread soft
+affinity primitive in the current kernel, emulate this with scheduler hints,
+compact cgroups, or sched_ext rather than strict masks.
+
+Source:
+https://docs.kernel.org/trace/events.html
+
+Key finding:
+Linux event tracing can enable scheduler tracepoints such as `sched_wakeup`,
+filter events by PID, and inspect trace event fields. This can be used without
+building custom kernel modules.
+
+Design impact:
+The affinity profiler should use tracepoints or `perf sched`-style captures to
+measure migration, wakeup, sleep, and run-queue behavior for game threads. A
+thread should not be pinned just because it has high CPU time; it should be
+considered only when it is latency-sensitive, migrates frequently, and its
+migration/queue delay correlates with frame-time spikes.
+
+Source:
+https://arxiv.org/abs/2604.27915
+
+Key finding:
+Affinity Tailor argues for dynamic locality-aware scheduling with demand-sized,
+topologically compact CPU sets used as hints rather than hard partitions. A
+userspace controller estimates workload CPU demand online and chooses compact
+sets that preserve locality while allowing execution elsewhere when needed.
+
+Design impact:
+This maps well to games. The default strategy should be "adaptive compactness":
+estimate foreground game runnable demand, prefer a compact P-core/LLC set for
+hot latency threads, keep background work away, and preserve escape capacity
+instead of forcing static core partitions.
 
 ### Academic And Research Literature
 
@@ -382,6 +653,102 @@ The next governor should classify CPU control at four levels:
      start as a profiler candidate and advisor output, not as default runtime
      policy.
 
+The CPU model must be data-driven:
+
+- Do not treat all CPU work as one global knob. P-core, E-core, unknown, and
+  future LP E-core domains need separate observation and policy records.
+- Build per-policy efficiency curves by TDP level. Each row should include
+  policy class, `affected_cpus`, `scaling_driver`, min/max/current frequency,
+  EPP, optional HFI performance/efficiency capability, package/core/uncore
+  watts, CPU pressure, FPS target, and frame-time outcome.
+- Use HFI when exposed because it reflects dynamic thermal and power-limit
+  conditions. Fall back to `cpu_capacity` and profiler-derived curves.
+- Per-policy EPP is only safe when task placement is also controlled or
+  understood. Otherwise prefer a conservative global EPP and cgroup/uclamp
+  hints.
+- Max-Q limits for P-core/E-core domains must be learned per device and guarded
+  by 1% low and p99 frame-time checks. A policy that saves CPU watts but lowers
+  GPU frametime stability is rejected.
+- Reserve foreground CPU caps for evidence-backed GPU-bound scenes. First try
+  background work shaping, EPP, and uclamp so game render/game threads do not
+  lose latency capacity.
+
+## Automatic Thread Affinity Direction
+
+A generic game affinity layer should be an observer/advisor first, then a
+controlled experiment path, then a policy. It should not ship as fixed per-game
+pinning rules.
+
+### Signals To Collect
+
+- TID inventory from `/proc/<pid>/task`, including `comm`, parent process,
+  cgroup, current affinity mask, and current CPU.
+- Per-thread CPU time deltas, voluntary/involuntary context switches, and
+  migration count when exposed through `/proc/<pid>/task/<tid>/sched`.
+- Scheduler tracepoint or `perf sched` windows for wakeup, switch, migration,
+  and run-queue delay around frame-time spikes.
+- Core topology: P/E/unknown class, SMT siblings, LLC domain, CPU capacity,
+  HFI/ITMT hints when available.
+- Frame pacing: target frame time, p95/p99, 1% low, and spike timestamps from
+  gamescope or MangoHud/mangoapp.
+- Power attribution: package/core/uncore watts so affinity experiments do not
+  solve stutter by starving the iGPU.
+
+### Classification
+
+The governor should classify threads by behavior over a sliding window:
+
+- `latency-critical-hot`: high CPU time or frequent wakeups, high run-queue
+  delay sensitivity, frame-time correlation, and repeated migration.
+- `latency-critical-light`: low CPU time but frequent wakeups near frame
+  boundaries; candidate for `uclamp.min` or preferred P-core placement.
+- `throughput-worker`: sustained CPU work with low frame-time correlation; keep
+  compact but not necessarily on best cores.
+- `background/helper`: launcher, overlay, shader compile, IO, network, crash
+  reporter, or unrelated app scopes; shape with cgroup controls before touching
+  foreground game threads.
+
+### Algorithm Candidates
+
+1. Observe-only hotspot detector
+   - Rank TIDs by CPU time, wakeup cadence, run-queue delay, migration rate,
+     and frame-time correlation.
+   - Emit recommendations only; no affinity writes.
+
+2. Soft compact placement
+   - Keep foreground game threads eligible on enough CPUs, but bias hot threads
+     toward a compact P-core/LLC set and move background work away with cgroup
+     cpuset/uclamp/weight.
+   - This follows the Windows CPU Sets and Affinity Tailor model: preference
+     and compact locality before hard partitioning.
+
+3. Selective hard affinity experiment
+   - Only in profiler mode, pin one or two repeatedly identified hot TIDs to a
+     small P-core set for a short A/B run.
+   - Reject if average FPS, 1% low, p99, package balance, or restore gets worse.
+   - Never persist by thread ID alone because TIDs and engine thread layouts
+     change across launches and updates.
+
+4. sched_ext/LAVD experiment
+   - When sched_ext is available, test `scx_lavd` or a future custom scheduler
+     that uses latency-criticality and topology domains instead of external
+     per-thread masks.
+   - This is the most upstreamable long-term route because the scheduler can
+     make placement decisions at wakeup and preserve escape capacity.
+
+### Acceptance Rules
+
+- Prefer soft placement when it improves p99/1% low without reducing average
+  FPS more than the existing policy thresholds.
+- Reject hard pinning when the pinned thread spends measurable time waiting for
+  its selected CPU while other suitable CPUs are idle.
+- Reject any affinity policy that increases core watts enough to lower iGPU
+  uncore/frequency headroom in GPU-bound scenes.
+- Re-learn after game updates, Proton changes, driver/kernel changes, topology
+  changes, or FPS target/TDP changes.
+- Store affinity observations as profiler artifacts, not as permanent manual
+  profiles, until repeated controlled captures validate the same pattern.
+
 ## Decky Plugin Control Surface
 
 The Decky plugin should be treated as an optional UI and experiment surface:
@@ -416,6 +783,34 @@ Decky frontend
 
 This keeps privileged writes in the already tested restore boundary and makes
 Decky removable without leaving scheduler state behind.
+
+Existing plugins prove the UI demand but also define the safety boundary:
+
+- PowerTools and SimpleDeckyTDP expose raw controls power users expect: TDP,
+  CPU frequency, SMT, EPP/governor, boost, GPU controls, and per-game profiles.
+- This project should expose intent first: target FPS, battery/balanced/
+  performance/quiet, observe/automatic/profiling mode, and expert overrides.
+- The plugin must show when another controller appears active and should avoid
+  applying policy in conflict-heavy states unless the service can prove exact
+  ownership and restore.
+- Store-ready packaging should follow Decky conventions: `plugin.json`,
+  `package.json`, frontend `dist/`, optional `main.py`, license, and backend
+  binaries under the expected `backend/out` to plugin `bin/` flow when needed.
+
+## Research Matrix
+
+| Area | Source signal/control | Governor use | Main risk | First validation |
+| --- | --- | --- | --- | --- |
+| FPS target | Steam/gamescope target, Steam UI cap, refresh divisor, Decky override | Convert the user target into `target_frame_ms`; stop chasing FPS above target | Target source may be missing or stale | Compare discovered target against visible Steam/gamescope setting |
+| Frame pacing | gamescope app frametimes, MangoHud/mangoapp CSV and summaries | Accept/reject policies by 1% low, p99, and variance before average FPS | Logging can be delayed or imported instead of controlled | Short A/B capture with known static scene and repeated samples |
+| CPU topology | `cpu_capacity`, CPUFreq policy domains, HFI, ITMT/core priority | Classify P-core/E-core/unknown domains and build per-domain curves | Missing or inconsistent kernel exposure | Device probe of `/sys/devices/system/cpu` and CPUFreq policies |
+| Thread affinity | `/proc/<pid>/task`, `sched` data, tracepoints, cgroup cpuset, sched_ext/LAVD | Detect hot latency threads, reduce harmful migrations, keep background work away | Hard pinning can reduce CPU time or fight scheduler placement | Observe-only migration/run-queue trace before any writes |
+| CPU controls | EPP, scaling max freq, foreground/background `uclamp`, cgroup weights | Bias placement/frequency and reserve package headroom without hard pinning | Foreground latency regression or scheduler conflict | Profiler variants gated by 1% low and exact restore |
+| Shared power | RAPL package/core/uncore/psys energy deltas, SteamOS TDP/PL1 | Attribute CPU vs uncore/iGPU package share over stable windows | RAPL is energy delta, not instant power | Same-window energy diff with policy snapshots |
+| Background contention | cgroup CPU/IO/memory PSI, process tree, AppID session | Shape non-critical work before capping foreground game threads | Misidentifying game helper threads as background | Observe-only process/cgroup inventory before writes |
+| Decky UI | ServerAPI to Python backend to service API | Toggle modes, show telemetry, launch guided A/B, expose expert overrides | Direct UI writes can leave unsafe state or conflict with tools | Plugin prototype with read-only service calls first |
+| Existing handheld tools | PowerTools, SimpleDeckyTDP, HHD/adjustor | Borrow UX patterns and detect controller conflicts | Double controllers fighting TDP/EPP/frequency | Conflict detection and explicit ownership display |
+| sched_ext | `/sys/kernel/sched_ext`, scx scheduler experiments | Future optional low-latency/background-idle scheduler lane | Kernel support and ABI instability | Separate guarded experiment only when enabled |
 
 ## First Control Loop Shape
 
@@ -457,6 +852,11 @@ unstable-or-unknown:
   across TDP values to build an empirical efficiency curve.
 - Investigate whether gamescope stats can provide frametime or app-present
   timestamps with lower latency than MangoHud CSV summaries.
+- Determine which per-thread scheduler signals are available without invasive
+  kernel changes: `/proc/<pid>/task/<tid>/sched`, tracefs scheduler events,
+  `perf sched`, eBPF, or sched_ext monitor output.
+- Build a migration/run-queue-delay profile for foreground games and correlate
+  it with p99 frame-time spikes before trying any hard affinity.
 - Evaluate cgroup background controls before foreground CPU caps.
 - Evaluate whether memory bandwidth or IO pressure explains 1% low drops in
   scenes where package power is already near PL1.
@@ -468,6 +868,8 @@ The recommended direction is a generic FPS-target, topology-aware governor:
 - activation is game-scoped,
 - objective is target frame-time and pacing, not maximum raw FPS,
 - primary controls are EPP and cgroup/uclamp,
+- automatic thread-affinity work starts as observe-only hotspot detection and
+  soft compact placement, not fixed per-game pinning,
 - CPU max frequency caps are measured variants, not default behavior,
 - CPU topology affects every control choice,
 - AppID is an artifact grouping key and optional cache key, not a hard-coded
