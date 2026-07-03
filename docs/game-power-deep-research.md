@@ -558,6 +558,22 @@ estimate foreground game runnable demand, prefer a compact P-core/LLC set for
 hot latency threads, keep background work away, and preserve escape capacity
 instead of forcing static core partitions.
 
+Current design note:
+The practical automatic-affinity path for this project is not raw `taskset` or
+one-time TID pinning. The safer generic path is:
+
+1. observe hot foreground threads and background/helper cgroups,
+2. shape non-foreground work first when it steals CPU/package headroom,
+3. express foreground placement as preferred compact CPU sets where the kernel
+   has a soft mechanism (`uclamp`, cgroup weights/cpuset experiments, or
+   sched_ext/LAVD),
+4. reserve hard per-TID affinity only for guarded profiler variants with exact
+   restore and run-queue-delay evidence.
+
+This mirrors the common lesson from Windows CPU Sets, scx_lavd, and Affinity
+Tailor: latency-sensitive work benefits from locality, but strict partitions
+can create local queueing and visible frame pacing regressions.
+
 ### Academic And Research Literature
 
 Source:
@@ -1109,13 +1125,16 @@ ITMT priority is an input to the preferred-set ranking, not something to ignore.
   capacity, HFI/ITMT hints when present, max frequency, and EPP state.
 - `affinity-advice.json`: observe-only ranking of hot thread roles, migration
   harm score, preferred set candidates, and explicit reasons for no-op.
+- `process-cgroups.jsonl`: read-only process-level CPU-time and cgroup samples
+  for foreground game, Steam helpers, gamescope/mangoapp, user, and system
+  scopes.
+- `background-shaping.json`: observe-only cgroup candidates for background or
+  helper work to shape before touching foreground game thread affinity.
 
 ### Profiler Artifacts To Add Next
 
 - `sched-trace.jsonl`: optional guarded tracefs/perf-sched window around
   frame-time spikes with wakeup, switch, migration, and run-queue delay.
-- `background-shaping.json`: cgroup candidates for launcher/helper/background
-  scopes before touching foreground game threads.
 - `restore-affinity.json`: original masks/cgroups/cpuset/uclamp snapshots for
   every write-mode experiment.
 
@@ -1186,6 +1205,12 @@ unstable-or-unknown:
   summarizer uses it with `thread-affinity.jsonl` to write
   `affinity-advice.json`, an observe-only advisor that ranks hot thread roles,
   preferred latency CPUs, migration harm, and explicit no-write reasons.
+- The guarded profiler now emits `process-cgroups.jsonl` for each run by
+  sampling read-only `/proc/<pid>/cgroup`, `/proc/<pid>/comm`, and
+  `/proc/<pid>/stat` data. The summarizer writes `background-shaping.json`,
+  an observe-only advisor that ranks non-foreground Steam helper,
+  gamescope/mangoapp, user, and system cgroups before any foreground affinity
+  experiment is considered.
 - This is still only the first automatic FPS-target source, not a proven
   SteamOS target oracle. The remaining work is to validate it against the Steam
   client setting, gamescope state, gamescopectl, stats pipe, and MangoHud on a

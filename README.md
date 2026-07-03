@@ -257,19 +257,23 @@ standalone profiler controls the test policy and the `off` run is a real
 baseline. Results are copied into `.cache/game-power/profiles/`. Each run
 directory contains `manifest.json`, `summary.json`, `game-power.jsonl`,
 `cgroup-pressure.jsonl`, `thread-affinity.jsonl`, `cpu-topology.json`,
-`affinity-advice.json`, CPU policy snapshots, TDP snapshots, and the MangoHud
-CSV/summary used for FPS analysis. The thread-affinity capture is observe-only
-and records per-thread CPU time, migration, context-switch, current-CPU,
-affinity-mask, and cgroup samples for future automatic-affinity research. The
-CPU topology capture is also read-only and records CPU class, CPUFreq policy,
-capacity, SMT sibling, max-frequency, and EPP hints when the kernel exposes
-them. `affinity-advice.json` is an observe-only advisor output; it ranks hot
-threads and preferred latency CPUs but does not apply affinity, cgroup, or
-uclamp writes. Set `PROFILE_GAME_POWER_FPS_TARGET` to the target used for the
-run when you want an explicit controlled A/B target. If it is unset, the
-wrapper makes a best-effort read-only discovery from the live gamescope command
-line's focused `-r` frame-rate limit and stores `fps-target.discovery.json`
-next to the run artifacts. Summaries then include `fps_target`,
+`process-cgroups.jsonl`, `affinity-advice.json`, `background-shaping.json`,
+CPU policy snapshots, TDP snapshots, and the MangoHud CSV/summary used for FPS
+analysis. The thread-affinity capture is observe-only and records per-thread
+CPU time, migration, context-switch, current-CPU, affinity-mask, and cgroup
+samples for future automatic-affinity research. The CPU topology capture is
+also read-only and records CPU class, CPUFreq policy, capacity, SMT sibling,
+max-frequency, and EPP hints when the kernel exposes them.
+`affinity-advice.json` is an observe-only advisor output; it ranks hot threads
+and preferred latency CPUs but does not apply affinity, cgroup, or uclamp
+writes. `background-shaping.json` is also observe-only; it ranks non-foreground
+Steam, gamescope/mangoapp, user, and system cgroups whose CPU time may compete
+with the foreground game before any foreground thread pinning is considered.
+Set `PROFILE_GAME_POWER_FPS_TARGET` to the target used for the run when you
+want an explicit controlled A/B target. If it is unset, the wrapper makes a
+best-effort read-only discovery from the live gamescope command line's focused
+`-r` frame-rate limit and stores `fps-target.discovery.json` next to the run
+artifacts. Summaries then include `fps_target`,
 `fps_target_source`, `target_frame_ms`, `avg_fps_target_ratio`, and
 `fps_target_met`, and repeated comparisons can accept a candidate that sustains
 the target while reducing package power.

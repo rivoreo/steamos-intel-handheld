@@ -66,6 +66,14 @@ class CpuTopologySummary:
 
 
 @dataclass(frozen=True)
+class ProcessCgroupSummary:
+    samples: int
+    observed_processes: int
+    foreground_processes: int
+    background_candidates: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
 class FpsTargetDiscovery:
     fps_target: float | None
     source: str
@@ -423,6 +431,85 @@ def summarize_cpu_topology(path: str | Path) -> CpuTopologySummary:
     )
 
 
+def summarize_process_cgroups_jsonl(
+    path: str | Path,
+    *,
+    appid: str,
+    candidate_limit: int = 8,
+) -> ProcessCgroupSummary:
+    app_scope = f"app-steam-app{appid}"
+    samples = 0
+    observed_pids: set[int] = set()
+    foreground_pids: set[int] = set()
+    cgroups: dict[str, dict[str, object]] = {}
+
+    with Path(path).open() as handle:
+        for line in handle:
+            text = line.strip()
+            if not text:
+                continue
+            samples += 1
+            row = json.loads(text)
+            for item in row.get("processes") or []:
+                if not isinstance(item, dict):
+                    continue
+                pid = _optional_int(item.get("pid"))
+                cgroup = _optional_str(item.get("cgroup"))
+                if pid is None or cgroup is None:
+                    continue
+                observed_pids.add(pid)
+                if app_scope in cgroup:
+                    foreground_pids.add(pid)
+                    continue
+                cpu_time_s = _float(item.get("cpu_time_s"))
+                if cpu_time_s is None:
+                    continue
+                state = cgroups.setdefault(
+                    cgroup,
+                    {
+                        "cgroup": cgroup,
+                        "classification": _classify_background_cgroup(
+                            cgroup,
+                            item.get("comm"),
+                        ),
+                        "processes": {},
+                        "commands": set(),
+                    },
+                )
+                processes = state["processes"]
+                assert isinstance(processes, dict)
+                process = processes.setdefault(
+                    pid,
+                    {"first": cpu_time_s, "last": cpu_time_s},
+                )
+                assert isinstance(process, dict)
+                process["last"] = cpu_time_s
+                command = _optional_str(item.get("comm"))
+                if command:
+                    commands = state["commands"]
+                    assert isinstance(commands, set)
+                    commands.add(command)
+
+    candidates = []
+    for state in cgroups.values():
+        candidate = _process_cgroup_candidate(state)
+        if candidate["cpu_time_s_delta"] > 0:
+            candidates.append(candidate)
+    candidates.sort(
+        key=lambda item: (
+            -float(item["cpu_time_s_delta"]),
+            -int(item["process_count"]),
+            str(item["cgroup"]),
+        )
+    )
+    return ProcessCgroupSummary(
+        samples=samples,
+        observed_processes=len(observed_pids),
+        foreground_processes=len(foreground_pids),
+        background_candidates=candidates[:candidate_limit],
+    )
+
+
 def build_affinity_advice(
     *,
     topology: CpuTopologySummary | None,
@@ -465,6 +552,58 @@ def build_affinity_advice(
         "write_policy": "disabled",
         "preferred_latency_cpus": preferred_latency_cpus,
         "ranked_threads": ranked_threads,
+        "reasons": reasons,
+    }
+
+
+def build_background_shaping_advice(
+    *,
+    appid: str,
+    process_cgroups: ProcessCgroupSummary | None,
+    avg_core_share: float | None,
+    avg_render_busy: float | None,
+    fps_target: float | None,
+    avg_fps: float | None,
+) -> dict[str, object]:
+    candidates: list[dict[str, object]] = []
+    if process_cgroups is not None:
+        candidates = [
+            _background_shaping_candidate(candidate)
+            for candidate in process_cgroups.background_candidates
+        ]
+    reasons = [
+        "advisor output is observe-only until repeated A/B captures validate a policy",
+        "foreground game cgroups are excluded from background shaping candidates",
+    ]
+    if candidates:
+        reasons.append(
+            "background/helper CPU time is visible outside the foreground app cgroup"
+        )
+    else:
+        reasons.append("no background/helper CPU candidates observed")
+    if avg_core_share is not None and avg_core_share >= 0.4:
+        reasons.append("core package share is high; background shaping may free iGPU headroom")
+    if avg_render_busy is not None and avg_render_busy >= 0.9:
+        reasons.append(
+            "render engine appears busy; shape background work before foreground caps"
+        )
+    if fps_target is not None and avg_fps is not None:
+        if avg_fps < fps_target * FPS_TARGET_TOLERANCE:
+            reasons.append("average FPS is below target tolerance")
+        else:
+            reasons.append("average FPS is within target tolerance")
+
+    return {
+        "mode": "observe-only",
+        "write_policy": "disabled",
+        "appid": appid,
+        "observed_processes": (
+            process_cgroups.observed_processes if process_cgroups is not None else 0
+        ),
+        "foreground_processes": (
+            process_cgroups.foreground_processes if process_cgroups is not None else 0
+        ),
+        "candidates": candidates,
         "reasons": reasons,
     }
 
@@ -857,6 +996,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--pressure-jsonl")
     summarize.add_argument("--thread-affinity-jsonl")
     summarize.add_argument("--cpu-topology-json")
+    summarize.add_argument("--process-cgroups-jsonl")
     summarize.add_argument("--epp")
     summarize.add_argument("--pcore-max-mhz", type=int)
     summarize.add_argument("--ecore-max-mhz", type=int)
@@ -913,6 +1053,11 @@ def run_summarize(args: argparse.Namespace) -> Path:
     cpu_topology = (
         summarize_cpu_topology(args.cpu_topology_json) if args.cpu_topology_json else None
     )
+    process_cgroups = (
+        summarize_process_cgroups_jsonl(args.process_cgroups_jsonl, appid=args.appid)
+        if args.process_cgroups_jsonl
+        else None
+    )
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -937,6 +1082,8 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "thread_affinity_jsonl": bool(args.thread_affinity_jsonl),
         "cpu_topology_json": bool(args.cpu_topology_json),
         "affinity_advice_json": bool(cpu_topology and thread_affinity),
+        "process_cgroups_jsonl": bool(args.process_cgroups_jsonl),
+        "background_shaping_json": bool(process_cgroups),
     }
     summary = merge_run_summary(
         appid=args.appid,
@@ -973,6 +1120,18 @@ def run_summarize(args: argparse.Namespace) -> Path:
         )
         (output / "affinity-advice.json").write_text(
             json.dumps(_json_ready(advice), indent=2, sort_keys=True) + "\n"
+        )
+    if process_cgroups is not None:
+        background = build_background_shaping_advice(
+            appid=args.appid,
+            process_cgroups=process_cgroups,
+            fps_target=args.fps_target,
+            avg_fps=summary.avg_fps,
+            avg_core_share=summary.avg_core_share,
+            avg_render_busy=summary.avg_render_busy,
+        )
+        (output / "background-shaping.json").write_text(
+            json.dumps(_json_ready(background), indent=2, sort_keys=True) + "\n"
         )
     return output / "summary.json"
 
@@ -1245,6 +1404,57 @@ def _ranked_affinity_thread(
         "migration_harm_score": migration_harm_score,
         "cpus_seen": cpus_seen,
         "preferred_cpu_overlap": preferred_overlap,
+        "suggested_action": suggested_action,
+    }
+
+
+def _classify_background_cgroup(cgroup: str, command: object) -> str:
+    haystack = f"{cgroup} {_optional_str(command) or ''}".lower()
+    if "gamescope" in haystack or "mangoapp" in haystack:
+        return "gamescope-helper"
+    if "steamwebhelper" in haystack or "steam" in haystack:
+        return "steam-helper"
+    if "/system.slice" in haystack:
+        return "system-helper"
+    if "/user.slice" in haystack:
+        return "user-helper"
+    return "other-background"
+
+
+def _process_cgroup_candidate(state: dict[str, object]) -> dict[str, object]:
+    processes = state.get("processes")
+    if not isinstance(processes, dict):
+        processes = {}
+    cpu_delta = 0.0
+    for process in processes.values():
+        if not isinstance(process, dict):
+            continue
+        first = _float(process.get("first")) or 0.0
+        last = _float(process.get("last")) or 0.0
+        cpu_delta += max(0.0, last - first)
+    commands = state.get("commands")
+    return {
+        "cgroup": state.get("cgroup"),
+        "classification": state.get("classification"),
+        "cpu_time_s_delta": round(cpu_delta, 3),
+        "process_count": len(processes),
+        "pids": sorted(pid for pid in processes if isinstance(pid, int)),
+        "commands": sorted(commands) if isinstance(commands, set) else [],
+    }
+
+
+def _background_shaping_candidate(candidate: dict[str, object]) -> dict[str, object]:
+    classification = _optional_str(candidate.get("classification")) or "other-background"
+    cpu_delta = _float(candidate.get("cpu_time_s_delta")) or 0.0
+    suggested_action = "observe"
+    if classification == "gamescope-helper":
+        suggested_action = "observe"
+    elif cpu_delta >= 1.0:
+        suggested_action = "future-cpu-weight-candidate"
+    elif classification in {"system-helper", "user-helper", "other-background"}:
+        suggested_action = "future-uclamp-max-candidate"
+    return {
+        **candidate,
         "suggested_action": suggested_action,
     }
 

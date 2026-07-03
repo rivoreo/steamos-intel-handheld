@@ -523,6 +523,90 @@ PY
   done
 }
 
+sample_process_cgroups() {
+  local output="$1"
+  local seconds="$2"
+  local start elapsed
+  start="$(date +%s)"
+  : >"$output"
+  while true; do
+    elapsed=$(($(date +%s) - start))
+    [ "$elapsed" -gt "$seconds" ] && break
+    python3 - "$elapsed" >>"$output" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+elapsed = float(sys.argv[1])
+clock_ticks = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+payload = {"elapsed_s": elapsed, "processes": []}
+
+
+def read_text(path):
+    try:
+        return path.read_text()
+    except OSError:
+        return ""
+
+
+def parse_stat(text):
+    if not text:
+        return None
+    end = text.rfind(")")
+    if end < 0:
+        return None
+    fields = text[end + 2 :].split()
+    try:
+        utime = int(fields[11])
+        stime = int(fields[12])
+    except (IndexError, ValueError):
+        return None
+    return (utime + stime) / clock_ticks
+
+
+def relevant(cgroup, comm):
+    lowered = f"{cgroup} {comm}".lower()
+    tokens = (
+        "app-steam-app",
+        "steam",
+        "gamescope",
+        "mangoapp",
+        "/user.slice/",
+        "/system.slice/",
+    )
+    return any(token in lowered for token in tokens)
+
+
+proc = pathlib.Path("/proc")
+for cgroup_path in proc.glob("[0-9]*/cgroup"):
+    pid_dir = cgroup_path.parent
+    try:
+        pid = int(pid_dir.name)
+    except ValueError:
+        continue
+    cgroup = read_text(cgroup_path).strip().replace("\n", ";")
+    comm = read_text(pid_dir / "comm").strip()
+    if not cgroup or not relevant(cgroup, comm):
+        continue
+    cpu_time = parse_stat(read_text(pid_dir / "stat"))
+    if cpu_time is None:
+        continue
+    payload["processes"].append(
+        {
+            "pid": pid,
+            "comm": comm or None,
+            "cpu_time_s": round(float(cpu_time), 6),
+            "cgroup": cgroup,
+        }
+    )
+
+print(json.dumps(payload, sort_keys=True))
+PY
+    sleep 1
+  done
+}
+
 collect_cpu_topology() {
   local output="$1"
   python3 - "$output" <<'PY'
@@ -703,6 +787,8 @@ for repeat in $(seq 1 "$REPEATS"); do
         pressure_pid="$!"
         sample_thread_affinity "$run_dir/thread-affinity.jsonl" "$DURATION_S" &
         thread_affinity_pid="$!"
+        sample_process_cgroups "$run_dir/process-cgroups.jsonl" "$DURATION_S" &
+        process_cgroups_pid="$!"
         if ! /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power \
           --mode "$mode" \
           --duration-s "$DURATION_S" \
@@ -713,11 +799,13 @@ for repeat in $(seq 1 "$REPEATS"); do
           stop_mangohud_capture || true
           wait "$pressure_pid" || true
           wait "$thread_affinity_pid" || true
+          wait "$process_cgroups_pid" || true
           exit 1
         fi
         stop_mangohud_capture
         wait "$pressure_pid" || true
         wait "$thread_affinity_pid" || true
+        wait "$process_cgroups_pid" || true
 
         collect_mangohud_csv "$run_dir"
 
@@ -751,6 +839,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           --pressure-jsonl "$run_dir/cgroup-pressure.jsonl" \
           --thread-affinity-jsonl "$run_dir/thread-affinity.jsonl" \
           --cpu-topology-json "$run_dir/cpu-topology.json" \
+          --process-cgroups-jsonl "$run_dir/process-cgroups.jsonl" \
           --epp "$EPP" \
           --pcore-max-mhz "$variant_pcore_max_mhz" \
           --ecore-max-mhz "$variant_ecore_max_mhz" \
@@ -763,6 +852,10 @@ for repeat in $(seq 1 "$REPEATS"); do
           --output "$run_dir"
         if [ ! -f "$run_dir/affinity-advice.json" ]; then
           echo "missing affinity-advice.json in $run_dir" >&2
+          exit 1
+        fi
+        if [ ! -f "$run_dir/background-shaping.json" ]; then
+          echo "missing background-shaping.json in $run_dir" >&2
           exit 1
         fi
       done

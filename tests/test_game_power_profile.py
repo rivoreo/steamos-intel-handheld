@@ -11,10 +11,12 @@ from steamos_intel_handheld.game_power_profile import (
     GamePowerLogSummary,
     MangoHudFpsSummary,
     PolicyVerdict,
+    ProcessCgroupSummary,
     RunSummary,
     ThreadAffinitySummary,
     aggregate_run_summaries,
     build_affinity_advice,
+    build_background_shaping_advice,
     compare_policy_aggregates,
     compare_run_summaries,
     parse_game_power_jsonl,
@@ -24,6 +26,7 @@ from steamos_intel_handheld.game_power_profile import (
     parse_pressure_file,
     summarize_cpu_topology,
     summarize_pressure_jsonl,
+    summarize_process_cgroups_jsonl,
     summarize_thread_affinity_jsonl,
 )
 
@@ -268,6 +271,117 @@ def test_summarize_thread_affinity_jsonl_ranks_hot_threads_by_cpu_and_migrations
         "affinity_masks": ["0-5"],
         "cgroup": "app-steam-app1091500.scope",
     }
+
+
+def test_summarize_process_cgroups_jsonl_ranks_background_cpu_candidates(tmp_path):
+    path = tmp_path / "process-cgroups.jsonl"
+    rows = [
+        {
+            "elapsed_s": 0.0,
+            "processes": [
+                {
+                    "pid": 101,
+                    "comm": "Cyberpunk2077",
+                    "cpu_time_s": 20.0,
+                    "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                },
+                {
+                    "pid": 201,
+                    "comm": "steamwebhelper",
+                    "cpu_time_s": 10.0,
+                    "cgroup": "0::/user.slice/app-steam-client.scope",
+                },
+                {
+                    "pid": 301,
+                    "comm": "mangoapp",
+                    "cpu_time_s": 3.0,
+                    "cgroup": "0::/user.slice/gamescope-mangoapp.service",
+                },
+            ],
+        },
+        {
+            "elapsed_s": 2.0,
+            "processes": [
+                {
+                    "pid": 101,
+                    "comm": "Cyberpunk2077",
+                    "cpu_time_s": 24.0,
+                    "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                },
+                {
+                    "pid": 201,
+                    "comm": "steamwebhelper",
+                    "cpu_time_s": 12.5,
+                    "cgroup": "0::/user.slice/app-steam-client.scope",
+                },
+                {
+                    "pid": 301,
+                    "comm": "mangoapp",
+                    "cpu_time_s": 3.4,
+                    "cgroup": "0::/user.slice/gamescope-mangoapp.service",
+                },
+            ],
+        },
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    summary = summarize_process_cgroups_jsonl(path, appid="1091500")
+
+    assert isinstance(summary, ProcessCgroupSummary)
+    assert summary.samples == 2
+    assert summary.observed_processes == 3
+    assert summary.foreground_processes == 1
+    assert summary.background_candidates[0] == {
+        "cgroup": "0::/user.slice/app-steam-client.scope",
+        "classification": "steam-helper",
+        "cpu_time_s_delta": 2.5,
+        "process_count": 1,
+        "pids": [201],
+        "commands": ["steamwebhelper"],
+    }
+
+
+def test_build_background_shaping_advice_outputs_observe_only_candidates(tmp_path):
+    process_cgroups = ProcessCgroupSummary(
+        samples=2,
+        observed_processes=3,
+        foreground_processes=1,
+        background_candidates=[
+            {
+                "cgroup": "0::/user.slice/app-steam-client.scope",
+                "classification": "steam-helper",
+                "cpu_time_s_delta": 2.5,
+                "process_count": 1,
+                "pids": [201],
+                "commands": ["steamwebhelper"],
+            },
+            {
+                "cgroup": "0::/user.slice/gamescope-mangoapp.service",
+                "classification": "gamescope-helper",
+                "cpu_time_s_delta": 0.4,
+                "process_count": 1,
+                "pids": [301],
+                "commands": ["mangoapp"],
+            },
+        ],
+    )
+
+    advice = build_background_shaping_advice(
+        appid="1091500",
+        process_cgroups=process_cgroups,
+        avg_core_share=0.43,
+        avg_render_busy=0.91,
+        fps_target=40.0,
+        avg_fps=38.5,
+    )
+
+    assert advice["mode"] == "observe-only"
+    assert advice["write_policy"] == "disabled"
+    assert advice["appid"] == "1091500"
+    assert advice["candidates"][0]["suggested_action"] == "future-cpu-weight-candidate"
+    assert "background/helper CPU time is visible outside the foreground app cgroup" in advice[
+        "reasons"
+    ]
 
 
 def test_summarize_cpu_topology_groups_policy_domains_and_core_classes(tmp_path):
@@ -723,6 +837,7 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     pressure = tmp_path / "cgroup-pressure.jsonl"
     thread_affinity = tmp_path / "thread-affinity.jsonl"
     cpu_topology = tmp_path / "cpu-topology.json"
+    process_cgroups = tmp_path / "process-cgroups.jsonl"
     output = tmp_path / "profile"
     write_csv(
         mangohud,
@@ -805,6 +920,48 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
         )
         + "\n"
     )
+    process_cgroups.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {
+                    "elapsed_s": 0.0,
+                    "processes": [
+                        {
+                            "pid": 101,
+                            "comm": "Cyberpunk2077",
+                            "cpu_time_s": 20.0,
+                            "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        },
+                        {
+                            "pid": 201,
+                            "comm": "steamwebhelper",
+                            "cpu_time_s": 10.0,
+                            "cgroup": "0::/user.slice/app-steam-client.scope",
+                        },
+                    ],
+                },
+                {
+                    "elapsed_s": 2.0,
+                    "processes": [
+                        {
+                            "pid": 101,
+                            "comm": "Cyberpunk2077",
+                            "cpu_time_s": 24.0,
+                            "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        },
+                        {
+                            "pid": 201,
+                            "comm": "steamwebhelper",
+                            "cpu_time_s": 12.5,
+                            "cgroup": "0::/user.slice/app-steam-client.scope",
+                        },
+                    ],
+                },
+            ]
+        )
+        + "\n"
+    )
 
     result = subprocess.run(
         [
@@ -830,6 +987,8 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
             str(thread_affinity),
             "--cpu-topology-json",
             str(cpu_topology),
+            "--process-cgroups-jsonl",
+            str(process_cgroups),
             "--fps-target",
             "40",
             "--output",
@@ -843,6 +1002,7 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     summary = json.loads((output / "summary.json").read_text())
     manifest = json.loads((output / "manifest.json").read_text())
     advice = json.loads((output / "affinity-advice.json").read_text())
+    background = json.loads((output / "background-shaping.json").read_text())
     assert "summary.json" in result.stdout
     assert manifest["appid"] == "1091500"
     assert manifest["policy"] == "gpu-priority"
@@ -851,6 +1011,8 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert manifest["fps_target_source"] == "manual"
     assert manifest["cpu_topology_json"] is True
     assert manifest["affinity_advice_json"] is True
+    assert manifest["process_cgroups_jsonl"] is True
+    assert manifest["background_shaping_json"] is True
     assert summary["avg_fps"] == 42.0
     assert summary["fps_target"] == 40.0
     assert summary["fps_target_source"] == "manual"
@@ -868,6 +1030,8 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert advice["mode"] == "observe-only"
     assert advice["preferred_latency_cpus"] == [0, 1]
     assert advice["ranked_threads"][0]["tid"] == 101
+    assert background["mode"] == "observe-only"
+    assert background["candidates"][0]["classification"] == "steam-helper"
 
 
 def test_profile_cli_summarize_records_policy_tunables(tmp_path):
