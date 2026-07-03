@@ -264,6 +264,39 @@ def test_compare_run_summaries_accepts_better_one_percent_low_without_avg_regres
     assert "1% low improved" in verdict.reason
 
 
+def test_compare_run_summaries_accepts_power_saving_when_target_is_sustained():
+    baseline = RunSummary(
+        appid="1091500",
+        tdp_w=22,
+        policy="off",
+        capture_mode=CaptureMode.CONTROLLED,
+        fps_target=40.0,
+        avg_fps=42.0,
+        one_percent_low_fps=31.0,
+        p99_frametime_ms=35.0,
+        avg_package_w=22.0,
+        restored=True,
+    )
+    candidate = RunSummary(
+        appid="1091500",
+        tdp_w=22,
+        policy="gpu-priority",
+        capture_mode=CaptureMode.CONTROLLED,
+        fps_target=40.0,
+        avg_fps=40.4,
+        one_percent_low_fps=30.8,
+        p99_frametime_ms=35.6,
+        avg_package_w=20.2,
+        restored=True,
+    )
+
+    verdict = compare_run_summaries(baseline, candidate)
+
+    assert verdict.verdict == PolicyVerdict.BETTER
+    assert "target sustained" in verdict.reason
+    assert "package power reduced" in verdict.reason
+
+
 def test_compare_run_summaries_rejects_imported_candidate_as_non_automated_ab():
     baseline = RunSummary(
         appid="1091500",
@@ -455,6 +488,71 @@ def test_compare_policy_aggregates_accepts_median_low_improvement():
     assert "median 1% low improved" in verdict.reason
 
 
+def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
+    baseline = aggregate_run_summaries(
+        [
+            RunSummary(
+                appid="1091500",
+                tdp_w=22,
+                policy="off",
+                capture_mode=CaptureMode.CONTROLLED,
+                fps_target=40.0,
+                avg_fps=42.0,
+                one_percent_low_fps=31.0,
+                p99_frametime_ms=35.0,
+                avg_package_w=22.0,
+                restored=True,
+            ),
+            RunSummary(
+                appid="1091500",
+                tdp_w=22,
+                policy="off",
+                capture_mode=CaptureMode.CONTROLLED,
+                fps_target=40.0,
+                avg_fps=41.5,
+                one_percent_low_fps=30.6,
+                p99_frametime_ms=35.4,
+                avg_package_w=21.8,
+                restored=True,
+            ),
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [
+            RunSummary(
+                appid="1091500",
+                tdp_w=22,
+                policy="gpu-priority",
+                capture_mode=CaptureMode.CONTROLLED,
+                fps_target=40.0,
+                avg_fps=40.9,
+                one_percent_low_fps=30.4,
+                p99_frametime_ms=35.8,
+                avg_package_w=20.2,
+                restored=True,
+            ),
+            RunSummary(
+                appid="1091500",
+                tdp_w=22,
+                policy="gpu-priority",
+                capture_mode=CaptureMode.CONTROLLED,
+                fps_target=40.0,
+                avg_fps=40.6,
+                one_percent_low_fps=30.3,
+                p99_frametime_ms=35.7,
+                avg_package_w=20.0,
+                restored=True,
+            ),
+        ]
+    )
+
+    verdict = compare_policy_aggregates(baseline, candidate, min_runs=2)
+
+    assert verdict.verdict == PolicyVerdict.BETTER
+    assert "target sustained" in verdict.reason
+    assert "median package power reduced" in verdict.reason
+
+
 def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     mangohud = tmp_path / "mangohud.csv"
     game_power = tmp_path / "game-power.jsonl"
@@ -552,6 +650,8 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
             str(pressure),
             "--thread-affinity-jsonl",
             str(thread_affinity),
+            "--fps-target",
+            "40",
             "--output",
             str(output),
         ],
@@ -566,7 +666,12 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert manifest["appid"] == "1091500"
     assert manifest["policy"] == "gpu-priority"
     assert manifest["capture_mode"] == "imported"
+    assert manifest["fps_target"] == 40.0
     assert summary["avg_fps"] == 42.0
+    assert summary["fps_target"] == 40.0
+    assert summary["target_frame_ms"] == 25.0
+    assert summary["avg_fps_target_ratio"] == 1.05
+    assert summary["fps_target_met"] is True
     assert summary["avg_uncore_w"] == 9.0
     assert summary["cpu_pressure_some_avg10_peak"] == 2.5
     assert summary["cpu_pressure_full_avg10_peak"] == 0.4

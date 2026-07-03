@@ -243,6 +243,7 @@ profile matrix instead of changing the installed default:
 ```bash
 PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
 PROFILE_GAME_POWER_REPEATS=3 \
+PROFILE_GAME_POWER_FPS_TARGET=40 \
 PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap" \
 PROFILE_GAME_POWER_CPU_CAP_VARIANTS="loose:3400:2600:0.35 balanced:3200:2400:0.35 conservative:3000:2200:0.30" \
 PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000 \
@@ -259,7 +260,12 @@ directory contains `manifest.json`, `summary.json`, `game-power.jsonl`,
 snapshots, and the MangoHud CSV/summary used for FPS analysis. The
 thread-affinity capture is observe-only and records per-thread CPU time,
 migration, context-switch, current-CPU, affinity-mask, and cgroup samples for
-future automatic-affinity research. Controlled capture temporarily installs a
+future automatic-affinity research. Until automatic Steam/gamescope FPS-target
+detection is validated, set `PROFILE_GAME_POWER_FPS_TARGET` to the target used
+for the run. Summaries then include `fps_target`, `target_frame_ms`,
+`avg_fps_target_ratio`, and `fps_target_met`, and repeated comparisons can
+accept a candidate that sustains the target while reducing package power.
+Controlled capture temporarily installs a
 runtime user-service drop-in for `gamescope-mangoapp.service`, restarts
 `mangoapp`, and uses `mangohudctl` to start and stop one logging session per
 policy run. The drop-in is removed and `mangoapp` is restarted again during
@@ -282,6 +288,7 @@ steamos-intel-handheld-game-power-profile aggregate \
   --duration-s 60 \
   --warmup-s 10 \
   --poll-s 2 \
+  --fps-target 40 \
   --min-runs 3
 ```
 

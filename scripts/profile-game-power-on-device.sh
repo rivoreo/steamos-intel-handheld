@@ -15,6 +15,7 @@ duration_s="${PROFILE_GAME_POWER_DURATION_S:-60}"
 warmup_s="${PROFILE_GAME_POWER_WARMUP_S:-10}"
 poll_s="${PROFILE_GAME_POWER_POLL_S:-2}"
 capture_mode="${PROFILE_GAME_POWER_CAPTURE_MODE:-imported}"
+fps_target="${PROFILE_GAME_POWER_FPS_TARGET:-}"
 epp="${PROFILE_GAME_POWER_EPP:-balance_power}"
 pcore_max_mhz="${PROFILE_GAME_POWER_PCORE_MAX_MHZ:-3200}"
 ecore_max_mhz="${PROFILE_GAME_POWER_ECORE_MAX_MHZ:-2800}"
@@ -28,7 +29,7 @@ remote_root="$(ssh "$target" "mktemp -d /tmp/game-power-profile.XXXXXX")"
 ssh "$target" \
   "APPID='$appid' TDP_LEVELS='$tdp_levels' POLICIES='$policies' \
 REPEATS='$repeats' DURATION_S='$duration_s' WARMUP_S='$warmup_s' POLL_S='$poll_s' \
-CAPTURE_MODE='$capture_mode' EPP='$epp' PCORE_MAX_MHZ='$pcore_max_mhz' \
+CAPTURE_MODE='$capture_mode' FPS_TARGET='$fps_target' EPP='$epp' PCORE_MAX_MHZ='$pcore_max_mhz' \
 ECORE_MAX_MHZ='$ecore_max_mhz' \
 CPU_CAP_CORE_SHARE_THRESHOLD='$cpu_cap_core_share_threshold' \
 CPU_CAP_VARIANTS='$cpu_cap_variants' \
@@ -536,6 +537,10 @@ for repeat in $(seq 1 "$REPEATS"); do
         if [ -f "$run_dir/mangohud-summary.csv" ]; then
           mangohud_args+=(--mangohud-summary-csv "$run_dir/mangohud-summary.csv")
         fi
+        fps_target_args=()
+        if [ -n "$FPS_TARGET" ]; then
+          fps_target_args=(--fps-target "$FPS_TARGET")
+        fi
 
         /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile summarize \
           --appid "$APPID" \
@@ -543,6 +548,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           --policy "$policy" \
           --capture-mode "$CAPTURE_MODE" \
           "${mangohud_args[@]}" \
+          "${fps_target_args[@]}" \
           --game-power-jsonl "$run_dir/game-power.jsonl" \
           --pressure-jsonl "$run_dir/cgroup-pressure.jsonl" \
           --thread-affinity-jsonl "$run_dir/thread-affinity.jsonl" \

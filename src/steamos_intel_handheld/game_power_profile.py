@@ -20,6 +20,11 @@ class CaptureMode(str, Enum):
     IMPORTED = "imported"
 
 
+FPS_TARGET_TOLERANCE = 0.98
+TARGET_POWER_SAVING_MIN_PCT = 5.0
+PACING_REGRESSION_REJECT_PCT = -3.0
+
+
 @dataclass(frozen=True)
 class MangoHudFpsSummary:
     avg_fps: float | None = None
@@ -65,6 +70,10 @@ class RunSummary:
     ecore_max_mhz: int | None = None
     cpu_cap_enabled: bool | None = None
     cpu_cap_core_share_threshold: float | None = None
+    fps_target: float | None = None
+    target_frame_ms: float | None = None
+    avg_fps_target_ratio: float | None = None
+    fps_target_met: bool | None = None
     avg_fps: float | None = None
     one_percent_low_fps: float | None = None
     point_one_percent_low_fps: float | None = None
@@ -102,6 +111,10 @@ class PolicyAggregate:
     ecore_max_mhz: int | None = None
     cpu_cap_enabled: bool = False
     cpu_cap_core_share_threshold: float | None = None
+    fps_target: float | None = None
+    target_frame_ms: float | None = None
+    avg_fps_target_ratio_median: float | None = None
+    fps_target_met_count: int = 0
     avg_fps_median: float | None = None
     one_percent_low_fps_median: float | None = None
     point_one_percent_low_fps_median: float | None = None
@@ -320,6 +333,7 @@ def merge_run_summary(
     ecore_max_mhz: int | None = None,
     cpu_cap_enabled: bool | None = None,
     cpu_cap_core_share_threshold: float | None = None,
+    fps_target: float | None = None,
     duration_s: float | None = None,
     warmup_s: float | None = None,
     poll_s: float | None = None,
@@ -339,6 +353,10 @@ def merge_run_summary(
         ecore_max_mhz=ecore_max_mhz,
         cpu_cap_enabled=cpu_cap_enabled,
         cpu_cap_core_share_threshold=cpu_cap_core_share_threshold,
+        fps_target=fps_target,
+        target_frame_ms=_target_frame_ms(fps_target),
+        avg_fps_target_ratio=_ratio(fps.avg_fps, fps_target),
+        fps_target_met=_fps_target_met(fps.avg_fps, fps_target),
         avg_fps=fps.avg_fps,
         one_percent_low_fps=fps.one_percent_low_fps,
         point_one_percent_low_fps=fps.point_one_percent_low_fps,
@@ -385,10 +403,21 @@ def compare_run_summaries(baseline: RunSummary, candidate: RunSummary) -> Policy
             PolicyVerdict.REJECTED,
             "restore verification did not pass for both runs",
         )
+    if baseline.fps_target != candidate.fps_target:
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.REJECTED,
+            "baseline and candidate do not use the same FPS target",
+        )
 
     low_gain = _percent_change(baseline.one_percent_low_fps, candidate.one_percent_low_fps)
     avg_gain = _percent_change(baseline.avg_fps, candidate.avg_fps)
     p99_gain = _lower_is_better_change(baseline.p99_frametime_ms, candidate.p99_frametime_ms)
+    package_saving = _lower_is_better_change(
+        baseline.avg_package_w,
+        candidate.avg_package_w,
+    )
 
     if low_gain is not None and low_gain >= 5.0 and (avg_gain is None or avg_gain >= -2.0):
         return PolicyComparison(
@@ -407,6 +436,23 @@ def compare_run_summaries(baseline: RunSummary, candidate: RunSummary) -> Policy
             candidate.policy,
             PolicyVerdict.BETTER,
             reason,
+        )
+    if (
+        _run_target_sustained(baseline)
+        and _run_target_sustained(candidate)
+        and package_saving is not None
+        and package_saving >= TARGET_POWER_SAVING_MIN_PCT
+        and (low_gain is None or low_gain >= PACING_REGRESSION_REJECT_PCT)
+        and (p99_gain is None or p99_gain >= PACING_REGRESSION_REJECT_PCT)
+    ):
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.BETTER,
+            (
+                f"target sustained while package power reduced by "
+                f"{package_saving:.1f}%"
+            ),
         )
     if avg_gain is not None and avg_gain >= 5.0 and (low_gain is None or low_gain >= -2.0):
         return PolicyComparison(
@@ -456,7 +502,7 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
             raise ValueError("cannot aggregate runs with different capture timing")
         if _effective_tunables(run) != first_tunables:
             raise ValueError("cannot aggregate runs with different effective tunables")
-    duration_s, warmup_s, poll_s = first_experiment
+    duration_s, warmup_s, poll_s, fps_target = first_experiment
     epp, pcore_max_mhz, ecore_max_mhz, cpu_cap_enabled, threshold = first_tunables
     return PolicyAggregate(
         appid=first.appid,
@@ -473,6 +519,12 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
         ecore_max_mhz=ecore_max_mhz,
         cpu_cap_enabled=cpu_cap_enabled,
         cpu_cap_core_share_threshold=threshold,
+        fps_target=fps_target,
+        target_frame_ms=_target_frame_ms(fps_target),
+        avg_fps_target_ratio_median=_median(
+            [_run_avg_fps_target_ratio(run) for run in runs]
+        ),
+        fps_target_met_count=sum(1 for run in runs if _run_fps_target_met(run) is True),
         avg_fps_median=_median([run.avg_fps for run in runs]),
         one_percent_low_fps_median=_median([run.one_percent_low_fps for run in runs]),
         point_one_percent_low_fps_median=_median(
@@ -508,6 +560,13 @@ def compare_policy_aggregates(
             candidate.policy,
             PolicyVerdict.REJECTED,
             "baseline and candidate do not target the same appid/TDP",
+        )
+    if baseline.fps_target != candidate.fps_target:
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.REJECTED,
+            "baseline and candidate do not use the same FPS target",
         )
     if baseline.sample_count < min_runs or candidate.sample_count < min_runs:
         baseline_unit = "run" if baseline.sample_count == 1 else "runs"
@@ -555,6 +614,10 @@ def compare_policy_aggregates(
         baseline.p99_frametime_ms_median,
         candidate.p99_frametime_ms_median,
     )
+    package_saving = _lower_is_better_change(
+        baseline.avg_package_w_median,
+        candidate.avg_package_w_median,
+    )
 
     if low_gain is not None and low_gain >= 5.0 and (avg_gain is None or avg_gain >= -2.0):
         return PolicyComparison(
@@ -574,6 +637,23 @@ def compare_policy_aggregates(
             (
                 f"median p99 frametime improved by {p99_gain:.1f}% "
                 f"with median average FPS change {avg_gain or 0:.1f}%"
+            ),
+        )
+    if (
+        _aggregate_target_sustained(baseline)
+        and _aggregate_target_sustained(candidate)
+        and package_saving is not None
+        and package_saving >= TARGET_POWER_SAVING_MIN_PCT
+        and (low_gain is None or low_gain >= PACING_REGRESSION_REJECT_PCT)
+        and (p99_gain is None or p99_gain >= PACING_REGRESSION_REJECT_PCT)
+    ):
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.BETTER,
+            (
+                f"target sustained while median package power reduced by "
+                f"{package_saving:.1f}%"
             ),
         )
     if avg_gain is not None and avg_gain >= 5.0 and (low_gain is None or low_gain >= -2.0):
@@ -628,6 +708,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--ecore-max-mhz", type=int)
     summarize.add_argument("--cpu-cap-enabled", choices=["true", "false"])
     summarize.add_argument("--cpu-cap-core-share-threshold", type=float)
+    summarize.add_argument("--fps-target", type=float)
     summarize.add_argument("--duration-s", type=float)
     summarize.add_argument("--warmup-s", type=float)
     summarize.add_argument("--poll-s", type=float)
@@ -647,6 +728,7 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--duration-s", type=float)
     aggregate.add_argument("--warmup-s", type=float)
     aggregate.add_argument("--poll-s", type=float)
+    aggregate.add_argument("--fps-target", type=float)
     aggregate.add_argument(
         "--capture-mode",
         choices=[mode.value for mode in CaptureMode],
@@ -684,6 +766,8 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "ecore_max_mhz": args.ecore_max_mhz,
         "cpu_cap_enabled": _optional_bool(args.cpu_cap_enabled),
         "cpu_cap_core_share_threshold": args.cpu_cap_core_share_threshold,
+        "fps_target": args.fps_target,
+        "target_frame_ms": _target_frame_ms(args.fps_target),
         "duration_s": args.duration_s,
         "warmup_s": args.warmup_s,
         "poll_s": args.poll_s,
@@ -702,6 +786,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         ecore_max_mhz=args.ecore_max_mhz,
         cpu_cap_enabled=_optional_bool(args.cpu_cap_enabled),
         cpu_cap_core_share_threshold=args.cpu_cap_core_share_threshold,
+        fps_target=args.fps_target,
         duration_s=args.duration_s,
         warmup_s=args.warmup_s,
         poll_s=args.poll_s,
@@ -734,6 +819,8 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
         if args.warmup_s is not None and summary.warmup_s != args.warmup_s:
             continue
         if args.poll_s is not None and summary.poll_s != args.poll_s:
+            continue
+        if args.fps_target is not None and summary.fps_target != args.fps_target:
             continue
         if summary.capture_mode != capture_mode:
             continue
@@ -823,11 +910,13 @@ def _profile_group_key(run: RunSummary) -> tuple[object, ...]:
 
 
 def _comparison_context_key(group_key: tuple[object, ...]) -> tuple[object, ...]:
-    return (group_key[0], group_key[1], *group_key[3:6])
+    return (group_key[0], group_key[1], *group_key[3:7])
 
 
-def _experiment_settings(run: RunSummary) -> tuple[float | None, float | None, float | None]:
-    return (run.duration_s, run.warmup_s, run.poll_s)
+def _experiment_settings(
+    run: RunSummary,
+) -> tuple[float | None, float | None, float | None, float | None]:
+    return (run.duration_s, run.warmup_s, run.poll_s, run.fps_target)
 
 
 def _effective_tunables(
@@ -913,6 +1002,42 @@ def _thread_hotspot(state: dict[str, object]) -> dict[str, object]:
         ),
         "cgroup": state.get("cgroup"),
     }
+
+
+def _target_frame_ms(fps_target: float | None) -> float | None:
+    if fps_target is None or fps_target <= 0:
+        return None
+    return round(1000.0 / fps_target, 3)
+
+
+def _fps_target_met(avg_fps: float | None, fps_target: float | None) -> bool | None:
+    if avg_fps is None or fps_target is None or fps_target <= 0:
+        return None
+    return avg_fps >= FPS_TARGET_TOLERANCE * fps_target
+
+
+def _run_fps_target_met(run: RunSummary) -> bool | None:
+    if run.fps_target_met is not None:
+        return run.fps_target_met
+    return _fps_target_met(run.avg_fps, run.fps_target)
+
+
+def _run_avg_fps_target_ratio(run: RunSummary) -> float | None:
+    if run.avg_fps_target_ratio is not None:
+        return run.avg_fps_target_ratio
+    return _ratio(run.avg_fps, run.fps_target)
+
+
+def _run_target_sustained(run: RunSummary) -> bool:
+    return _run_fps_target_met(run) is True
+
+
+def _aggregate_target_sustained(aggregate: PolicyAggregate) -> bool:
+    return (
+        aggregate.fps_target is not None
+        and aggregate.sample_count > 0
+        and aggregate.fps_target_met_count == aggregate.sample_count
+    )
 
 
 def parse_pressure_file(text: str) -> dict[str, dict[str, float]]:

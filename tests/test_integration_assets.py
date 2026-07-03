@@ -404,6 +404,8 @@ def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
     assert "--output-format jsonl" in script
     assert "--pressure-jsonl" in script
     assert "--thread-affinity-jsonl" in script
+    assert "PROFILE_GAME_POWER_FPS_TARGET" in script
+    assert "--fps-target" in script
     assert "steamos-intel-handheld-game-power-profile summarize" in script
     assert "capture_mode" in script
     assert ".cache/game-power/profiles" in script
