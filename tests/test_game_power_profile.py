@@ -1806,6 +1806,118 @@ def test_profile_cli_aggregate_builds_guarded_affinity_experiment_plan(tmp_path)
     ]
 
 
+def test_profile_cli_aggregate_builds_background_shaping_experiment_plan(tmp_path):
+    runs = [
+        ("001-off", "off", 54.0, 40.0, None),
+        ("002-gpu", "gpu-priority", 55.0, 43.0, 2.0),
+        ("003-off", "off", 55.0, 40.5, None),
+        ("004-gpu", "gpu-priority", 56.0, 44.0, 2.4),
+    ]
+    for dirname, policy, avg_fps, low_fps, helper_cpu_s in runs:
+        run_dir = tmp_path / dirname
+        run_dir.mkdir()
+        (run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "appid": "1091500",
+                    "tdp_w": 22,
+                    "policy": policy,
+                    "capture_mode": "controlled",
+                    "avg_fps": avg_fps,
+                    "one_percent_low_fps": low_fps,
+                    "restore_affinity_thread_count": 3,
+                    "restore_affinity_cgroup_count": 2,
+                    "restore_affinity_files": [
+                        "cpu.uclamp.max",
+                        "cpu.uclamp.min",
+                        "cpu.weight",
+                        "cpuset.cpus.effective",
+                    ],
+                    "restored": True,
+                }
+            )
+        )
+        if helper_cpu_s is None:
+            continue
+        (run_dir / "background-shaping.json").write_text(
+            json.dumps(
+                {
+                    "mode": "observe-only",
+                    "write_policy": "disabled",
+                    "appid": "1091500",
+                    "candidates": [
+                        {
+                            "cgroup": "0::/user.slice/app-steam-client.scope",
+                            "classification": "steam-helper",
+                            "cpu_time_s_delta": helper_cpu_s,
+                            "process_count": 2,
+                            "pids": [201, 202],
+                            "commands": ["steamwebhelper"],
+                            "suggested_action": "future-cpu-weight-candidate",
+                        }
+                    ],
+                }
+            )
+        )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "aggregate",
+            "--root",
+            str(tmp_path),
+            "--baseline-policy",
+            "off",
+            "--candidate-policy",
+            "gpu-priority",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--min-runs",
+            "2",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    comparison = json.loads(result.stdout)["comparisons"][0]
+    candidate_background = comparison["candidate_background_shaping_candidates"]
+    assert candidate_background[0] == {
+        "candidate_key": "steam-helper:0::/user.slice/app-steam-client.scope",
+        "cgroup": "0::/user.slice/app-steam-client.scope",
+        "classification": "steam-helper",
+        "suggested_action": "future-cpu-weight-candidate",
+        "observed_run_count": 2,
+        "run_coverage": 1.0,
+        "cpu_time_s_delta_median": 2.2,
+        "process_count_median": 2.0,
+        "commands": ["steamwebhelper"],
+    }
+    plan = comparison["background_shaping_experiment_plan"]
+    assert plan["mode"] == "ready-for-guarded-experiment"
+    assert plan["write_policy"] == "disabled"
+    assert plan["strategy"] == "background-helper-soft-cap"
+    assert plan["candidates"][0] == {
+        "candidate_key": "steam-helper:0::/user.slice/app-steam-client.scope",
+        "cgroup": "0::/user.slice/app-steam-client.scope",
+        "classification": "steam-helper",
+        "control_scope": "background-helper-cgroup",
+        "candidate_control": "cpu.weight-or-uclamp-max-soft-cap",
+        "guarded_variant": "background-helper-soft-cap",
+        "fallback": "restore-original-cgroup-cpu-controller-state",
+        "observed_run_count": 2,
+        "run_coverage": 1.0,
+        "cpu_time_s_delta_median": 2.2,
+    }
+    assert "background/helper cgroup candidate is stable across candidate runs" in plan[
+        "reasons"
+    ]
+
+
 def test_profile_cli_aggregate_requires_restore_snapshot_for_guarded_affinity_plan(
     tmp_path,
 ):

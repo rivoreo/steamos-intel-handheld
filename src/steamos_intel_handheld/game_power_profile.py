@@ -27,6 +27,9 @@ AFFINITY_ROLE_MIN_RUN_COVERAGE = 0.67
 AFFINITY_ROLE_MIN_OBSERVED_RUNS = 2
 AFFINITY_ROLE_MIN_HARM_SCORE = 5.0
 AFFINITY_ROLE_MIN_RUNQUEUE_WAIT_MS = 25.0
+BACKGROUND_SHAPING_MIN_RUN_COVERAGE = 0.67
+BACKGROUND_SHAPING_MIN_OBSERVED_RUNS = 2
+BACKGROUND_SHAPING_MIN_CPU_TIME_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -1399,6 +1402,12 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
             )
             baseline_roles = aggregate_affinity_roles(paths_by_group[baseline_key])
             candidate_roles = aggregate_affinity_roles(paths_by_group[candidate_key])
+            baseline_background = aggregate_background_shaping_candidates(
+                paths_by_group[baseline_key]
+            )
+            candidate_background = aggregate_background_shaping_candidates(
+                paths_by_group[candidate_key]
+            )
             comparisons.append(
                 {
                     "appid": appid,
@@ -1407,6 +1416,8 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
                     "candidate": asdict(candidate),
                     "baseline_affinity_roles": baseline_roles,
                     "candidate_affinity_roles": candidate_roles,
+                    "baseline_background_shaping_candidates": baseline_background,
+                    "candidate_background_shaping_candidates": candidate_background,
                     "affinity_experiment_plan": build_affinity_experiment_plan(
                         baseline=baseline,
                         candidate=candidate,
@@ -1414,6 +1425,16 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
                         baseline_roles=baseline_roles,
                         candidate_roles=candidate_roles,
                         min_runs=args.min_runs,
+                    ),
+                    "background_shaping_experiment_plan": (
+                        build_background_shaping_experiment_plan(
+                            baseline=baseline,
+                            candidate=candidate,
+                            comparison=comparison,
+                            baseline_candidates=baseline_background,
+                            candidate_candidates=candidate_background,
+                            min_runs=args.min_runs,
+                        )
                     ),
                     "comparison": asdict(comparison),
                 }
@@ -1545,6 +1566,122 @@ def _guarded_affinity_role_candidate(role: dict[str, object]) -> dict[str, objec
     }
 
 
+def build_background_shaping_experiment_plan(
+    *,
+    baseline: PolicyAggregate,
+    candidate: PolicyAggregate,
+    comparison: PolicyComparison,
+    baseline_candidates: list[dict[str, object]],
+    candidate_candidates: list[dict[str, object]],
+    min_runs: int,
+) -> dict[str, object]:
+    reasons = [
+        "background shaping remains advisory until a guarded writer is implemented",
+        "plan output is advisory and does not write cgroup controller state",
+    ]
+    ready = True
+
+    if comparison.verdict == PolicyVerdict.BETTER:
+        reasons.append("candidate policy comparison is better")
+    else:
+        ready = False
+        reasons.append(f"candidate policy comparison is {comparison.verdict.value}")
+
+    if baseline.sample_count < min_runs or candidate.sample_count < min_runs:
+        ready = False
+        reasons.append("controlled repeated min-runs gate is not met")
+    if baseline.capture_mode != CaptureMode.CONTROLLED:
+        ready = False
+        reasons.append("baseline capture is not controlled")
+    if candidate.capture_mode != CaptureMode.CONTROLLED:
+        ready = False
+        reasons.append("candidate capture is not controlled")
+    if baseline.restored_count != baseline.sample_count:
+        ready = False
+        reasons.append("baseline restore verification is incomplete")
+    if candidate.restored_count != candidate.sample_count:
+        ready = False
+        reasons.append("candidate restore verification is incomplete")
+
+    if (
+        baseline.restore_affinity_snapshot_count == baseline.sample_count
+        and candidate.restore_affinity_snapshot_count == candidate.sample_count
+        and _aggregate_has_cgroup_cpu_controller_restore(baseline)
+        and _aggregate_has_cgroup_cpu_controller_restore(candidate)
+    ):
+        reasons.append("cgroup CPU controller restore snapshots are available")
+    else:
+        ready = False
+        reasons.append("cgroup CPU controller restore snapshots are missing")
+
+    if baseline_candidates:
+        reasons.append("baseline background/helper evidence is available for comparison")
+
+    guarded_candidates = [
+        _guarded_background_shaping_candidate(item)
+        for item in candidate_candidates
+        if _background_candidate_is_ready_for_guarded_experiment(item)
+    ]
+    if guarded_candidates:
+        reasons.append(
+            "background/helper cgroup candidate is stable across candidate runs"
+        )
+    else:
+        ready = False
+        reasons.append("no background/helper cgroup passed guarded-shaping gates")
+
+    return {
+        "mode": "ready-for-guarded-experiment" if ready else "observe-only",
+        "write_policy": "disabled",
+        "strategy": "background-helper-soft-cap",
+        "candidates": guarded_candidates,
+        "reasons": reasons,
+    }
+
+
+def _aggregate_has_cgroup_cpu_controller_restore(aggregate: PolicyAggregate) -> bool:
+    files = set(aggregate.restore_affinity_files or [])
+    return bool(files.intersection({"cpu.uclamp.max", "cpu.weight", "cpu.max"}))
+
+
+def _background_candidate_is_ready_for_guarded_experiment(
+    candidate: dict[str, object],
+) -> bool:
+    if (_optional_int(candidate.get("observed_run_count")) or 0) < (
+        BACKGROUND_SHAPING_MIN_OBSERVED_RUNS
+    ):
+        return False
+    if (_float(candidate.get("run_coverage")) or 0.0) < (
+        BACKGROUND_SHAPING_MIN_RUN_COVERAGE
+    ):
+        return False
+    if (_float(candidate.get("cpu_time_s_delta_median")) or 0.0) < (
+        BACKGROUND_SHAPING_MIN_CPU_TIME_S
+    ):
+        return False
+    return candidate.get("suggested_action") in {
+        "future-cpu-weight-candidate",
+        "future-uclamp-max-candidate",
+    }
+
+
+def _guarded_background_shaping_candidate(
+    candidate: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "candidate_key": candidate.get("candidate_key"),
+        "cgroup": candidate.get("cgroup"),
+        "classification": candidate.get("classification"),
+        "control_scope": "background-helper-cgroup",
+        "candidate_control": "cpu.weight-or-uclamp-max-soft-cap",
+        "guarded_variant": "background-helper-soft-cap",
+        "fallback": "restore-original-cgroup-cpu-controller-state",
+        "observed_run_count": candidate.get("observed_run_count"),
+        "run_coverage": candidate.get("run_coverage"),
+        "cpu_time_s_delta_median": candidate.get("cpu_time_s_delta_median"),
+    }
+
+
 def _load_run_summary(path: str | Path) -> RunSummary:
     payload = json.loads(Path(path).read_text())
     if "capture_mode" in payload:
@@ -1628,6 +1765,102 @@ def aggregate_affinity_roles(summary_paths: list[Path]) -> list[dict[str, object
         )
     )
     return candidates
+
+
+def aggregate_background_shaping_candidates(
+    summary_paths: list[Path],
+) -> list[dict[str, object]]:
+    if not summary_paths:
+        return []
+    candidates: dict[str, dict[str, object]] = {}
+    for summary_path in summary_paths:
+        advice_path = summary_path.with_name("background-shaping.json")
+        if not advice_path.is_file():
+            continue
+        try:
+            payload = json.loads(advice_path.read_text())
+        except json.JSONDecodeError:
+            continue
+        for item in payload.get("candidates") or []:
+            if not isinstance(item, dict):
+                continue
+            cgroup = _optional_str(item.get("cgroup"))
+            if cgroup is None:
+                continue
+            classification = _optional_str(item.get("classification")) or (
+                "other-background"
+            )
+            key = f"{classification}:{cgroup}"
+            state = candidates.setdefault(
+                key,
+                {
+                    "candidate_key": key,
+                    "cgroup": cgroup,
+                    "classification": classification,
+                    "suggested_action": "observe",
+                    "observed_run_count": 0,
+                    "cpu_time_s_delta": [],
+                    "process_count": [],
+                    "commands": set(),
+                },
+            )
+            state["observed_run_count"] = int(state["observed_run_count"]) + 1
+            _append_float(state["cpu_time_s_delta"], item.get("cpu_time_s_delta"))
+            _append_float(state["process_count"], item.get("process_count"))
+            commands = state["commands"]
+            if isinstance(commands, set):
+                for command in item.get("commands") or []:
+                    text = _optional_str(command)
+                    if text:
+                        commands.add(text)
+            if _background_action_rank(
+                _optional_str(item.get("suggested_action"))
+            ) > _background_action_rank(_optional_str(state.get("suggested_action"))):
+                state["suggested_action"] = item.get("suggested_action")
+
+    results = [
+        _finalize_aggregate_background_shaping_candidate(
+            candidate,
+            total_runs=len(summary_paths),
+        )
+        for candidate in candidates.values()
+    ]
+    results.sort(
+        key=lambda item: (
+            -int(item["observed_run_count"]),
+            -float(item["cpu_time_s_delta_median"] or 0.0),
+            str(item["candidate_key"]),
+        )
+    )
+    return results
+
+
+def _background_action_rank(action: str | None) -> int:
+    return {
+        "observe": 0,
+        "future-uclamp-max-candidate": 1,
+        "future-cpu-weight-candidate": 2,
+    }.get(action or "", -1)
+
+
+def _finalize_aggregate_background_shaping_candidate(
+    candidate: dict[str, object],
+    *,
+    total_runs: int,
+) -> dict[str, object]:
+    observed = int(candidate["observed_run_count"])
+    commands = candidate.get("commands")
+    return {
+        "candidate_key": candidate.get("candidate_key"),
+        "cgroup": candidate.get("cgroup"),
+        "classification": candidate.get("classification"),
+        "suggested_action": candidate.get("suggested_action"),
+        "observed_run_count": observed,
+        "run_coverage": round(observed / total_runs, 3) if total_runs > 0 else 0.0,
+        "cpu_time_s_delta_median": _median(candidate["cpu_time_s_delta"]),
+        "process_count_median": _median(candidate["process_count"]),
+        "commands": sorted(commands) if isinstance(commands, set) else [],
+    }
 
 
 def _finalize_aggregate_affinity_role(

@@ -329,8 +329,14 @@ plan that becomes `ready-for-guarded-experiment` only when repeated controlled
 runs, restore checks, `restore-affinity.json` coverage, policy comparison, and
 stable foreground role evidence all pass. The plan does not apply affinity; it
 identifies whether a future soft compact preferred-CPU-set experiment is
-justified. AppID is an experiment grouping key; production game-power policy
-should remain a generic telemetry-driven governor rather than a per-game table.
+justified. When sibling `background-shaping.json` files are present, aggregate
+also emits `baseline_background_shaping_candidates`,
+`candidate_background_shaping_candidates`, and
+`background_shaping_experiment_plan`. That plan remains write-disabled and only
+identifies whether a future guarded background-helper `cpu.weight` or
+`cpu.uclamp.max` soft-cap experiment is justified. AppID is an experiment
+grouping key; production game-power policy should remain a generic
+telemetry-driven governor rather than a per-game table.
 
 ## Repository layout
 

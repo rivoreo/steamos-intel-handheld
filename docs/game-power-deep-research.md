@@ -635,6 +635,92 @@ rollback-snapshot evidence to test a soft compact foreground-role placement
 variant next; it does not mean production hard affinity should be enabled.
 
 Source:
+https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html
+
+Key finding:
+Linux affinity is a per-thread eligibility mask. The kernel may silently
+intersect a requested mask with cpuset restrictions, and changing the mask can
+migrate the thread immediately if it is running outside the new mask. The man
+page names the upside clearly: avoiding cache invalidation when a thread moves
+between CPUs. It also implies the main risk for games: hard affinity is a
+restriction, not only a hint.
+
+Source:
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadaffinitymask
+
+Key finding:
+Windows exposes the same distinction. `SetThreadAffinityMask` is a hard
+restriction and Microsoft's own guidance says this can cause a thread to
+receive less processor time because the scheduler is restricted. The companion
+`SetThreadIdealProcessor` API is weaker: it sets a preferred processor and lets
+the system honor it when possible.
+
+Design impact:
+The generic handheld scheduler should treat hard per-TID affinity as the last
+stage, not the default. The safer first design is:
+
+1. detect stable roles across runs, not raw TIDs,
+2. prefer soft placement or compact preferred CPU sets where the platform has
+   the primitive,
+3. shape background/helper cgroups before restricting foreground game threads,
+4. require repeated controlled A/B evidence and restore snapshots before any
+   writer is allowed.
+
+Source:
+https://github.com/sched-ext/scx
+https://raw.githubusercontent.com/sched-ext/scx/main/OVERVIEW.md
+
+Key finding:
+`sched_ext` is the upstream Linux path for rapidly testing alternative
+schedulers in BPF and unloading them dynamically. The overview explicitly calls
+out modern power-limited, cache-heterogeneous, latency-sensitive systems as the
+reason scheduling needs easier experimentation. It also describes dynamic CPU
+selection as an optimization hint rather than a final binding decision.
+
+Design impact:
+If the target kernel exposes sched_ext, the ideal long-term path is not a
+pile of per-game pinning rules. It is a Steam-session-aware scheduling policy
+that can classify latency-sensitive foreground roles, background helpers, core
+type, LLC/cache locality, and package-power pressure continuously. The current
+Python profiler should therefore produce the same evidence a future sched_ext
+policy would need: stable roles, runqueue wait, migrations, topology, cgroup
+state, and A/B verdicts.
+
+Source:
+https://www.open-mpi.org/projects/hwloc/
+
+Key finding:
+`hwloc` exists because topology-aware placement is hard to do portably. It
+models NUMA nodes, packages, shared caches, cores, SMT threads, cgroups, hybrid
+CPUs, GPU/I/O locality, and exposes binding APIs. Its examples also show the
+placement trade-off: tightly cooperating tasks may benefit from shared cache,
+while independent memory-heavy tasks should be spread out.
+
+Design impact:
+Automatic affinity must be topology-aware. For this handheld that means at
+least P-core/E-core class, CPUFreq policy domain, SMT sibling, shared cache or
+effective capacity when exposed, and future GPU/I/O locality. A raw "pin hot
+thread to CPU 0" rule is not upstreamable; a topology-aware role-to-compact-set
+algorithm is.
+
+Source:
+https://raw.githubusercontent.com/FeralInteractive/gamemode/master/example/gamemode.ini
+https://github.com/FeralInteractive/gamemode
+
+Key finding:
+GameMode already contains CPU/iGPU power-balance logic plus optional core
+pinning/parking, but its own sample config restricts automatic pin/park
+autodetection to known hybrid or X3D layouts. It is a useful signal that the
+Linux gaming ecosystem is moving toward core-class-aware placement, but also a
+warning that broad automatic hard pinning is fragile.
+
+Design impact:
+The project should avoid copying a static pinning table. Use GameMode-like
+integration as a compatibility signal, but keep this scheduler telemetry-first:
+profile, compare, cache by AppID/topology/kernel/TDP/FPS target fingerprint,
+and revalidate after stack changes.
+
+Source:
 https://docs.kernel.org/admin-guide/cgroup-v2.html
 
 Key finding:
@@ -661,7 +747,49 @@ and file list in `summary.json`, and the aggregate planner refuses to mark an
 affinity experiment ready unless every aggregated baseline and candidate run
 has a non-empty restore-affinity snapshot.
 
+Source:
+https://docs.kernel.org/scheduler/sched-util-clamp.html
+
+Key finding:
+Utilization clamp is a scheduler hinting mechanism. `UCLAMP_MIN` expresses a
+minimum performance requirement, `UCLAMP_MAX` expresses an upper bound, and
+the cgroup controller exposes `cpu.uclamp.min` and `cpu.uclamp.max`. The same
+documentation warns that severe `UCLAMP_MAX` caps can distort PELT signals and
+cause frequency spikes when capped and uncapped tasks share a runqueue.
+
+Design impact:
+Background/helper shaping should be soft and guarded. Prefer small A/B steps
+on `cpu.weight` or `cpu.uclamp.max`, reject on 1% low/p99 regression or
+restore mismatch, and avoid severe caps that can confuse scheduler frequency
+signals.
+
 ### Academic And Research Literature
+
+Source:
+https://arxiv.org/abs/2604.27915
+
+Key finding:
+Affinity Tailor argues that Linux-style load balancing can spread workloads too
+widely and damage locality in caches, branch predictors, prefetchers, and LLC
+domains. Its key idea is a userspace controller that estimates each workload's
+CPU demand online and assigns a demand-sized, topologically compact preferred
+CPU set. The kernel treats that set as an affinity hint, not a hard partition,
+so work can still run elsewhere when needed to preserve utilization.
+
+Design impact:
+This is the best currently found blueprint for a generic automatic game
+affinity controller. Adapt the idea to a handheld game session:
+
+1. workload equals foreground game role, Steam/gamescope helper role, or system
+   helper cgroup,
+2. demand comes from CPU-time deltas, runqueue wait, timeslices, and frame
+   pacing,
+3. topology compactness comes from P/E class, CPUFreq policy, SMT sibling, and
+   shared-cache data when available,
+4. preferred sets are advisory experiment outputs until a kernel or cgroup
+   primitive can express them without hard pinning,
+5. capacity may be left intentionally imperfect if it improves 1% low/p99
+   frame pacing and keeps GPU package headroom.
 
 Source:
 https://arxiv.org/abs/1808.09651
@@ -1286,6 +1414,12 @@ ITMT priority is an input to the preferred-set ranking, not something to ignore.
   These summaries keep median CPU time, migration count, runqueue wait,
   runqueue-wait-per-slice, migration harm, run coverage, and CPU-set overlap
   per stable role key across the included runs.
+- Aggregate reports also include `baseline_background_shaping_candidates`,
+  `candidate_background_shaping_candidates`, and
+  `background_shaping_experiment_plan` when sibling `background-shaping.json`
+  files exist. These summaries keep stable non-foreground cgroup keys, median
+  CPU time, median process count, command names, run coverage, and a disabled
+  write policy for a future guarded background-helper soft-cap experiment.
 
 ### Profiler Artifacts To Add Next
 
@@ -1371,6 +1505,12 @@ unstable-or-unknown:
   included `summary.json` and emits per-policy role stability summaries. This
   lets repeated A/B reports show both the policy-level FPS/power result and the
   scheduler roles that were consistently latency-hot during those runs.
+- The aggregate CLI now also reads sibling `background-shaping.json` files and
+  emits per-policy background/helper cgroup stability summaries plus
+  `background_shaping_experiment_plan`. A background plan is marked
+  `ready-for-guarded-experiment` only when repeated controlled runs, restore
+  checks, cgroup CPU-controller snapshot coverage, a better policy verdict, and
+  stable helper-cgroup evidence all pass. The write policy remains disabled.
 - The guarded profiler now emits `thread-schedstat.jsonl` for each run by
   sampling read-only `/proc/<pid>/task/<tid>/schedstat` for foreground Steam
   app cgroups. This is the first automatic-affinity latency signal because it
