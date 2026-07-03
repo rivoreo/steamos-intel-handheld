@@ -1,8 +1,14 @@
+from pathlib import Path
+
 from steamos_intel_handheld.game_power import (
+    CpuPolicyActuator,
+    CpuPolicyClass,
+    CpuPolicySnapshot,
     EnergyReading,
     GamePowerMode,
     RaplPowerWindow,
     compute_rapl_power_window,
+    discover_cpu_policies,
 )
 
 
@@ -55,3 +61,71 @@ def test_compute_rapl_power_window_rejects_non_positive_duration():
 
 def test_game_power_mode_values_are_stable_for_cli_and_service_config():
     assert [mode.value for mode in GamePowerMode] == ["off", "observe", "gpu-priority"]
+
+
+def make_cpu_policy(
+    sysfs_root: Path,
+    index: int,
+    *,
+    cpu: int,
+    capacity: int,
+    epp: str = "balance_performance",
+    max_freq: int = 4_800_000,
+    min_freq: int = 400_000,
+):
+    policy = sysfs_root / "devices" / "system" / "cpu" / "cpufreq" / f"policy{index}"
+    policy.mkdir(parents=True)
+    (policy / "affected_cpus").write_text(str(cpu))
+    (policy / "related_cpus").write_text(str(cpu))
+    (policy / "energy_performance_preference").write_text(epp)
+    (policy / "energy_performance_available_preferences").write_text(
+        "default performance balance_performance balance_power power"
+    )
+    (policy / "scaling_max_freq").write_text(str(max_freq))
+    (policy / "scaling_min_freq").write_text(str(min_freq))
+    cpu_root = sysfs_root / "devices" / "system" / "cpu" / f"cpu{cpu}"
+    cpu_root.mkdir(parents=True)
+    (cpu_root / "cpu_capacity").write_text(str(capacity))
+    return policy
+
+
+def test_discover_cpu_policies_classifies_highest_capacity_as_pcore(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    make_cpu_policy(sysfs_root, 0, cpu=0, capacity=1024)
+    make_cpu_policy(sysfs_root, 1, cpu=1, capacity=676, max_freq=3_700_000)
+
+    policies = discover_cpu_policies(sysfs_root)
+
+    assert [policy.name for policy in policies] == ["policy0", "policy1"]
+    assert policies[0].policy_class == CpuPolicyClass.PCORE
+    assert policies[1].policy_class == CpuPolicyClass.ECORE
+    assert policies[0].current_epp == "balance_performance"
+    assert policies[1].scaling_max_freq == 3_700_000
+
+
+def test_cpu_policy_actuator_applies_and_restores_epp_and_frequency_caps(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    make_cpu_policy(sysfs_root, 0, cpu=0, capacity=1024, max_freq=4_800_000)
+    make_cpu_policy(sysfs_root, 1, cpu=1, capacity=676, max_freq=3_700_000)
+    policies = discover_cpu_policies(sysfs_root)
+    actuator = CpuPolicyActuator(policies)
+
+    snapshot = actuator.snapshot()
+    actuator.apply(epp="balance_power", pcore_max_khz=3_200_000, ecore_max_khz=2_800_000)
+
+    assert isinstance(snapshot, CpuPolicySnapshot)
+    assert (policies[0].path / "energy_performance_preference").read_text() == "balance_power"
+    assert (policies[1].path / "energy_performance_preference").read_text() == "balance_power"
+    assert (policies[0].path / "scaling_max_freq").read_text() == "3200000"
+    assert (policies[1].path / "scaling_max_freq").read_text() == "2800000"
+
+    actuator.restore(snapshot)
+
+    assert (
+        policies[0].path / "energy_performance_preference"
+    ).read_text() == "balance_performance"
+    assert (
+        policies[1].path / "energy_performance_preference"
+    ).read_text() == "balance_performance"
+    assert (policies[0].path / "scaling_max_freq").read_text() == "4800000"
+    assert (policies[1].path / "scaling_max_freq").read_text() == "3700000"

@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 MICROJOULES_PER_JOULE = 1_000_000
 
@@ -74,3 +77,168 @@ def compute_rapl_power_window(start: EnergyReading, end: EnergyReading) -> RaplP
         dram_w=watts("dram"),
         psys_w=watts("psys"),
     )
+
+
+class CpuPolicyClass(str, Enum):
+    PCORE = "pcore"
+    ECORE = "ecore"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class CpuPolicy:
+    name: str
+    path: Path
+    affected_cpus: tuple[int, ...]
+    capacity: int | None
+    policy_class: CpuPolicyClass
+    available_epp: tuple[str, ...]
+    current_epp: str | None
+    scaling_min_freq: int | None
+    scaling_max_freq: int | None
+
+
+@dataclass(frozen=True)
+class CpuPolicySnapshot:
+    values: dict[str, tuple[str | None, int | None]]
+
+
+def discover_cpu_policies(sysfs_root: str | Path = "/sys") -> list[CpuPolicy]:
+    sysfs_root = Path(sysfs_root)
+    cpufreq = sysfs_root / "devices" / "system" / "cpu" / "cpufreq"
+    paths = sorted(cpufreq.glob("policy*"), key=_policy_sort_key)
+    capacities = {path.name: _policy_capacity(sysfs_root, path) for path in paths}
+    known_capacities = [value for value in capacities.values() if value is not None]
+    max_capacity = max(known_capacities) if known_capacities else None
+
+    policies: list[CpuPolicy] = []
+    for path in paths:
+        capacity = capacities[path.name]
+        if max_capacity is None or capacity is None:
+            policy_class = CpuPolicyClass.UNKNOWN
+        elif capacity == max_capacity:
+            policy_class = CpuPolicyClass.PCORE
+        else:
+            policy_class = CpuPolicyClass.ECORE
+        policies.append(
+            CpuPolicy(
+                name=path.name,
+                path=path,
+                affected_cpus=_read_cpu_list(path / "affected_cpus"),
+                capacity=capacity,
+                policy_class=policy_class,
+                available_epp=tuple(
+                    _read_text(path / "energy_performance_available_preferences").split()
+                ),
+                current_epp=_read_optional_text(path / "energy_performance_preference"),
+                scaling_min_freq=_read_optional_int(path / "scaling_min_freq"),
+                scaling_max_freq=_read_optional_int(path / "scaling_max_freq"),
+            )
+        )
+    return policies
+
+
+def _policy_sort_key(path: Path) -> tuple[str, int]:
+    match = re.search(r"(\d+)$", path.name)
+    return (path.name.rstrip("0123456789"), int(match.group(1)) if match else -1)
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return ""
+
+
+def _read_optional_text(path: Path) -> str | None:
+    value = _read_text(path)
+    return value if value else None
+
+
+def _read_optional_int(path: Path) -> int | None:
+    value = _read_text(path)
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _read_cpu_list(path: Path) -> tuple[int, ...]:
+    text = _read_text(path)
+    cpus: list[int] = []
+    for part in text.split(","):
+        if not part:
+            continue
+        if "-" in part:
+            start, end = part.split("-", 1)
+            cpus.extend(range(int(start), int(end) + 1))
+        else:
+            cpus.append(int(part))
+    return tuple(cpus)
+
+
+def _policy_capacity(sysfs_root: Path, policy_path: Path) -> int | None:
+    capacities: list[int] = []
+    for cpu in _read_cpu_list(policy_path / "affected_cpus"):
+        capacity = _read_optional_int(
+            sysfs_root / "devices" / "system" / "cpu" / f"cpu{cpu}" / "cpu_capacity"
+        )
+        if capacity is not None:
+            capacities.append(capacity)
+    if not capacities:
+        return None
+    return max(capacities)
+
+
+class CpuPolicyActuator:
+    def __init__(self, policies: Iterable[CpuPolicy]) -> None:
+        self.policies = list(policies)
+
+    def snapshot(self) -> CpuPolicySnapshot:
+        values: dict[str, tuple[str | None, int | None]] = {}
+        for policy in self.policies:
+            values[policy.name] = (
+                _read_optional_text(policy.path / "energy_performance_preference"),
+                _read_optional_int(policy.path / "scaling_max_freq"),
+            )
+        return CpuPolicySnapshot(values=values)
+
+    def apply(
+        self,
+        *,
+        epp: str,
+        pcore_max_khz: int | None = None,
+        ecore_max_khz: int | None = None,
+    ) -> None:
+        for policy in self.policies:
+            if epp and epp in policy.available_epp:
+                _write_if_changed(policy.path / "energy_performance_preference", epp)
+            cap = _cap_for_policy(policy, pcore_max_khz, ecore_max_khz)
+            if cap is not None:
+                _write_if_changed(policy.path / "scaling_max_freq", str(cap))
+
+    def restore(self, snapshot: CpuPolicySnapshot) -> None:
+        for policy in self.policies:
+            epp, max_freq = snapshot.values.get(policy.name, (None, None))
+            if epp is not None:
+                _write_if_changed(policy.path / "energy_performance_preference", epp)
+            if max_freq is not None:
+                _write_if_changed(policy.path / "scaling_max_freq", str(max_freq))
+
+
+def _cap_for_policy(
+    policy: CpuPolicy,
+    pcore_max_khz: int | None,
+    ecore_max_khz: int | None,
+) -> int | None:
+    if policy.policy_class == CpuPolicyClass.PCORE:
+        return pcore_max_khz
+    if policy.policy_class == CpuPolicyClass.ECORE:
+        return ecore_max_khz
+    return pcore_max_khz if pcore_max_khz == ecore_max_khz else None
+
+
+def _write_if_changed(path: Path, value: str) -> None:
+    if _read_text(path) == value:
+        return
+    path.write_text(value)
