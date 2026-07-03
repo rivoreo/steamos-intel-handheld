@@ -40,6 +40,13 @@ def test_systemd_unit_waits_for_user_steamos_manager_before_serving_remote():
     assert "StateDirectory=steamos-intel-handheld" in unit
 
 
+def test_power_control_service_keeps_game_power_governor_off_by_default():
+    unit = (ROOT / "data/systemd/steamos-intel-handheld-power-control.service").read_text()
+
+    assert "--game-power-mode off" in unit
+    assert "--game-power-cpu-cap on" not in unit
+
+
 def test_restore_service_unit_runs_restore_cli_before_power_control():
     unit = (ROOT / "data/systemd/steamos-intel-handheld-restore.service").read_text()
 
@@ -138,6 +145,13 @@ def test_manual_installer_installs_ec_control_wrapper():
 
     assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-ec-control" in script
     assert r"python3 -m steamos_intel_handheld.ec_charge_control \"\$@\"" in script
+
+
+def test_installer_installs_game_power_cli_wrapper():
+    script = (ROOT / "scripts/install-on-device.sh").read_text()
+
+    assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power" in script
+    assert r"python3 -m steamos_intel_handheld.game_power \"\$@\"" in script
 
 
 def test_manual_installer_installs_restore_service_and_canonical_artifacts():

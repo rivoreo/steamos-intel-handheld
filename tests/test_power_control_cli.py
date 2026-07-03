@@ -1,3 +1,5 @@
+import asyncio
+
 from steamos_intel_handheld import power_control
 
 
@@ -68,3 +70,76 @@ def test_parser_configures_msi_claw_ec_shift_policy():
     backend = power_control.build_backend(args)
 
     assert backend.msi_claw_ec_shift_policy == power_control.MsiClawEcShiftPolicy.PROFILE
+
+
+def test_parser_configures_game_power_defaults_off():
+    args = power_control.build_parser().parse_args(["serve"])
+    config = power_control.build_game_power_config(args)
+
+    assert config.mode == power_control.GamePowerMode.OFF
+    assert config.poll_s == 2.0
+    assert config.epp == "balance_power"
+    assert config.cpu_cap_enabled is False
+    assert power_control.build_game_power_governor(args) is None
+
+
+def test_parser_configures_game_power_gpu_priority_options():
+    args = power_control.build_parser().parse_args(
+        [
+            "serve",
+            "--game-power-mode",
+            "gpu-priority",
+            "--game-power-poll-s",
+            "1.5",
+            "--game-power-epp",
+            "balance_power",
+            "--game-power-pcore-max-mhz",
+            "3000",
+            "--game-power-ecore-max-mhz",
+            "2400",
+            "--game-power-cpu-cap",
+            "on",
+            "--game-power-target-appid",
+            "1091500",
+        ]
+    )
+    config = power_control.build_game_power_config(args)
+
+    assert config.mode == power_control.GamePowerMode.GPU_PRIORITY
+    assert config.poll_s == 1.5
+    assert config.epp == "balance_power"
+    assert config.pcore_max_khz == 3_000_000
+    assert config.ecore_max_khz == 2_400_000
+    assert config.cpu_cap_enabled is True
+    assert config.target_appid == "1091500"
+
+
+def test_service_task_lifecycle_restores_game_power_governor_on_stop():
+    events = []
+
+    class FakeGovernor:
+        def restore(self):
+            events.append("restore")
+
+    async def background_task():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            events.append("cancelled")
+            raise
+
+    async def scenario():
+        stop_future = asyncio.get_running_loop().create_future()
+        task = asyncio.create_task(background_task())
+        stop_future.set_result(None)
+
+        await power_control.run_service_tasks_until_stopped(
+            stop_future=stop_future,
+            tasks=[task],
+            game_power_governor=FakeGovernor(),
+        )
+
+    asyncio.run(scenario())
+
+    assert "cancelled" in events
+    assert "restore" in events

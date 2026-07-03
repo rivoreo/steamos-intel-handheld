@@ -6,15 +6,26 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import signal
 import stat
 import subprocess
 import sys
 import threading
 import time
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+
+from steamos_intel_handheld.game_power import (
+    CpuPolicyActuator,
+    GamePowerConfig,
+    GamePowerGovernor,
+    GamePowerMode,
+    SystemGamePowerObserver,
+    discover_cpu_policies,
+)
 
 BUS_NAME = "org.rivoreo.SteamOSManager.PowerControl"
 OBJ_PATH = "/org/rivoreo/SteamOSManager/PowerControl"
@@ -1017,8 +1028,47 @@ async def serve(args: argparse.Namespace) -> None:
         bus.export(object_path, RemoteInterface())
         bus.export(object_path, TdpLimitInterface(backend))
     await bus.request_name(BUS_NAME)
-    asyncio.create_task(poll_power_source_changes(backend))
-    await asyncio.Future()
+    loop = asyncio.get_running_loop()
+    stop_future = loop.create_future()
+
+    def request_stop() -> None:
+        if not stop_future.done():
+            stop_future.set_result(None)
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        with suppress(NotImplementedError, RuntimeError):
+            loop.add_signal_handler(signum, request_stop)
+
+    tasks = [asyncio.create_task(poll_power_source_changes(backend))]
+    game_power_governor = build_game_power_governor(args)
+    if game_power_governor is not None:
+        tasks.append(asyncio.create_task(game_power_governor.run_forever()))
+    await run_service_tasks_until_stopped(
+        stop_future=stop_future,
+        tasks=tasks,
+        game_power_governor=game_power_governor,
+    )
+
+
+async def run_service_tasks_until_stopped(
+    *,
+    stop_future: asyncio.Future,
+    tasks: Iterable[asyncio.Task],
+    game_power_governor: GamePowerGovernor | None,
+) -> None:
+    task_list = list(tasks)
+    try:
+        await asyncio.sleep(0)
+        await stop_future
+    except asyncio.CancelledError:
+        pass
+    finally:
+        for task in task_list:
+            task.cancel()
+        if game_power_governor is not None:
+            game_power_governor.restore()
+        if task_list:
+            await asyncio.gather(*task_list, return_exceptions=True)
 
 
 def build_backend(args: argparse.Namespace) -> TdpBackend:
@@ -1039,6 +1089,31 @@ def build_backend(args: argparse.Namespace) -> TdpBackend:
         power_source_poll_s=args.power_source_poll_s,
         msi_claw_ec_shift_policy=args.msi_claw_ec_shift_policy,
     )
+
+
+def build_game_power_config(args: argparse.Namespace) -> GamePowerConfig:
+    return GamePowerConfig(
+        mode=GamePowerMode(args.game_power_mode),
+        poll_s=args.game_power_poll_s,
+        epp=args.game_power_epp,
+        pcore_max_khz=args.game_power_pcore_max_mhz * 1000,
+        ecore_max_khz=args.game_power_ecore_max_mhz * 1000,
+        cpu_cap_enabled=args.game_power_cpu_cap == "on",
+        target_appid=args.game_power_target_appid,
+    )
+
+
+def build_game_power_governor(args: argparse.Namespace) -> GamePowerGovernor | None:
+    config = build_game_power_config(args)
+    if config.mode == GamePowerMode.OFF:
+        return None
+    observer = SystemGamePowerObserver(
+        sysfs_root=args.sysfs_root,
+        proc_root="/proc",
+        poll_s=config.poll_s,
+    )
+    actuator = CpuPolicyActuator(discover_cpu_policies(args.sysfs_root))
+    return GamePowerGovernor(config=config, observer=observer, actuator=actuator)
 
 
 def prepare_mangohud_sensors_from_args(args: argparse.Namespace) -> list[Path]:
@@ -1089,6 +1164,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ec-write-debounce-ms", type=int, default=0)
     parser.add_argument("--prepare-mangohud-sensors", action="store_true")
     parser.add_argument("--restore-on-start", action="store_true")
+    parser.add_argument(
+        "--game-power-mode",
+        choices=[mode.value for mode in GamePowerMode],
+        default=GamePowerMode.OFF.value,
+    )
+    parser.add_argument("--game-power-poll-s", type=float, default=2.0)
+    parser.add_argument("--game-power-epp", default="balance_power")
+    parser.add_argument("--game-power-pcore-max-mhz", type=int, default=3200)
+    parser.add_argument("--game-power-ecore-max-mhz", type=int, default=2800)
+    parser.add_argument("--game-power-cpu-cap", choices=["on", "off"], default="off")
+    parser.add_argument("--game-power-target-appid")
     parser.add_argument("--user", default="deck")
     parser.add_argument("--wait-timeout-s", type=int, default=600)
     parser.add_argument("--wait-interval-s", type=float, default=2.0)
