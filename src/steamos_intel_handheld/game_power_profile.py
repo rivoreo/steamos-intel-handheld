@@ -57,6 +57,13 @@ class ThreadAffinitySummary:
 
 
 @dataclass(frozen=True)
+class ThreadSchedstatSummary:
+    samples: int
+    observed_threads: int
+    hot_threads: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
 class CpuTopologySummary:
     cpu_count: int
     online_cpu_count: int
@@ -117,6 +124,9 @@ class RunSummary:
     thread_affinity_samples: int | None = None
     thread_affinity_observed_threads: int | None = None
     thread_affinity_hot_threads: list[dict[str, object]] | None = None
+    thread_schedstat_samples: int | None = None
+    thread_schedstat_observed_threads: int | None = None
+    thread_schedstat_hot_threads: list[dict[str, object]] | None = None
     actions: dict[str, int] | None = None
     restored: bool = False
 
@@ -367,6 +377,86 @@ def summarize_thread_affinity_jsonl(
     )
 
 
+def summarize_thread_schedstat_jsonl(
+    path: str | Path,
+    *,
+    hot_thread_limit: int = 5,
+) -> ThreadSchedstatSummary:
+    samples = 0
+    threads: dict[int, dict[str, object]] = {}
+    with Path(path).open() as handle:
+        for line in handle:
+            text = line.strip()
+            if not text:
+                continue
+            samples += 1
+            row = json.loads(text)
+            for item in row.get("threads") or []:
+                if not isinstance(item, dict):
+                    continue
+                tid = _optional_int(item.get("tid"))
+                if tid is None:
+                    continue
+                state = threads.setdefault(
+                    tid,
+                    {
+                        "tid": tid,
+                        "comm": None,
+                        "cgroup": None,
+                        "run_time_first_ns": None,
+                        "run_time_last_ns": None,
+                        "runqueue_wait_first_ns": None,
+                        "runqueue_wait_last_ns": None,
+                        "timeslices_first": None,
+                        "timeslices_last": None,
+                        "cpus_seen": set(),
+                    },
+                )
+                comm = _optional_str(item.get("comm"))
+                if comm:
+                    state["comm"] = comm
+                cgroup = _optional_str(item.get("cgroup"))
+                if cgroup:
+                    state["cgroup"] = cgroup
+                _update_first_last_int(
+                    state,
+                    "run_time",
+                    item.get("run_time_ns"),
+                    suffix="_ns",
+                )
+                _update_first_last_int(
+                    state,
+                    "runqueue_wait",
+                    item.get("runqueue_wait_ns"),
+                    suffix="_ns",
+                )
+                _update_first_last_int(
+                    state,
+                    "timeslices",
+                    item.get("timeslices"),
+                )
+                current_cpu = _optional_int(item.get("current_cpu"))
+                if current_cpu is not None:
+                    cpus_seen = state["cpus_seen"]
+                    assert isinstance(cpus_seen, set)
+                    cpus_seen.add(current_cpu)
+
+    hot_threads = [_schedstat_hotspot(state) for state in threads.values()]
+    hot_threads.sort(
+        key=lambda item: (
+            -float(item["runqueue_wait_ms_delta"]),
+            -float(item["runqueue_wait_per_slice_ms"]),
+            -float(item["run_time_s_delta"]),
+            int(item["tid"]),
+        )
+    )
+    return ThreadSchedstatSummary(
+        samples=samples,
+        observed_threads=len(threads),
+        hot_threads=hot_threads[:hot_thread_limit],
+    )
+
+
 def summarize_cpu_topology(path: str | Path) -> CpuTopologySummary:
     payload = json.loads(Path(path).read_text())
     raw_cpus = payload.get("cpus") if isinstance(payload, dict) else None
@@ -518,12 +608,14 @@ def build_affinity_advice(
     avg_fps: float | None,
     avg_core_share: float | None,
     avg_render_busy: float | None,
+    thread_schedstat: ThreadSchedstatSummary | None = None,
 ) -> dict[str, object]:
     preferred_latency_cpus = _preferred_latency_cpus(topology)
     ranked_threads = []
     if thread_affinity is not None:
+        schedstat_by_tid = _schedstat_by_tid(thread_schedstat)
         ranked_threads = [
-            _ranked_affinity_thread(item, preferred_latency_cpus)
+            _ranked_affinity_thread(item, preferred_latency_cpus, schedstat_by_tid)
             for item in thread_affinity.hot_threads
         ]
         ranked_threads.sort(
@@ -617,6 +709,7 @@ def merge_run_summary(
     power: GamePowerLogSummary | None,
     pressure: dict[str, float] | None = None,
     thread_affinity: ThreadAffinitySummary | None = None,
+    thread_schedstat: ThreadSchedstatSummary | None = None,
     epp: str | None = None,
     pcore_max_mhz: int | None = None,
     ecore_max_mhz: int | None = None,
@@ -667,6 +760,13 @@ def merge_run_summary(
             thread_affinity.observed_threads if thread_affinity else None
         ),
         thread_affinity_hot_threads=thread_affinity.hot_threads if thread_affinity else None,
+        thread_schedstat_samples=thread_schedstat.samples if thread_schedstat else None,
+        thread_schedstat_observed_threads=(
+            thread_schedstat.observed_threads if thread_schedstat else None
+        ),
+        thread_schedstat_hot_threads=(
+            thread_schedstat.hot_threads if thread_schedstat else None
+        ),
         actions=power.actions if power else None,
         restored=restored,
     )
@@ -995,6 +1095,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--game-power-jsonl")
     summarize.add_argument("--pressure-jsonl")
     summarize.add_argument("--thread-affinity-jsonl")
+    summarize.add_argument("--thread-schedstat-jsonl")
     summarize.add_argument("--cpu-topology-json")
     summarize.add_argument("--process-cgroups-jsonl")
     summarize.add_argument("--epp")
@@ -1050,6 +1151,11 @@ def run_summarize(args: argparse.Namespace) -> Path:
         if args.thread_affinity_jsonl
         else None
     )
+    thread_schedstat = (
+        summarize_thread_schedstat_jsonl(args.thread_schedstat_jsonl)
+        if args.thread_schedstat_jsonl
+        else None
+    )
     cpu_topology = (
         summarize_cpu_topology(args.cpu_topology_json) if args.cpu_topology_json else None
     )
@@ -1080,6 +1186,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "warmup_s": args.warmup_s,
         "poll_s": args.poll_s,
         "thread_affinity_jsonl": bool(args.thread_affinity_jsonl),
+        "thread_schedstat_jsonl": bool(args.thread_schedstat_jsonl),
         "cpu_topology_json": bool(args.cpu_topology_json),
         "affinity_advice_json": bool(cpu_topology and thread_affinity),
         "process_cgroups_jsonl": bool(args.process_cgroups_jsonl),
@@ -1093,6 +1200,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         power=power,
         pressure=pressure,
         thread_affinity=thread_affinity,
+        thread_schedstat=thread_schedstat,
         epp=args.epp,
         pcore_max_mhz=args.pcore_max_mhz,
         ecore_max_mhz=args.ecore_max_mhz,
@@ -1117,6 +1225,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
             avg_fps=summary.avg_fps,
             avg_core_share=summary.avg_core_share,
             avg_render_busy=summary.avg_render_busy,
+            thread_schedstat=thread_schedstat,
         )
         (output / "affinity-advice.json").write_text(
             json.dumps(_json_ready(advice), indent=2, sort_keys=True) + "\n"
@@ -1368,24 +1477,48 @@ def _preferred_latency_cpus(topology: CpuTopologySummary | None) -> list[int]:
     return [int(cpu["cpu"]) for cpu in candidates]
 
 
+def _schedstat_by_tid(
+    thread_schedstat: ThreadSchedstatSummary | None,
+) -> dict[int, dict[str, object]]:
+    if thread_schedstat is None:
+        return {}
+    indexed: dict[int, dict[str, object]] = {}
+    for item in thread_schedstat.hot_threads:
+        tid = _optional_int(item.get("tid"))
+        if tid is not None:
+            indexed[tid] = item
+    return indexed
+
+
 def _ranked_affinity_thread(
     item: dict[str, object],
     preferred_latency_cpus: list[int],
+    schedstat_by_tid: dict[int, dict[str, object]] | None = None,
 ) -> dict[str, object]:
     cpu_delta = _float(item.get("cpu_time_s_delta")) or 0.0
     migration_delta = _optional_int(item.get("migration_delta")) or 0
     involuntary_delta = _optional_int(item.get("nonvoluntary_ctxt_switches_delta")) or 0
+    tid = _optional_int(item.get("tid"))
+    schedstat = (schedstat_by_tid or {}).get(tid or -1, {})
+    runqueue_wait_ms = _float(schedstat.get("runqueue_wait_ms_delta")) or 0.0
+    wait_per_slice_ms = _float(schedstat.get("runqueue_wait_per_slice_ms")) or 0.0
     cpus_seen = item.get("cpus_seen")
     if not isinstance(cpus_seen, list):
         cpus_seen = []
     migration_harm_score = round(
-        migration_delta * max(cpu_delta, 0.001) + involuntary_delta * 0.25,
+        migration_delta * max(cpu_delta, 0.001)
+        + involuntary_delta * 0.25
+        + runqueue_wait_ms * 0.05
+        + wait_per_slice_ms,
         3,
     )
     classification = "throughput-worker"
-    if migration_delta >= 3 and cpu_delta >= 1.0:
+    if (
+        (migration_delta >= 3 and cpu_delta >= 1.0)
+        or (runqueue_wait_ms >= 50.0 and wait_per_slice_ms >= 1.0)
+    ):
         classification = "latency-hot"
-    elif migration_delta >= 2 or involuntary_delta >= 3:
+    elif migration_delta >= 2 or involuntary_delta >= 3 or runqueue_wait_ms > 0.0:
         classification = "latency-light"
     suggested_action = (
         "observe"
@@ -1395,7 +1528,7 @@ def _ranked_affinity_thread(
     preferred_overlap = sorted(
         cpu for cpu in cpus_seen if isinstance(cpu, int) and cpu in preferred_latency_cpus
     )
-    return {
+    result = {
         "tid": item.get("tid"),
         "comm": item.get("comm"),
         "classification": classification,
@@ -1406,6 +1539,19 @@ def _ranked_affinity_thread(
         "preferred_cpu_overlap": preferred_overlap,
         "suggested_action": suggested_action,
     }
+    if schedstat:
+        result.update(
+            {
+                "run_time_s_delta": schedstat.get("run_time_s_delta"),
+                "runqueue_wait_ms_delta": schedstat.get("runqueue_wait_ms_delta"),
+                "timeslices_delta": schedstat.get("timeslices_delta"),
+                "runqueue_wait_per_slice_ms": schedstat.get(
+                    "runqueue_wait_per_slice_ms"
+                ),
+                "runqueue_wait_ratio": schedstat.get("runqueue_wait_ratio"),
+            }
+        )
+    return result
 
 
 def _classify_background_cgroup(cgroup: str, command: object) -> str:
@@ -1456,6 +1602,54 @@ def _background_shaping_candidate(candidate: dict[str, object]) -> dict[str, obj
     return {
         **candidate,
         "suggested_action": suggested_action,
+    }
+
+
+def _update_first_last_int(
+    state: dict[str, object],
+    field: str,
+    value: object,
+    *,
+    suffix: str = "",
+) -> None:
+    parsed = _optional_int(value)
+    if parsed is None:
+        return
+    first_key = f"{field}_first{suffix}"
+    last_key = f"{field}_last{suffix}"
+    if state[first_key] is None:
+        state[first_key] = parsed
+    state[last_key] = parsed
+
+
+def _schedstat_hotspot(state: dict[str, object]) -> dict[str, object]:
+    run_first = _optional_int(state.get("run_time_first_ns")) or 0
+    run_last = _optional_int(state.get("run_time_last_ns")) or 0
+    wait_first = _optional_int(state.get("runqueue_wait_first_ns")) or 0
+    wait_last = _optional_int(state.get("runqueue_wait_last_ns")) or 0
+    slices_first = _optional_int(state.get("timeslices_first")) or 0
+    slices_last = _optional_int(state.get("timeslices_last")) or 0
+    run_delta_ns = max(0, run_last - run_first)
+    wait_delta_ns = max(0, wait_last - wait_first)
+    slices_delta = max(0, slices_last - slices_first)
+    cpus_seen = state.get("cpus_seen")
+    total_sched_ns = run_delta_ns + wait_delta_ns
+    return {
+        "tid": int(state["tid"]),
+        "comm": state.get("comm"),
+        "run_time_s_delta": round(run_delta_ns / 1_000_000_000, 3),
+        "runqueue_wait_ms_delta": round(wait_delta_ns / 1_000_000, 3),
+        "timeslices_delta": slices_delta,
+        "runqueue_wait_per_slice_ms": (
+            round(wait_delta_ns / slices_delta / 1_000_000, 3)
+            if slices_delta > 0
+            else 0.0
+        ),
+        "runqueue_wait_ratio": (
+            round(wait_delta_ns / total_sched_ns, 3) if total_sched_ns > 0 else 0.0
+        ),
+        "cpus_seen": sorted(cpus_seen) if isinstance(cpus_seen, set) else [],
+        "cgroup": state.get("cgroup"),
     }
 
 

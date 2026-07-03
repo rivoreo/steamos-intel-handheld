@@ -14,6 +14,7 @@ from steamos_intel_handheld.game_power_profile import (
     ProcessCgroupSummary,
     RunSummary,
     ThreadAffinitySummary,
+    ThreadSchedstatSummary,
     aggregate_run_summaries,
     build_affinity_advice,
     build_background_shaping_advice,
@@ -28,6 +29,7 @@ from steamos_intel_handheld.game_power_profile import (
     summarize_pressure_jsonl,
     summarize_process_cgroups_jsonl,
     summarize_thread_affinity_jsonl,
+    summarize_thread_schedstat_jsonl,
 )
 
 
@@ -273,6 +275,76 @@ def test_summarize_thread_affinity_jsonl_ranks_hot_threads_by_cpu_and_migrations
     }
 
 
+def test_summarize_thread_schedstat_jsonl_ranks_runqueue_wait(tmp_path):
+    path = tmp_path / "thread-schedstat.jsonl"
+    rows = [
+        {
+            "elapsed_s": 0.0,
+            "threads": [
+                {
+                    "tid": 101,
+                    "comm": "GameThread",
+                    "run_time_ns": 10_000_000_000,
+                    "runqueue_wait_ns": 100_000_000,
+                    "timeslices": 100,
+                    "current_cpu": 0,
+                    "cgroup": "app-steam-app1091500.scope",
+                },
+                {
+                    "tid": 102,
+                    "comm": "Worker",
+                    "run_time_ns": 4_000_000_000,
+                    "runqueue_wait_ns": 10_000_000,
+                    "timeslices": 30,
+                    "current_cpu": 2,
+                    "cgroup": "app-steam-app1091500.scope",
+                },
+            ],
+        },
+        {
+            "elapsed_s": 2.0,
+            "threads": [
+                {
+                    "tid": 101,
+                    "comm": "GameThread",
+                    "run_time_ns": 13_000_000_000,
+                    "runqueue_wait_ns": 240_000_000,
+                    "timeslices": 130,
+                    "current_cpu": 1,
+                    "cgroup": "app-steam-app1091500.scope",
+                },
+                {
+                    "tid": 102,
+                    "comm": "Worker",
+                    "run_time_ns": 4_500_000_000,
+                    "runqueue_wait_ns": 15_000_000,
+                    "timeslices": 35,
+                    "current_cpu": 2,
+                    "cgroup": "app-steam-app1091500.scope",
+                },
+            ],
+        },
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    summary = summarize_thread_schedstat_jsonl(path)
+
+    assert isinstance(summary, ThreadSchedstatSummary)
+    assert summary.samples == 2
+    assert summary.observed_threads == 2
+    assert summary.hot_threads[0] == {
+        "tid": 101,
+        "comm": "GameThread",
+        "run_time_s_delta": 3.0,
+        "runqueue_wait_ms_delta": 140.0,
+        "timeslices_delta": 30,
+        "runqueue_wait_per_slice_ms": 4.667,
+        "runqueue_wait_ratio": 0.045,
+        "cpus_seen": [0, 1],
+        "cgroup": "app-steam-app1091500.scope",
+    }
+
+
 def test_summarize_process_cgroups_jsonl_ranks_background_cpu_candidates(tmp_path):
     path = tmp_path / "process-cgroups.jsonl"
     rows = [
@@ -495,10 +567,28 @@ def test_build_affinity_advice_outputs_observe_only_preferred_set_candidates(tmp
             },
         ],
     )
+    thread_schedstat = ThreadSchedstatSummary(
+        samples=2,
+        observed_threads=1,
+        hot_threads=[
+            {
+                "tid": 101,
+                "comm": "GameThread",
+                "run_time_s_delta": 3.0,
+                "runqueue_wait_ms_delta": 140.0,
+                "timeslices_delta": 30,
+                "runqueue_wait_per_slice_ms": 4.667,
+                "runqueue_wait_ratio": 0.045,
+                "cpus_seen": [0, 1],
+                "cgroup": "app-steam-app1091500.scope",
+            }
+        ],
+    )
 
     advice = build_affinity_advice(
         topology=summarize_cpu_topology(topology_path),
         thread_affinity=thread_affinity,
+        thread_schedstat=thread_schedstat,
         fps_target=40.0,
         avg_fps=38.5,
         avg_core_share=0.42,
@@ -510,6 +600,8 @@ def test_build_affinity_advice_outputs_observe_only_preferred_set_candidates(tmp
     assert advice["preferred_latency_cpus"] == [0, 1]
     assert advice["ranked_threads"][0]["tid"] == 101
     assert advice["ranked_threads"][0]["classification"] == "latency-hot"
+    assert advice["ranked_threads"][0]["runqueue_wait_ms_delta"] == 140.0
+    assert advice["ranked_threads"][0]["runqueue_wait_per_slice_ms"] == 4.667
     assert advice["ranked_threads"][0]["migration_harm_score"] > 0
     assert "hard affinity is profiler-only" in advice["reasons"]
 
@@ -836,6 +928,7 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     game_power = tmp_path / "game-power.jsonl"
     pressure = tmp_path / "cgroup-pressure.jsonl"
     thread_affinity = tmp_path / "thread-affinity.jsonl"
+    thread_schedstat = tmp_path / "thread-schedstat.jsonl"
     cpu_topology = tmp_path / "cpu-topology.json"
     process_cgroups = tmp_path / "process-cgroups.jsonl"
     output = tmp_path / "profile"
@@ -899,6 +992,42 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
                             "nonvoluntary_ctxt_switches": 9,
                             "current_cpu": 2,
                             "affinity": "0-5",
+                            "cgroup": "app-steam-app1091500.scope",
+                        }
+                    ],
+                },
+            ]
+        )
+        + "\n"
+    )
+    thread_schedstat.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {
+                    "elapsed_s": 0.0,
+                    "threads": [
+                        {
+                            "tid": 101,
+                            "comm": "GameThread",
+                            "run_time_ns": 10_000_000_000,
+                            "runqueue_wait_ns": 100_000_000,
+                            "timeslices": 100,
+                            "current_cpu": 0,
+                            "cgroup": "app-steam-app1091500.scope",
+                        }
+                    ],
+                },
+                {
+                    "elapsed_s": 2.0,
+                    "threads": [
+                        {
+                            "tid": 101,
+                            "comm": "GameThread",
+                            "run_time_ns": 13_000_000_000,
+                            "runqueue_wait_ns": 240_000_000,
+                            "timeslices": 130,
+                            "current_cpu": 1,
                             "cgroup": "app-steam-app1091500.scope",
                         }
                     ],
@@ -985,6 +1114,8 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
             str(pressure),
             "--thread-affinity-jsonl",
             str(thread_affinity),
+            "--thread-schedstat-jsonl",
+            str(thread_schedstat),
             "--cpu-topology-json",
             str(cpu_topology),
             "--process-cgroups-jsonl",
@@ -1009,6 +1140,7 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert manifest["capture_mode"] == "imported"
     assert manifest["fps_target"] == 40.0
     assert manifest["fps_target_source"] == "manual"
+    assert manifest["thread_schedstat_jsonl"] is True
     assert manifest["cpu_topology_json"] is True
     assert manifest["affinity_advice_json"] is True
     assert manifest["process_cgroups_jsonl"] is True
@@ -1026,10 +1158,14 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert summary["thread_affinity_observed_threads"] == 1
     assert summary["thread_affinity_hot_threads"][0]["migration_delta"] == 5
     assert summary["thread_affinity_hot_threads"][0]["nonvoluntary_ctxt_switches_delta"] == 5
+    assert summary["thread_schedstat_samples"] == 2
+    assert summary["thread_schedstat_observed_threads"] == 1
+    assert summary["thread_schedstat_hot_threads"][0]["runqueue_wait_ms_delta"] == 140.0
     assert summary["restored"] is True
     assert advice["mode"] == "observe-only"
     assert advice["preferred_latency_cpus"] == [0, 1]
     assert advice["ranked_threads"][0]["tid"] == 101
+    assert advice["ranked_threads"][0]["runqueue_wait_ms_delta"] == 140.0
     assert background["mode"] == "observe-only"
     assert background["candidates"][0]["classification"] == "steam-helper"
 

@@ -256,14 +256,19 @@ The wrapper temporarily forces the installed service governor to `off`, so the
 standalone profiler controls the test policy and the `off` run is a real
 baseline. Results are copied into `.cache/game-power/profiles/`. Each run
 directory contains `manifest.json`, `summary.json`, `game-power.jsonl`,
-`cgroup-pressure.jsonl`, `thread-affinity.jsonl`, `cpu-topology.json`,
-`process-cgroups.jsonl`, `affinity-advice.json`, `background-shaping.json`,
+`cgroup-pressure.jsonl`, `thread-affinity.jsonl`, `thread-schedstat.jsonl`,
+`cpu-topology.json`, `process-cgroups.jsonl`, `affinity-advice.json`,
+`background-shaping.json`,
 CPU policy snapshots, TDP snapshots, and the MangoHud CSV/summary used for FPS
 analysis. The thread-affinity capture is observe-only and records per-thread
 CPU time, migration, context-switch, current-CPU, affinity-mask, and cgroup
-samples for future automatic-affinity research. The CPU topology capture is
-also read-only and records CPU class, CPUFreq policy, capacity, SMT sibling,
-max-frequency, and EPP hints when the kernel exposes them.
+samples for future automatic-affinity research. The thread-schedstat capture is
+also observe-only and records per-thread scheduler run time, run-queue wait
+time, timeslices, current CPU, and cgroup samples so affinity candidates can be
+ranked by actual scheduler latency instead of migration count alone. The CPU
+topology capture is also read-only and records CPU class, CPUFreq policy,
+capacity, SMT sibling, max-frequency, and EPP hints when the kernel exposes
+them.
 `affinity-advice.json` is an observe-only advisor output; it ranks hot threads
 and preferred latency CPUs but does not apply affinity, cgroup, or uclamp
 writes. `background-shaping.json` is also observe-only; it ranks non-foreground

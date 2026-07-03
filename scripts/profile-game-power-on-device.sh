@@ -523,6 +523,100 @@ PY
   done
 }
 
+sample_thread_schedstat() {
+  local output="$1"
+  local seconds="$2"
+  local start elapsed
+  start="$(date +%s)"
+  : >"$output"
+  while true; do
+    elapsed=$(($(date +%s) - start))
+    [ "$elapsed" -gt "$seconds" ] && break
+    python3 - "$elapsed" "$APPID" >>"$output" <<'PY'
+import json
+import pathlib
+import sys
+
+elapsed = float(sys.argv[1])
+appid = sys.argv[2]
+payload = {"elapsed_s": elapsed, "threads": []}
+
+
+def read_text(path):
+    try:
+        return path.read_text()
+    except OSError:
+        return ""
+
+
+def parse_status(text):
+    parsed = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        parsed[key] = value.strip()
+    return parsed
+
+
+def parse_stat_cpu(text):
+    if not text:
+        return None
+    end = text.rfind(")")
+    if end < 0:
+        return None
+    fields = text[end + 2 :].split()
+    try:
+        return int(fields[36]) if len(fields) > 36 else None
+    except ValueError:
+        return None
+
+
+def parse_schedstat(text):
+    parts = text.split()
+    if len(parts) < 3:
+        return None
+    try:
+        return {
+            "run_time_ns": int(parts[0]),
+            "runqueue_wait_ns": int(parts[1]),
+            "timeslices": int(parts[2]),
+        }
+    except ValueError:
+        return None
+
+
+proc = pathlib.Path("/proc")
+for cgroup_path in proc.glob("[0-9]*/cgroup"):
+    cgroup = read_text(cgroup_path)
+    if f"app-steam-app{appid}" not in cgroup:
+        continue
+    pid_dir = cgroup_path.parent
+    for task_dir in (pid_dir / "task").glob("[0-9]*"):
+        try:
+            tid = int(task_dir.name)
+        except ValueError:
+            continue
+        schedstat = parse_schedstat(read_text(task_dir / "schedstat"))
+        if schedstat is None:
+            continue
+        status = parse_status(read_text(task_dir / "status"))
+        schedstat.update(
+            {
+                "tid": tid,
+                "comm": status.get("Name"),
+                "current_cpu": parse_stat_cpu(read_text(task_dir / "stat")),
+                "cgroup": cgroup.strip().replace("\n", ";"),
+            }
+        )
+        payload["threads"].append(schedstat)
+
+print(json.dumps(payload, sort_keys=True))
+PY
+    sleep 1
+  done
+}
+
 sample_process_cgroups() {
   local output="$1"
   local seconds="$2"
@@ -787,6 +881,8 @@ for repeat in $(seq 1 "$REPEATS"); do
         pressure_pid="$!"
         sample_thread_affinity "$run_dir/thread-affinity.jsonl" "$DURATION_S" &
         thread_affinity_pid="$!"
+        sample_thread_schedstat "$run_dir/thread-schedstat.jsonl" "$DURATION_S" &
+        thread_schedstat_pid="$!"
         sample_process_cgroups "$run_dir/process-cgroups.jsonl" "$DURATION_S" &
         process_cgroups_pid="$!"
         if ! /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power \
@@ -799,12 +895,14 @@ for repeat in $(seq 1 "$REPEATS"); do
           stop_mangohud_capture || true
           wait "$pressure_pid" || true
           wait "$thread_affinity_pid" || true
+          wait "$thread_schedstat_pid" || true
           wait "$process_cgroups_pid" || true
           exit 1
         fi
         stop_mangohud_capture
         wait "$pressure_pid" || true
         wait "$thread_affinity_pid" || true
+        wait "$thread_schedstat_pid" || true
         wait "$process_cgroups_pid" || true
 
         collect_mangohud_csv "$run_dir"
@@ -838,6 +936,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           --game-power-jsonl "$run_dir/game-power.jsonl" \
           --pressure-jsonl "$run_dir/cgroup-pressure.jsonl" \
           --thread-affinity-jsonl "$run_dir/thread-affinity.jsonl" \
+          --thread-schedstat-jsonl "$run_dir/thread-schedstat.jsonl" \
           --cpu-topology-json "$run_dir/cpu-topology.json" \
           --process-cgroups-jsonl "$run_dir/process-cgroups.jsonl" \
           --epp "$EPP" \

@@ -702,6 +702,11 @@ interfaces and research point in the same direction:
 - Linux `sched_setaffinity()` is per-thread and can avoid migration-related
   cache loss, but it is a hard eligibility mask and can be further restricted
   by cpuset state.
+- Linux scheduler statistics are counter-based, so user space should record a
+  baseline and calculate deltas. `/proc/<pid>/schedstat` exposes time on CPU,
+  time waiting on a runqueue, and timeslice count; the same file exists under
+  `/proc/<pid>/task/<tid>/schedstat`, which makes it a low-risk first signal
+  for per-thread game latency before enabling tracefs.
 - Windows CPU Sets model the safer default: process/thread CPU preferences are
   reconciled by the OS, and restrictive affinity masks take precedence only
   when explicitly set.
@@ -711,14 +716,37 @@ interfaces and research point in the same direction:
 - Affinity Tailor's demand-sized compact sets and sched_ext/LAVD's
   latency-criticality model are better generic shapes than static per-game
   pinning.
+- `scx_lavd` is the closest open-source reference shape for this direction:
+  its README describes a gaming-motivated, latency-criticality-aware virtual
+  deadline scheduler which considers CPU topology such as LLC domains and
+  P/E-core classes. That supports our design choice to classify behavior from
+  telemetry rather than ship a hand-written per-game affinity table.
 
 Current implementation state: the guarded device profiler now emits
-`thread-affinity.jsonl` for the foreground Steam app cgroup. It samples TID,
-thread name, CPU-time counter, migration counter, voluntary and involuntary
-context-switch counters, current CPU, affinity mask, and cgroup path. The
-summary ranks hot threads by CPU-time delta and preserves migration/context
-switch deltas. This is intentionally observe-only; it creates the evidence
-needed for later affinity A/B experiments without changing scheduler state.
+`thread-affinity.jsonl` and `thread-schedstat.jsonl` for the foreground Steam
+app cgroup. It samples TID, thread name, CPU-time counter, migration counter,
+voluntary and involuntary context-switch counters, scheduler run time,
+runqueue wait time, timeslice count, current CPU, affinity mask, and cgroup
+path. The summary ranks hot threads by CPU-time delta, preserves
+migration/context-switch deltas, and now adds runqueue-wait deltas to
+`affinity-advice.json`. This is intentionally observe-only; it creates the
+evidence needed for later affinity A/B experiments without changing scheduler
+state.
+
+Primary references used for this slice:
+
+- Linux `sched_setaffinity(2)`:
+  https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html
+- Linux scheduler statistics:
+  https://docs.kernel.org/scheduler/sched-stats.html
+- Linux cgroup v2:
+  https://docs.kernel.org/admin-guide/cgroup-v2.html
+- Linux trace events:
+  https://docs.kernel.org/trace/events.html
+- Linux sched_ext:
+  https://docs.kernel.org/scheduler/sched-ext.html
+- sched-ext `scx_lavd` README:
+  https://github.com/sched-ext/scx/tree/main/scheds/rust/scx_lavd
 
 ### Signals To Collect
 
@@ -726,6 +754,10 @@ needed for later affinity A/B experiments without changing scheduler state.
   cgroup, current affinity mask, and current CPU.
 - Per-thread CPU time deltas, voluntary/involuntary context switches, and
   migration count when exposed through `/proc/<pid>/task/<tid>/sched`.
+- Per-thread scheduler runtime, runqueue wait time, and timeslice deltas from
+  `/proc/<pid>/task/<tid>/schedstat`. A hot thread with high CPU time but low
+  runqueue wait is a different tuning target from a hot thread that frequently
+  waits several milliseconds before running.
 - Scheduler tracepoint or `perf sched` windows for wakeup, switch, migration,
   and run-queue delay around frame-time spikes.
 - Core topology: P/E/unknown class, SMT siblings, LLC domain, CPU capacity,
@@ -1123,8 +1155,13 @@ ITMT priority is an input to the preferred-set ranking, not something to ignore.
 
 - `cpu-topology.json`: CPU to policy, core type, SMT sibling, LLC/domain,
   capacity, HFI/ITMT hints when present, max frequency, and EPP state.
+- `thread-schedstat.jsonl`: read-only foreground-thread scheduler counters:
+  run time, runqueue wait time, timeslice count, current CPU, and cgroup. The
+  summarizer converts counters to deltas and adds runqueue-wait fields to
+  `affinity-advice.json`.
 - `affinity-advice.json`: observe-only ranking of hot thread roles, migration
-  harm score, preferred set candidates, and explicit reasons for no-op.
+  harm score, runqueue-wait score, preferred set candidates, and explicit
+  reasons for no-op.
 - `process-cgroups.jsonl`: read-only process-level CPU-time and cgroup samples
   for foreground game, Steam helpers, gamescope/mangoapp, user, and system
   scopes.
@@ -1202,9 +1239,15 @@ unstable-or-unknown:
   even when raw FPS does not increase.
 - The guarded profiler now emits `cpu-topology.json` for each run by reading
   `/sys/devices/system/cpu`, CPU topology, and CPUFreq policy files. The
-  summarizer uses it with `thread-affinity.jsonl` to write
+  summarizer uses it with `thread-affinity.jsonl` and
+  `thread-schedstat.jsonl` to write
   `affinity-advice.json`, an observe-only advisor that ranks hot thread roles,
-  preferred latency CPUs, migration harm, and explicit no-write reasons.
+  preferred latency CPUs, migration harm, runqueue wait, and explicit no-write
+  reasons.
+- The guarded profiler now emits `thread-schedstat.jsonl` for each run by
+  sampling read-only `/proc/<pid>/task/<tid>/schedstat` for foreground Steam
+  app cgroups. This is the first automatic-affinity latency signal because it
+  measures how long a hot thread waited to run, not only whether it migrated.
 - The guarded profiler now emits `process-cgroups.jsonl` for each run by
   sampling read-only `/proc/<pid>/cgroup`, `/proc/<pid>/comm`, and
   `/proc/<pid>/stat` data. The summarizer writes `background-shaping.json`,
@@ -1227,7 +1270,8 @@ unstable-or-unknown:
 - Investigate whether gamescope stats can provide frametime or app-present
   timestamps with lower latency than MangoHud CSV summaries.
 - Determine which per-thread scheduler signals are available without invasive
-  kernel changes: `/proc/<pid>/task/<tid>/sched`, tracefs scheduler events,
+  kernel changes beyond the current `/proc/<pid>/task/<tid>/sched` and
+  `/proc/<pid>/task/<tid>/schedstat` capture: tracefs scheduler events,
   `perf sched`, eBPF, or sched_ext monitor output.
 - Build a migration/run-queue-delay profile for foreground games and correlate
   it with p99 frame-time spikes before trying any hard affinity.

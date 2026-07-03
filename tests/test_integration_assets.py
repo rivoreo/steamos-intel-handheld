@@ -401,17 +401,20 @@ def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
     assert "set_service_game_power_mode off" in script
     assert "sample_cgroup_pressure()" in script
     assert "sample_thread_affinity()" in script
+    assert "sample_thread_schedstat()" in script
     assert "sample_process_cgroups()" in script
     assert "collect_cpu_topology()" in script
     assert "discover_fps_target()" in script
     assert "fps-target.discovery.json" in script
     assert "cpu-topology.json" in script
     assert "affinity-advice.json" in script
+    assert "thread-schedstat.jsonl" in script
     assert "process-cgroups.jsonl" in script
     assert "background-shaping.json" in script
     assert "--output-format jsonl" in script
     assert "--pressure-jsonl" in script
     assert "--thread-affinity-jsonl" in script
+    assert "--thread-schedstat-jsonl" in script
     assert "--cpu-topology-json" in script
     assert "--process-cgroups-jsonl" in script
     assert "PROFILE_GAME_POWER_FPS_TARGET" in script
