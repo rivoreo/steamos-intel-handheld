@@ -72,15 +72,16 @@ def test_parser_configures_msi_claw_ec_shift_policy():
     assert backend.msi_claw_ec_shift_policy == power_control.MsiClawEcShiftPolicy.PROFILE
 
 
-def test_parser_configures_game_power_defaults_off():
+def test_parser_configures_game_power_defaults_gpu_priority_without_cpu_cap():
     args = power_control.build_parser().parse_args(["serve"])
     config = power_control.build_game_power_config(args)
 
-    assert config.mode == power_control.GamePowerMode.OFF
+    assert config.mode == power_control.GamePowerMode.GPU_PRIORITY
     assert config.poll_s == 2.0
     assert config.epp == "balance_power"
     assert config.cpu_cap_enabled is False
-    assert power_control.build_game_power_governor(args) is None
+    assert config.target_appid is None
+    assert power_control.build_game_power_governor(args) is not None
 
 
 def test_parser_configures_game_power_gpu_priority_options():

@@ -40,10 +40,11 @@ def test_systemd_unit_waits_for_user_steamos_manager_before_serving_remote():
     assert "StateDirectory=steamos-intel-handheld" in unit
 
 
-def test_power_control_service_keeps_game_power_governor_off_by_default():
+def test_power_control_service_enables_game_power_governor_by_default():
     unit = (ROOT / "data/systemd/steamos-intel-handheld-power-control.service").read_text()
 
-    assert "--game-power-mode off" in unit
+    assert "--game-power-mode gpu-priority" in unit
+    assert "--game-power-target-appid" not in unit
     assert "--game-power-cpu-cap on" not in unit
 
 
@@ -515,15 +516,16 @@ def test_local_check_does_not_lint_external_submodules():
     assert "ruff check ." not in script
 
 
-def test_docs_describe_game_power_governor_default_off_and_reversible():
+def test_docs_describe_game_power_governor_default_on_and_reversible():
     readme = (ROOT / "README.md").read_text()
     design = (ROOT / "docs/design.md").read_text()
 
     assert "Game power governor" in readme
-    assert "--game-power-mode off" in readme
+    assert "--game-power-mode gpu-priority" in readme
     assert "restores the previous CPU EPP and frequency limits" in readme
     assert "scripts/verify-game-power-on-device.sh root@10.100.0.19" in readme
     assert "Game power governor" in design
+    assert "enabled by default" in design
     assert "does not raise PL1 automatically" in design
     assert "reversible CPU EPP hints" in design
 

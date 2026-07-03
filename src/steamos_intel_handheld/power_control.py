@@ -1167,7 +1167,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--game-power-mode",
         choices=[mode.value for mode in GamePowerMode],
-        default=GamePowerMode.OFF.value,
+        default=GamePowerMode.GPU_PRIORITY.value,
     )
     parser.add_argument("--game-power-poll-s", type=float, default=2.0)
     parser.add_argument("--game-power-epp", default="balance_power")

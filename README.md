@@ -205,13 +205,13 @@ until the `xe` kernel driver exposes a real DRM hwmon temperature input such as
 
 The optional game power governor helps Intel integrated graphics keep package
 headroom when CPU boost competes with the iGPU under the same SteamOS TDP. It
-is installed default-off:
+is installed default-on with the reversible EPP-only policy:
 
 ```bash
---game-power-mode off
+--game-power-mode gpu-priority
 ```
 
-Use the standalone validation CLI before enabling it in the service:
+Use the standalone validation CLI when checking a specific game scene:
 
 ```bash
 steamos-intel-handheld-game-power --mode observe --duration-s 30

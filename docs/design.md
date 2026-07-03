@@ -73,10 +73,9 @@ system.
 
 ## Game power governor
 
-The Game power governor is a separate default-off control loop for foreground
-Steam games on Intel integrated graphics. It does not replace SteamOS Manager's
-TDP slider and does not raise PL1 automatically. The TDP backend continues to
-own the total package-power contract.
+The Game power governor is a separate control loop for foreground Steam games
+on Intel integrated graphics. It is enabled by default with the reversible
+EPP-only policy. It does not replace SteamOS Manager's TDP slider and does not raise PL1 automatically. The TDP backend continues to own the total package-power contract.
 
 The governor observes Steam game cgroups, RAPL package/core/uncore power, and
 DRM fdinfo engine activity. In `gpu-priority` mode it uses reversible CPU EPP hints, and only then optional CPU max-frequency caps, to reduce CPU package pressure when the iGPU is active and package power is already near PL1.
