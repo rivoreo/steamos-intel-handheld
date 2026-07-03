@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import re
 import sys
 import time
@@ -426,11 +427,14 @@ class GamePowerGovernor:
         config: GamePowerConfig,
         observer: object,
         actuator: object,
+        output_format: str = "text",
     ) -> None:
         self.config = config
         self.observer = observer
         self.actuator = actuator
+        self.output_format = output_format
         self.controller = GamePowerController(config)
+        self._started_s = time.monotonic()
         self._snapshot: object | None = None
         self._write_failed = False
 
@@ -449,7 +453,11 @@ class GamePowerGovernor:
         sample = await self.observer.sample()
         decision = self.controller.evaluate(sample)
         self._apply_decision(decision)
-        print(_format_decision(sample, decision), flush=True)
+        elapsed_s = time.monotonic() - self._started_s
+        if self.output_format == "jsonl":
+            print(format_decision_jsonl(sample, decision, elapsed_s=elapsed_s), flush=True)
+        else:
+            print(_format_decision(sample, decision), flush=True)
         return decision
 
     def restore(self) -> None:
@@ -497,8 +505,35 @@ def _format_decision(sample: GamePowerSample, decision: GamePowerDecision) -> st
     )
 
 
+def format_decision_jsonl(
+    sample: GamePowerSample,
+    decision: GamePowerDecision,
+    *,
+    elapsed_s: float,
+) -> str:
+    rapl = sample.rapl
+    payload = {
+        "elapsed_s": round(elapsed_s, 3),
+        "appid": sample.appid,
+        "action": decision.action.value,
+        "reason": decision.reason,
+        "package_w": _round_or_none(rapl.package_w if rapl else None),
+        "core_w": _round_or_none(rapl.core_w if rapl else None),
+        "uncore_w": _round_or_none(rapl.uncore_w if rapl else None),
+        "dram_w": _round_or_none(rapl.dram_w if rapl else None),
+        "psys_w": _round_or_none(rapl.psys_w if rapl else None),
+        "pl1_w": sample.pl1_w,
+        "render_busy": _round_or_none(sample.fdinfo_busy.get("render")),
+    }
+    return json.dumps(payload, sort_keys=True)
+
+
 def _fmt_w(value: float | None) -> str:
     return "-" if value is None else f"{value:.2f}"
+
+
+def _round_or_none(value: float | None) -> float | None:
+    return round(value, 3) if value is not None else None
 
 
 class SystemGamePowerObserver:
@@ -567,6 +602,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ecore-max-mhz", type=int, default=2800)
     parser.add_argument("--cpu-cap", action="store_true")
     parser.add_argument("--target-appid")
+    parser.add_argument("--output-format", choices=["text", "jsonl"], default="text")
     parser.add_argument("--sysfs-root", default="/sys")
     parser.add_argument("--proc-root", default="/proc")
     return parser
@@ -592,7 +628,12 @@ async def run_cli(args: argparse.Namespace) -> None:
         poll_s=config.poll_s,
     )
     actuator = CpuPolicyActuator(discover_cpu_policies(args.sysfs_root))
-    governor = GamePowerGovernor(config=config, observer=observer, actuator=actuator)
+    governor = GamePowerGovernor(
+        config=config,
+        observer=observer,
+        actuator=actuator,
+        output_format=args.output_format,
+    )
     iterations = max(1, int(args.duration_s / config.poll_s))
     try:
         await governor.run_iterations(iterations)

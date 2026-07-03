@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from steamos_intel_handheld import game_power
@@ -283,6 +284,34 @@ def test_build_parser_defaults_game_power_cli_to_observe_for_standalone_probe():
 
     assert config.mode == GamePowerMode.OBSERVE
     assert config.cpu_cap_enabled is False
+
+
+def test_format_decision_jsonl_contains_policy_sample_fields():
+    decision = GamePowerAction.GPU_PRIORITY_EPP
+    sample = make_sample(render_busy=0.75)
+
+    payload = game_power.format_decision_jsonl(
+        sample,
+        game_power.GamePowerDecision(decision, "package limited with GPU activity"),
+        elapsed_s=2.0,
+    )
+
+    row = json.loads(payload)
+    assert row["elapsed_s"] == 2.0
+    assert row["appid"] == "1091500"
+    assert row["action"] == "gpu-priority-epp"
+    assert row["reason"] == "package limited with GPU activity"
+    assert row["package_w"] == 22.0
+    assert row["core_w"] == 8.8
+    assert row["uncore_w"] == 7.4
+    assert row["pl1_w"] == 22
+    assert row["render_busy"] == 0.75
+
+
+def test_build_parser_accepts_jsonl_output_format():
+    args = game_power.build_parser().parse_args(["--output-format", "jsonl"])
+
+    assert args.output_format == "jsonl"
 
 
 def test_governor_applies_epp_and_restores_when_controller_requests_restore():
