@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -314,3 +314,103 @@ def compute_fdinfo_busy(
             continue
         busy[engine] = delta_ns / 1_000_000_000 / duration_s
     return busy
+
+
+@dataclass(frozen=True)
+class GamePowerConfig:
+    mode: GamePowerMode = GamePowerMode.OFF
+    poll_s: float = 2.0
+    epp: str = "balance_power"
+    pcore_max_khz: int = 3_200_000
+    ecore_max_khz: int = 2_800_000
+    cpu_cap_enabled: bool = False
+    target_appid: str | None = None
+    package_pressure_ratio: float = 0.94
+    core_share_threshold: float = 0.30
+    uncore_share_threshold: float = 0.20
+    render_busy_threshold: float = 0.70
+    activate_samples: int = 2
+    restore_samples: int = 3
+
+
+@dataclass(frozen=True)
+class GamePowerSample:
+    appid: str | None
+    rapl: RaplPowerWindow | None
+    pl1_w: int | None
+    fdinfo_busy: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class GamePowerDecision:
+    action: GamePowerAction
+    reason: str
+
+
+class GamePowerController:
+    def __init__(self, config: GamePowerConfig) -> None:
+        self.config = config
+        self._positive_samples = 0
+        self._negative_samples = 0
+        self._active = False
+
+    def evaluate(self, sample: GamePowerSample) -> GamePowerDecision:
+        if self.config.mode == GamePowerMode.OFF:
+            return GamePowerDecision(GamePowerAction.IDLE, "mode is off")
+        if self.config.mode == GamePowerMode.OBSERVE:
+            return GamePowerDecision(GamePowerAction.OBSERVE_ONLY, "mode is observe")
+
+        positive = self._sample_supports_gpu_priority(sample)
+        if positive:
+            self._positive_samples += 1
+            self._negative_samples = 0
+        else:
+            self._negative_samples += 1
+            self._positive_samples = 0
+
+        if self._active and self._negative_samples >= self.config.restore_samples:
+            self._active = False
+            return GamePowerDecision(GamePowerAction.RESTORE, "restore hysteresis reached")
+
+        if self._positive_samples < self.config.activate_samples:
+            return GamePowerDecision(
+                GamePowerAction.OBSERVE_ONLY, "waiting for activation hysteresis"
+            )
+
+        self._active = True
+        if self.config.cpu_cap_enabled and _sample_core_pressure_high(sample):
+            return GamePowerDecision(
+                GamePowerAction.GPU_PRIORITY_CPU_CAP,
+                "package limited with high core pressure",
+            )
+        return GamePowerDecision(
+            GamePowerAction.GPU_PRIORITY_EPP,
+            "package limited with GPU activity",
+        )
+
+    def _sample_supports_gpu_priority(self, sample: GamePowerSample) -> bool:
+        if sample.appid is None:
+            return False
+        if self.config.target_appid is not None and sample.appid != self.config.target_appid:
+            return False
+        if sample.rapl is None or sample.pl1_w is None or sample.rapl.package_w is None:
+            return False
+        if sample.rapl.package_w < self.config.package_pressure_ratio * sample.pl1_w:
+            return False
+        core_share = sample.rapl.core_share
+        if core_share is None or core_share < self.config.core_share_threshold:
+            return False
+        uncore_share = sample.rapl.uncore_share
+        render_busy = sample.fdinfo_busy.get("render")
+        has_gpu_activity = (
+            uncore_share is not None and uncore_share >= self.config.uncore_share_threshold
+        ) or (render_busy is not None and render_busy >= self.config.render_busy_threshold)
+        return has_gpu_activity
+
+
+def _sample_core_pressure_high(sample: GamePowerSample) -> bool:
+    return (
+        sample.rapl is not None
+        and sample.rapl.core_share is not None
+        and sample.rapl.core_share >= 0.38
+    )

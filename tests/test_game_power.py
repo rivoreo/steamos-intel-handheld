@@ -5,7 +5,11 @@ from steamos_intel_handheld.game_power import (
     CpuPolicyClass,
     CpuPolicySnapshot,
     EnergyReading,
+    GamePowerAction,
+    GamePowerConfig,
+    GamePowerController,
     GamePowerMode,
+    GamePowerSample,
     RaplObserver,
     RaplPowerWindow,
     compute_fdinfo_busy,
@@ -183,3 +187,57 @@ def test_compute_fdinfo_busy_uses_nanosecond_delta_over_window():
 
     assert busy["render"] == 0.75
     assert busy["compute"] == 0.25
+
+
+def make_sample(
+    *,
+    appid: str | None = "1091500",
+    package_w: float = 22.0,
+    core_w: float = 8.8,
+    uncore_w: float = 7.4,
+    pl1_w: int = 22,
+    render_busy: float | None = 0.75,
+):
+    return GamePowerSample(
+        appid=appid,
+        rapl=RaplPowerWindow(
+            duration_s=2.0,
+            package_w=package_w,
+            core_w=core_w,
+            uncore_w=uncore_w,
+            dram_w=0.4,
+            psys_w=31.0,
+        ),
+        pl1_w=pl1_w,
+        fdinfo_busy={"render": render_busy} if render_busy is not None else {},
+    )
+
+
+def test_controller_waits_for_hysteresis_before_applying_gpu_priority():
+    controller = GamePowerController(GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY))
+
+    first = controller.evaluate(make_sample())
+    second = controller.evaluate(make_sample())
+
+    assert first.action == GamePowerAction.OBSERVE_ONLY
+    assert second.action == GamePowerAction.GPU_PRIORITY_EPP
+
+
+def test_controller_restores_after_consecutive_invalid_samples():
+    controller = GamePowerController(GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY))
+    controller.evaluate(make_sample())
+    controller.evaluate(make_sample())
+
+    assert controller.evaluate(make_sample(appid=None)).action == GamePowerAction.OBSERVE_ONLY
+    assert controller.evaluate(make_sample(appid=None)).action == GamePowerAction.OBSERVE_ONLY
+    assert controller.evaluate(make_sample(appid=None)).action == GamePowerAction.RESTORE
+
+
+def test_controller_uses_cpu_cap_when_enabled_and_epp_is_not_enough():
+    config = GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY, cpu_cap_enabled=True)
+    controller = GamePowerController(config)
+
+    controller.evaluate(make_sample(core_w=10.0, render_busy=0.90))
+    decision = controller.evaluate(make_sample(core_w=10.0, render_busy=0.90))
+
+    assert decision.action == GamePowerAction.GPU_PRIORITY_CPU_CAP
