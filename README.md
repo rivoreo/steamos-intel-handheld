@@ -258,7 +258,7 @@ baseline. Results are copied into `.cache/game-power/profiles/`. Each run
 directory contains `manifest.json`, `summary.json`, `game-power.jsonl`,
 `cgroup-pressure.jsonl`, `thread-affinity.jsonl`, `thread-schedstat.jsonl`,
 `cpu-topology.json`, `process-cgroups.jsonl`, `affinity-advice.json`,
-`background-shaping.json`,
+`background-shaping.json`, `restore-affinity.json`,
 CPU policy snapshots, TDP snapshots, and the MangoHud CSV/summary used for FPS
 analysis. The thread-affinity capture is observe-only and records per-thread
 CPU time, migration, context-switch, current-CPU, affinity-mask, and cgroup
@@ -284,7 +284,10 @@ best-effort read-only discovery from the live gamescope command line's focused
 artifacts. Summaries then include `fps_target`,
 `fps_target_source`, `target_frame_ms`, `avg_fps_target_ratio`, and
 `fps_target_met`, and repeated comparisons can accept a candidate that sustains
-the target while reducing package power.
+the target while reducing package power. `restore-affinity.json` snapshots the
+foreground app's original thread affinity masks plus cgroup `cpu.uclamp.*`,
+`cpu.weight`, `cpu.max`, and `cpuset.*` files before a run; it is the rollback
+seed for future guarded affinity/uclamp/cpuset writer experiments.
 Controlled capture temporarily installs a
 runtime user-service drop-in for `gamescope-mangoapp.service`, restarts
 `mangoapp`, and uses `mangohudctl` to start and stop one logging session per

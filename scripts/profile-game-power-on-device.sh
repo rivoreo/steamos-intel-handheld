@@ -701,6 +701,126 @@ PY
   done
 }
 
+snapshot_affinity_restore_state() {
+  local output="$1"
+  python3 - "$APPID" "$output" <<'PY'
+import json
+import pathlib
+import sys
+
+appid = sys.argv[1]
+output = pathlib.Path(sys.argv[2])
+proc = pathlib.Path("/proc")
+cgroup_root = pathlib.Path("/sys/fs/cgroup")
+control_files = (
+    "cgroup.type",
+    "cpu.uclamp.min",
+    "cpu.uclamp.max",
+    "cpu.weight",
+    "cpu.max",
+    "cpuset.cpus",
+    "cpuset.cpus.effective",
+    "cpuset.mems",
+    "cpuset.mems.effective",
+)
+
+
+def read_text(path):
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def parse_status(text):
+    parsed = {}
+    if not text:
+        return parsed
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        parsed[key] = value.strip()
+    return parsed
+
+
+def normalize_cgroup(text):
+    return text.strip().replace("\n", ";")
+
+
+def cgroup_relative_path(text):
+    for line in text.splitlines():
+        if line.startswith("0::"):
+            return line.removeprefix("0::")
+    return ""
+
+
+def cgroup_fs_path(relative):
+    if not relative.startswith("/"):
+        return None
+    parts = [part for part in relative.split("/") if part and part not in {".", ".."}]
+    return cgroup_root.joinpath(*parts)
+
+
+threads = []
+cgroups = {}
+for cgroup_file in proc.glob("[0-9]*/cgroup"):
+    cgroup_text = read_text(cgroup_file)
+    if not cgroup_text or f"app-steam-app{appid}" not in cgroup_text:
+        continue
+    pid_dir = cgroup_file.parent
+    try:
+        pid = int(pid_dir.name)
+    except ValueError:
+        continue
+    normalized = normalize_cgroup(cgroup_text)
+    relative = cgroup_relative_path(cgroup_text)
+    fs_path = cgroup_fs_path(relative)
+    if fs_path is not None:
+        cgroups[normalized] = fs_path
+    for task_dir in (pid_dir / "task").glob("[0-9]*"):
+        try:
+            tid = int(task_dir.name)
+        except ValueError:
+            continue
+        status = parse_status(read_text(task_dir / "status"))
+        threads.append(
+            {
+                "pid": pid,
+                "tid": tid,
+                "comm": status.get("Name"),
+                "cgroup": normalized,
+                "cpus_allowed": status.get("Cpus_allowed"),
+                "cpus_allowed_list": status.get("Cpus_allowed_list"),
+            }
+        )
+
+cgroup_payload = []
+for cgroup, path in sorted(cgroups.items()):
+    files = {}
+    for name in control_files:
+        value = read_text(path / name)
+        if value is not None:
+            files[name] = value
+    cgroup_payload.append(
+        {
+            "cgroup": cgroup,
+            "path": str(path),
+            "files": files,
+        }
+    )
+
+payload = {
+    "appid": appid,
+    "mode": "restore-snapshot",
+    "write_policy": "snapshot-only",
+    "threads": sorted(threads, key=lambda item: (item["pid"], item["tid"])),
+    "cgroups": cgroup_payload,
+}
+output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
+}
+
 collect_cpu_topology() {
   local output="$1"
   python3 - "$output" <<'PY'
@@ -845,6 +965,7 @@ for repeat in $(seq 1 "$REPEATS"); do
         mkdir -p "$run_dir"
         cp "$REMOTE_ROOT/fps-target.discovery.json" "$run_dir/fps-target.discovery.json"
         collect_cpu_topology "$run_dir/cpu-topology.json"
+        snapshot_affinity_restore_state "$run_dir/restore-affinity.json"
         snapshot_cpu_policy >"$run_dir/cpu-policy.before"
         provider_tdp >"$run_dir/tdp.before"
 
@@ -939,6 +1060,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           --thread-schedstat-jsonl "$run_dir/thread-schedstat.jsonl" \
           --cpu-topology-json "$run_dir/cpu-topology.json" \
           --process-cgroups-jsonl "$run_dir/process-cgroups.jsonl" \
+          --restore-affinity-json "$run_dir/restore-affinity.json" \
           --epp "$EPP" \
           --pcore-max-mhz "$variant_pcore_max_mhz" \
           --ecore-max-mhz "$variant_ecore_max_mhz" \

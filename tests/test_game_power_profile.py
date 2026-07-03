@@ -12,6 +12,7 @@ from steamos_intel_handheld.game_power_profile import (
     MangoHudFpsSummary,
     PolicyVerdict,
     ProcessCgroupSummary,
+    RestoreAffinitySummary,
     RunSummary,
     ThreadAffinitySummary,
     ThreadSchedstatSummary,
@@ -28,6 +29,7 @@ from steamos_intel_handheld.game_power_profile import (
     summarize_cpu_topology,
     summarize_pressure_jsonl,
     summarize_process_cgroups_jsonl,
+    summarize_restore_affinity_json,
     summarize_thread_affinity_jsonl,
     summarize_thread_schedstat_jsonl,
 )
@@ -453,6 +455,59 @@ def test_build_background_shaping_advice_outputs_observe_only_candidates(tmp_pat
     assert advice["candidates"][0]["suggested_action"] == "future-cpu-weight-candidate"
     assert "background/helper CPU time is visible outside the foreground app cgroup" in advice[
         "reasons"
+    ]
+
+
+def test_summarize_restore_affinity_json_counts_threads_cgroups_and_files(tmp_path):
+    path = tmp_path / "restore-affinity.json"
+    path.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "mode": "restore-snapshot",
+                "write_policy": "snapshot-only",
+                "threads": [
+                    {
+                        "pid": 101,
+                        "tid": 101,
+                        "comm": "GameThread",
+                        "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        "cpus_allowed_list": "0-3",
+                    },
+                    {
+                        "pid": 101,
+                        "tid": 102,
+                        "comm": "Worker",
+                        "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        "cpus_allowed_list": "0-3",
+                    },
+                ],
+                "cgroups": [
+                    {
+                        "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        "files": {
+                            "cpu.uclamp.min": "0.00",
+                            "cpu.uclamp.max": "max",
+                            "cpuset.cpus": "",
+                            "cpuset.cpus.effective": "0-3",
+                        },
+                    }
+                ],
+            }
+        )
+        + "\n"
+    )
+
+    summary = summarize_restore_affinity_json(path)
+
+    assert isinstance(summary, RestoreAffinitySummary)
+    assert summary.thread_count == 2
+    assert summary.cgroup_count == 1
+    assert summary.files == [
+        "cpu.uclamp.max",
+        "cpu.uclamp.min",
+        "cpuset.cpus",
+        "cpuset.cpus.effective",
     ]
 
 
@@ -1041,6 +1096,7 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     thread_schedstat = tmp_path / "thread-schedstat.jsonl"
     cpu_topology = tmp_path / "cpu-topology.json"
     process_cgroups = tmp_path / "process-cgroups.jsonl"
+    restore_affinity = tmp_path / "restore-affinity.json"
     output = tmp_path / "profile"
     write_csv(
         mangohud,
@@ -1201,6 +1257,35 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
         )
         + "\n"
     )
+    restore_affinity.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "mode": "restore-snapshot",
+                "write_policy": "snapshot-only",
+                "threads": [
+                    {
+                        "pid": 101,
+                        "tid": 101,
+                        "comm": "GameThread",
+                        "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        "cpus_allowed_list": "0-3",
+                    }
+                ],
+                "cgroups": [
+                    {
+                        "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        "files": {
+                            "cpu.uclamp.min": "0.00",
+                            "cpu.uclamp.max": "max",
+                            "cpuset.cpus.effective": "0-3",
+                        },
+                    }
+                ],
+            }
+        )
+        + "\n"
+    )
 
     result = subprocess.run(
         [
@@ -1230,6 +1315,8 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
             str(cpu_topology),
             "--process-cgroups-jsonl",
             str(process_cgroups),
+            "--restore-affinity-json",
+            str(restore_affinity),
             "--fps-target",
             "40",
             "--output",
@@ -1255,6 +1342,7 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert manifest["affinity_advice_json"] is True
     assert manifest["process_cgroups_jsonl"] is True
     assert manifest["background_shaping_json"] is True
+    assert manifest["restore_affinity_json"] is True
     assert summary["avg_fps"] == 42.0
     assert summary["fps_target"] == 40.0
     assert summary["fps_target_source"] == "manual"
@@ -1271,6 +1359,13 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
     assert summary["thread_schedstat_samples"] == 2
     assert summary["thread_schedstat_observed_threads"] == 1
     assert summary["thread_schedstat_hot_threads"][0]["runqueue_wait_ms_delta"] == 140.0
+    assert summary["restore_affinity_thread_count"] == 1
+    assert summary["restore_affinity_cgroup_count"] == 1
+    assert summary["restore_affinity_files"] == [
+        "cpu.uclamp.max",
+        "cpu.uclamp.min",
+        "cpuset.cpus.effective",
+    ]
     assert summary["restored"] is True
     assert advice["mode"] == "observe-only"
     assert advice["preferred_latency_cpus"] == [0, 1]

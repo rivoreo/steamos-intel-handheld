@@ -85,6 +85,13 @@ class ProcessCgroupSummary:
 
 
 @dataclass(frozen=True)
+class RestoreAffinitySummary:
+    thread_count: int
+    cgroup_count: int
+    files: list[str]
+
+
+@dataclass(frozen=True)
 class FpsTargetDiscovery:
     fps_target: float | None
     source: str
@@ -131,6 +138,9 @@ class RunSummary:
     thread_schedstat_samples: int | None = None
     thread_schedstat_observed_threads: int | None = None
     thread_schedstat_hot_threads: list[dict[str, object]] | None = None
+    restore_affinity_thread_count: int | None = None
+    restore_affinity_cgroup_count: int | None = None
+    restore_affinity_files: list[str] | None = None
     actions: dict[str, int] | None = None
     restored: bool = False
 
@@ -604,6 +614,30 @@ def summarize_process_cgroups_jsonl(
     )
 
 
+def summarize_restore_affinity_json(path: str | Path) -> RestoreAffinitySummary:
+    payload = json.loads(Path(path).read_text())
+    threads = payload.get("threads") if isinstance(payload, dict) else None
+    cgroups = payload.get("cgroups") if isinstance(payload, dict) else None
+    if not isinstance(threads, list):
+        threads = []
+    if not isinstance(cgroups, list):
+        cgroups = []
+
+    files: set[str] = set()
+    for cgroup in cgroups:
+        if not isinstance(cgroup, dict):
+            continue
+        cgroup_files = cgroup.get("files")
+        if isinstance(cgroup_files, dict):
+            files.update(str(key) for key in cgroup_files)
+
+    return RestoreAffinitySummary(
+        thread_count=len(threads),
+        cgroup_count=len(cgroups),
+        files=sorted(files),
+    )
+
+
 def build_affinity_advice(
     *,
     topology: CpuTopologySummary | None,
@@ -716,6 +750,7 @@ def merge_run_summary(
     pressure: dict[str, float] | None = None,
     thread_affinity: ThreadAffinitySummary | None = None,
     thread_schedstat: ThreadSchedstatSummary | None = None,
+    restore_affinity: RestoreAffinitySummary | None = None,
     epp: str | None = None,
     pcore_max_mhz: int | None = None,
     ecore_max_mhz: int | None = None,
@@ -773,6 +808,13 @@ def merge_run_summary(
         thread_schedstat_hot_threads=(
             thread_schedstat.hot_threads if thread_schedstat else None
         ),
+        restore_affinity_thread_count=(
+            restore_affinity.thread_count if restore_affinity else None
+        ),
+        restore_affinity_cgroup_count=(
+            restore_affinity.cgroup_count if restore_affinity else None
+        ),
+        restore_affinity_files=restore_affinity.files if restore_affinity else None,
         actions=power.actions if power else None,
         restored=restored,
     )
@@ -1104,6 +1146,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--thread-schedstat-jsonl")
     summarize.add_argument("--cpu-topology-json")
     summarize.add_argument("--process-cgroups-jsonl")
+    summarize.add_argument("--restore-affinity-json")
     summarize.add_argument("--epp")
     summarize.add_argument("--pcore-max-mhz", type=int)
     summarize.add_argument("--ecore-max-mhz", type=int)
@@ -1170,6 +1213,11 @@ def run_summarize(args: argparse.Namespace) -> Path:
         if args.process_cgroups_jsonl
         else None
     )
+    restore_affinity = (
+        summarize_restore_affinity_json(args.restore_affinity_json)
+        if args.restore_affinity_json
+        else None
+    )
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -1197,6 +1245,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "affinity_advice_json": bool(cpu_topology and thread_affinity),
         "process_cgroups_jsonl": bool(args.process_cgroups_jsonl),
         "background_shaping_json": bool(process_cgroups),
+        "restore_affinity_json": bool(args.restore_affinity_json),
     }
     summary = merge_run_summary(
         appid=args.appid,
@@ -1207,6 +1256,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         pressure=pressure,
         thread_affinity=thread_affinity,
         thread_schedstat=thread_schedstat,
+        restore_affinity=restore_affinity,
         epp=args.epp,
         pcore_max_mhz=args.pcore_max_mhz,
         ecore_max_mhz=args.ecore_max_mhz,

@@ -463,6 +463,21 @@ def test_game_power_profile_wrapper_supports_cpu_cap_policy_variants():
     assert '--poll-s "$POLL_S"' in script
 
 
+def test_game_power_profile_wrapper_records_affinity_restore_snapshot():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert "snapshot_affinity_restore_state()" in script
+    assert 'snapshot_affinity_restore_state "$run_dir/restore-affinity.json"' in script
+    assert "--restore-affinity-json" in script
+    assert '"$run_dir/restore-affinity.json"' in script
+    assert "Cpus_allowed_list" in script
+    assert "cpu.uclamp.min" in script
+    assert "cpu.uclamp.max" in script
+    assert "cpu.weight" in script
+    assert "cpuset.cpus" in script
+    assert "cpuset.cpus.effective" in script
+
+
 def test_device_verifier_checks_profile_aware_tdp_policy_and_tau():
     script = (ROOT / "scripts/verify-on-device.sh").read_text()
 

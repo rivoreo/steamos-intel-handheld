@@ -634,6 +634,31 @@ plan means the profiler has enough repeated evidence to test a soft compact
 foreground-role placement variant next; it does not mean production hard
 affinity should be enabled.
 
+Source:
+https://docs.kernel.org/admin-guide/cgroup-v2.html
+
+Key finding:
+cgroup v2's process and thread migration files have explicit permission and
+domain constraints. `cgroup.threads` can move individual TIDs only within the
+same resource domain, and `cgroup.procs` moves whole processes. The same
+document describes `cpu.uclamp.min` and `cpu.uclamp.max` as cgroup-wide
+utilization clamp controls which affect all processes in that cgroup.
+
+Design impact:
+Every write-mode affinity/uclamp experiment needs a pre-run restore seed. The
+profiler should snapshot foreground thread affinity masks, foreground cgroup
+paths, and cgroup CPU controller files before any writer is introduced. A
+future writer can then refuse to run if this snapshot is missing, incomplete, or
+not restorable.
+
+Current implementation note:
+Each guarded device profile run now writes `restore-affinity.json` before the
+policy runner starts. The snapshot is still read-only. It records foreground
+Steam-app TIDs, original `Cpus_allowed` / `Cpus_allowed_list` masks, cgroup
+membership, and cgroup files for `cpu.uclamp.*`, `cpu.weight`, `cpu.max`, and
+`cpuset.*`. The summarizer records the snapshot's thread count, cgroup count,
+and file list in `summary.json`.
+
 ### Academic And Research Literature
 
 Source:
@@ -1251,6 +1276,9 @@ ITMT priority is an input to the preferred-set ranking, not something to ignore.
   scopes.
 - `background-shaping.json`: observe-only cgroup candidates for background or
   helper work to shape before touching foreground game thread affinity.
+- `restore-affinity.json`: read-only pre-run rollback seed containing
+  foreground thread affinity masks, cgroup membership, and cgroup
+  `cpu.uclamp.*`, `cpu.weight`, `cpu.max`, and `cpuset.*` files.
 - Aggregate reports now include `baseline_affinity_roles` and
   `candidate_affinity_roles` when sibling `affinity-advice.json` files exist.
   These summaries keep median CPU time, migration count, runqueue wait,
@@ -1261,8 +1289,6 @@ ITMT priority is an input to the preferred-set ranking, not something to ignore.
 
 - `sched-trace.jsonl`: optional guarded tracefs/perf-sched window around
   frame-time spikes with wakeup, switch, migration, and run-queue delay.
-- `restore-affinity.json`: original masks/cgroups/cpuset/uclamp snapshots for
-  every write-mode experiment.
 
 ## Research Matrix
 
