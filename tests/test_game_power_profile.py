@@ -512,6 +512,55 @@ def test_profile_cli_summarize_records_policy_tunables(tmp_path):
     assert summary["cpu_cap_core_share_threshold"] == 0.31
 
 
+def test_profile_cli_summarize_records_capture_timing(tmp_path):
+    mangohud = tmp_path / "mangohud.csv"
+    output = tmp_path / "profile"
+    write_csv(
+        mangohud,
+        ["Average FPS", "1% Min FPS", "Average Frame Time"],
+        [{"Average FPS": "55.5", "1% Min FPS": "42.0", "Average Frame Time": "18.0"}],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "summarize",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--policy",
+            "gpu-priority",
+            "--capture-mode",
+            "controlled",
+            "--mangohud-csv",
+            str(mangohud),
+            "--duration-s",
+            "15",
+            "--warmup-s",
+            "5",
+            "--poll-s",
+            "2",
+            "--output",
+            str(output),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    summary = json.loads((output / "summary.json").read_text())
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["duration_s"] == 15.0
+    assert manifest["warmup_s"] == 5.0
+    assert manifest["poll_s"] == 2.0
+    assert summary["duration_s"] == 15.0
+    assert summary["warmup_s"] == 5.0
+    assert summary["poll_s"] == 2.0
+
+
 def test_profile_cli_compare_reads_two_summary_files(tmp_path):
     baseline = tmp_path / "off-summary.json"
     candidate = tmp_path / "gpu-summary.json"
@@ -684,6 +733,63 @@ def test_profile_cli_aggregate_keeps_cpu_cap_tuning_variants_separate(tmp_path):
         for item in payload["comparisons"]
     }
     assert candidate_caps == {(3000, 2200, 0.3), (3200, 2400, 0.35)}
+
+
+def test_profile_cli_aggregate_keeps_capture_durations_separate(tmp_path):
+    runs = [
+        ("001-off-15", "off", 54.0, 40.0, 15.0),
+        ("002-gpu-15", "gpu-priority", 56.0, 43.0, 15.0),
+        ("003-off-60", "off", 55.0, 41.0, 60.0),
+        ("004-gpu-60", "gpu-priority", 58.0, 45.0, 60.0),
+    ]
+    for dirname, policy, avg_fps, low_fps, duration_s in runs:
+        run_dir = tmp_path / dirname
+        run_dir.mkdir()
+        (run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "appid": "1091500",
+                    "tdp_w": 22,
+                    "policy": policy,
+                    "capture_mode": "controlled",
+                    "epp": "balance_power",
+                    "duration_s": duration_s,
+                    "warmup_s": 5.0,
+                    "poll_s": 2.0,
+                    "avg_fps": avg_fps,
+                    "one_percent_low_fps": low_fps,
+                    "restored": True,
+                }
+            )
+        )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "aggregate",
+            "--root",
+            str(tmp_path),
+            "--baseline-policy",
+            "off",
+            "--candidate-policy",
+            "gpu-priority",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--min-runs",
+            "1",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    payload = json.loads(result.stdout)
+    durations = {item["candidate"]["duration_s"] for item in payload["comparisons"]}
+    assert durations == {15.0, 60.0}
 
 
 def test_parse_pressure_file_reads_some_and_full_avg10():

@@ -50,6 +50,9 @@ class RunSummary:
     tdp_w: int
     policy: str
     capture_mode: CaptureMode = CaptureMode.IMPORTED
+    duration_s: float | None = None
+    warmup_s: float | None = None
+    poll_s: float | None = None
     epp: str | None = None
     pcore_max_mhz: int | None = None
     ecore_max_mhz: int | None = None
@@ -81,6 +84,9 @@ class PolicyAggregate:
     capture_mode: CaptureMode
     sample_count: int
     restored_count: int
+    duration_s: float | None = None
+    warmup_s: float | None = None
+    poll_s: float | None = None
     epp: str | None = None
     pcore_max_mhz: int | None = None
     ecore_max_mhz: int | None = None
@@ -211,6 +217,9 @@ def merge_run_summary(
     ecore_max_mhz: int | None = None,
     cpu_cap_enabled: bool | None = None,
     cpu_cap_core_share_threshold: float | None = None,
+    duration_s: float | None = None,
+    warmup_s: float | None = None,
+    poll_s: float | None = None,
     restored: bool,
 ) -> RunSummary:
     pressure = pressure or {}
@@ -219,6 +228,9 @@ def merge_run_summary(
         tdp_w=tdp_w,
         policy=policy,
         capture_mode=fps.capture_mode,
+        duration_s=duration_s,
+        warmup_s=warmup_s,
+        poll_s=poll_s,
         epp=epp,
         pcore_max_mhz=pcore_max_mhz,
         ecore_max_mhz=ecore_max_mhz,
@@ -321,6 +333,7 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
     if not runs:
         raise ValueError("cannot aggregate an empty run set")
     first = runs[0]
+    first_experiment = _experiment_settings(first)
     first_tunables = _effective_tunables(first)
     for run in runs[1:]:
         if run.appid != first.appid:
@@ -331,8 +344,11 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
             raise ValueError("cannot aggregate runs with different policies")
         if run.capture_mode != first.capture_mode:
             raise ValueError("cannot aggregate runs with different capture modes")
+        if _experiment_settings(run) != first_experiment:
+            raise ValueError("cannot aggregate runs with different capture timing")
         if _effective_tunables(run) != first_tunables:
             raise ValueError("cannot aggregate runs with different effective tunables")
+    duration_s, warmup_s, poll_s = first_experiment
     epp, pcore_max_mhz, ecore_max_mhz, cpu_cap_enabled, threshold = first_tunables
     return PolicyAggregate(
         appid=first.appid,
@@ -341,6 +357,9 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
         capture_mode=first.capture_mode,
         sample_count=len(runs),
         restored_count=sum(1 for run in runs if run.restored),
+        duration_s=duration_s,
+        warmup_s=warmup_s,
+        poll_s=poll_s,
         epp=epp,
         pcore_max_mhz=pcore_max_mhz,
         ecore_max_mhz=ecore_max_mhz,
@@ -500,6 +519,9 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--ecore-max-mhz", type=int)
     summarize.add_argument("--cpu-cap-enabled", choices=["true", "false"])
     summarize.add_argument("--cpu-cap-core-share-threshold", type=float)
+    summarize.add_argument("--duration-s", type=float)
+    summarize.add_argument("--warmup-s", type=float)
+    summarize.add_argument("--poll-s", type=float)
     summarize.add_argument("--output", required=True)
     summarize.add_argument("--restored", choices=["true", "false"], default="true")
 
@@ -545,6 +567,9 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "ecore_max_mhz": args.ecore_max_mhz,
         "cpu_cap_enabled": _optional_bool(args.cpu_cap_enabled),
         "cpu_cap_core_share_threshold": args.cpu_cap_core_share_threshold,
+        "duration_s": args.duration_s,
+        "warmup_s": args.warmup_s,
+        "poll_s": args.poll_s,
     }
     summary = merge_run_summary(
         appid=args.appid,
@@ -558,6 +583,9 @@ def run_summarize(args: argparse.Namespace) -> Path:
         ecore_max_mhz=args.ecore_max_mhz,
         cpu_cap_enabled=_optional_bool(args.cpu_cap_enabled),
         cpu_cap_core_share_threshold=args.cpu_cap_core_share_threshold,
+        duration_s=args.duration_s,
+        warmup_s=args.warmup_s,
+        poll_s=args.poll_s,
         restored=args.restored == "true",
     )
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -660,7 +688,17 @@ def _discover_summary_paths(roots: list[str]) -> list[Path]:
 
 
 def _profile_group_key(run: RunSummary) -> tuple[object, ...]:
-    return (run.appid, run.tdp_w, run.policy, *_effective_tunables(run))
+    return (
+        run.appid,
+        run.tdp_w,
+        run.policy,
+        *_experiment_settings(run),
+        *_effective_tunables(run),
+    )
+
+
+def _experiment_settings(run: RunSummary) -> tuple[float | None, float | None, float | None]:
+    return (run.duration_s, run.warmup_s, run.poll_s)
 
 
 def _effective_tunables(

@@ -10,6 +10,7 @@ target="$1"
 appid="${PROFILE_GAME_POWER_APPID:-1091500}"
 tdp_levels="${PROFILE_GAME_POWER_TDPS:-22}"
 policies="${PROFILE_GAME_POWER_POLICIES:-off gpu-priority}"
+repeats="${PROFILE_GAME_POWER_REPEATS:-1}"
 duration_s="${PROFILE_GAME_POWER_DURATION_S:-60}"
 warmup_s="${PROFILE_GAME_POWER_WARMUP_S:-10}"
 poll_s="${PROFILE_GAME_POWER_POLL_S:-2}"
@@ -25,7 +26,7 @@ remote_root="$(ssh "$target" "mktemp -d /tmp/game-power-profile.XXXXXX")"
 
 ssh "$target" \
   "APPID='$appid' TDP_LEVELS='$tdp_levels' POLICIES='$policies' \
-DURATION_S='$duration_s' WARMUP_S='$warmup_s' POLL_S='$poll_s' \
+REPEATS='$repeats' DURATION_S='$duration_s' WARMUP_S='$warmup_s' POLL_S='$poll_s' \
 CAPTURE_MODE='$capture_mode' EPP='$epp' PCORE_MAX_MHZ='$pcore_max_mhz' \
 ECORE_MAX_MHZ='$ecore_max_mhz' \
 CPU_CAP_CORE_SHARE_THRESHOLD='$cpu_cap_core_share_threshold' \
@@ -314,11 +315,12 @@ trap restore_state EXIT
 set_service_game_power_mode off
 setup_mangohud_controlled_capture
 
-for tdp in $TDP_LEVELS; do
-  set_provider_tdp "$tdp"
-  sleep "$WARMUP_S"
-  for policy in $POLICIES; do
-    run_dir="$REMOTE_ROOT/$(date +%Y%m%dT%H%M%S)-app${APPID}-${tdp}w-${policy}"
+for repeat in $(seq 1 "$REPEATS"); do
+  for tdp in $TDP_LEVELS; do
+    set_provider_tdp "$tdp"
+    sleep "$WARMUP_S"
+    for policy in $POLICIES; do
+      run_dir="$REMOTE_ROOT/$(date +%Y%m%dT%H%M%S)-app${APPID}-${tdp}w-${policy}-r${repeat}"
     mkdir -p "$run_dir"
     snapshot_cpu_policy >"$run_dir/cpu-policy.before"
     provider_tdp >"$run_dir/tdp.before"
@@ -396,8 +398,12 @@ for tdp in $TDP_LEVELS; do
       --ecore-max-mhz "$ECORE_MAX_MHZ" \
       --cpu-cap-enabled "$cpu_cap_enabled" \
       --cpu-cap-core-share-threshold "$CPU_CAP_CORE_SHARE_THRESHOLD" \
+      --duration-s "$DURATION_S" \
+      --warmup-s "$WARMUP_S" \
+      --poll-s "$POLL_S" \
       --restored "$restored" \
       --output "$run_dir"
+    done
   done
 done
 

@@ -426,6 +426,7 @@ def test_game_power_profile_wrapper_supports_controlled_mangohud_capture():
 def test_game_power_profile_wrapper_supports_cpu_cap_policy_variants():
     script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
 
+    assert "PROFILE_GAME_POWER_REPEATS" in script
     assert "PROFILE_GAME_POWER_EPP" in script
     assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ" in script
     assert "PROFILE_GAME_POWER_ECORE_MAX_MHZ" in script
@@ -436,6 +437,9 @@ def test_game_power_profile_wrapper_supports_cpu_cap_policy_variants():
     assert '--ecore-max-mhz "$ECORE_MAX_MHZ"' in script
     assert '--cpu-cap-core-share-threshold "$CPU_CAP_CORE_SHARE_THRESHOLD"' in script
     assert '--cpu-cap-enabled "$cpu_cap_enabled"' in script
+    assert '--duration-s "$DURATION_S"' in script
+    assert '--warmup-s "$WARMUP_S"' in script
+    assert '--poll-s "$POLL_S"' in script
 
 
 def test_device_verifier_checks_profile_aware_tdp_policy_and_tau():
@@ -602,6 +606,7 @@ def test_docs_describe_game_power_governor_default_on_and_reversible():
     assert "scripts/verify-game-power-on-device.sh root@10.100.0.19" in readme
     assert 'PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap"' in readme
     assert "PROFILE_GAME_POWER_CAPTURE_MODE=controlled" in readme
+    assert "PROFILE_GAME_POWER_REPEATS=3" in readme
     assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000" in readme
     assert "PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD=0.30" in readme
     assert "steamos-intel-handheld-game-power-profile aggregate" in readme

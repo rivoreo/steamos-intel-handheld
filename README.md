@@ -242,6 +242,7 @@ profile matrix instead of changing the installed default:
 
 ```bash
 PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
+PROFILE_GAME_POWER_REPEATS=3 \
 PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap" \
 PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000 \
 PROFILE_GAME_POWER_ECORE_MAX_MHZ=2200 \
