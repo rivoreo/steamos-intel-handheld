@@ -87,6 +87,20 @@ The guarded device verifier runs `observe` and `gpu-priority` through
 `scripts/verify-game-power-on-device.sh` and fails if the final CPU policy
 snapshot differs from the pre-test snapshot.
 
+The game-power profiler is the measurement layer for future scheduler policy
+work. It keeps the installed default at the validated EPP-only `gpu-priority`
+mode, then temporarily disables the service governor during an A/B profiling
+session so the standalone profiler can compare `off` and candidate policies
+without background policy interference. Profile artifacts include MangoHud FPS
+CSV data, game-power JSONL decisions, package/core/uncore power summaries,
+render-busy samples, cgroup CPU pressure peaks, TDP snapshots, and CPU policy
+restore diffs.
+
+Imported MangoHud captures are marked as imported and cannot produce a positive
+policy recommendation. Controlled capture plus exact restore is required before
+the profiler can classify a policy as better, rejected, or inconclusive for a
+specific TDP and game scene.
+
 ## Boundaries
 
 - Hardware access is isolated in `TdpBackend`.

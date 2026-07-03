@@ -223,6 +223,31 @@ VERIFY_GAME_POWER_APPID=1091500 scripts/verify-game-power-on-device.sh root@10.1
 applies reversible EPP hints, and only applies max-frequency caps when
 `--cpu-cap` is requested. The governor restores the previous CPU EPP and frequency limits when the active policy deactivates, the command exits, the service stops, or a write fails. It does not raise the SteamOS TDP, does not raise PL1, and does not replace SteamOS Manager's TDP slider.
 
+### Game-power profiling
+
+The game-power profiler compares policy runs using MangoHud FPS data and
+machine-readable game-power samples:
+
+```bash
+scripts/profile-game-power-on-device.sh root@10.100.0.19
+```
+
+By default the guarded wrapper runs an imported-log capture at 22W for:
+
+- `off`
+- `gpu-priority`
+
+The wrapper temporarily forces the installed service governor to `off`, so the
+standalone profiler controls the test policy and the `off` run is a real
+baseline. Results are copied into `.cache/game-power/profiles/`. Each run
+directory contains `manifest.json`, `summary.json`, `game-power.jsonl`,
+`cgroup-pressure.jsonl`, CPU policy snapshots, TDP snapshots, and the MangoHud
+CSV used for FPS analysis.
+
+Imported captures are useful for parser and comparison development, but they do
+not prove an automated A/B result. A policy recommendation requires controlled
+capture, exact restore, and repeated runs that meet the comparison thresholds.
+
 ## Repository layout
 
 - `src/steamos_intel_handheld/` - Python service code.
