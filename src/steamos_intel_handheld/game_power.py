@@ -516,18 +516,28 @@ class SystemGamePowerObserver:
 
     async def sample(self) -> GamePowerSample:
         start = self._previous_rapl or self.rapl.read()
+        processes = find_steam_game_processes(self.proc_root)
+        process = processes[0] if processes else None
+        fdinfo_start = read_process_fdinfo_engines(self.proc_root, process.pid) if process else {}
         await asyncio.sleep(self.poll_s)
         end = self.rapl.read()
+        fdinfo_end = read_process_fdinfo_engines(self.proc_root, process.pid) if process else {}
         self._previous_rapl = end
         try:
             rapl = compute_rapl_power_window(start, end)
         except ValueError:
             rapl = None
+        duration_s = (rapl.duration_s if rapl is not None else self.poll_s)
+        busy = (
+            compute_fdinfo_busy(fdinfo_start, fdinfo_end, duration_s=duration_s)
+            if process
+            else {}
+        )
         return GamePowerSample(
-            appid=None,
+            appid=process.appid if process else None,
             rapl=rapl,
             pl1_w=_read_current_pl1_w(self.rapl.sysfs_root),
-            fdinfo_busy={},
+            fdinfo_busy=busy,
         )
 
 
@@ -593,6 +603,60 @@ async def run_cli(args: argparse.Namespace) -> None:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     asyncio.run(run_cli(args))
+
+
+STEAM_APP_RE = re.compile(r"app-steam-app(\d+)-")
+
+
+def find_steam_game_processes(proc_root: str | Path = "/proc") -> list[GameProcess]:
+    proc_root = Path(proc_root)
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return []
+
+    processes: list[GameProcess] = []
+    for entry in sorted(entries, key=_proc_sort_key):
+        if not entry.name.isdigit():
+            continue
+        cgroup = _read_text(entry / "cgroup")
+        match = STEAM_APP_RE.search(cgroup)
+        if match is None:
+            continue
+        processes.append(
+            GameProcess(
+                pid=int(entry.name),
+                appid=match.group(1),
+                command=_read_cmdline(entry / "cmdline"),
+            )
+        )
+    return processes
+
+
+def _proc_sort_key(path: Path) -> int:
+    return int(path.name) if path.name.isdigit() else -1
+
+
+def _read_cmdline(path: Path) -> str:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return ""
+    parts = [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
+    return " ".join(parts)
+
+
+def read_process_fdinfo_engines(proc_root: Path, pid: int) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    fdinfo_root = proc_root / str(pid) / "fdinfo"
+    for fdinfo in sorted(fdinfo_root.glob("*")):
+        try:
+            parsed = parse_fdinfo_engine_times(fdinfo.read_text())
+        except OSError:
+            continue
+        for engine, value in parsed.items():
+            totals[engine] = totals.get(engine, 0) + value
+    return totals
 
 
 if __name__ == "__main__":

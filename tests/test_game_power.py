@@ -12,11 +12,13 @@ from steamos_intel_handheld.game_power import (
     GamePowerGovernor,
     GamePowerMode,
     GamePowerSample,
+    GameProcess,
     RaplObserver,
     RaplPowerWindow,
     compute_fdinfo_busy,
     compute_rapl_power_window,
     discover_cpu_policies,
+    find_steam_game_processes,
     parse_fdinfo_engine_times,
 )
 
@@ -319,3 +321,23 @@ def test_governor_restores_snapshot_when_active_write_fails():
     assert ("snapshot",) in actuator.events
     assert ("apply-failed", "balance_power", None, None) in actuator.events
     assert ("restore", actuator.snapshot_value) in actuator.events
+
+
+def make_proc_game(proc_root: Path, pid: int, appid: str, command: str = "Cyberpunk2077.exe"):
+    root = proc_root / str(pid)
+    root.mkdir(parents=True)
+    (root / "cmdline").write_bytes(command.encode() + b"\0")
+    (root / "cgroup").write_text(
+        "0::/user.slice/user-1000.slice/user@1000.service/app.slice/"
+        f"app-steam-app{appid}-{pid}.scope\n"
+    )
+    return root
+
+
+def test_find_steam_game_processes_reads_appid_from_cgroup(tmp_path):
+    proc_root = tmp_path / "proc"
+    make_proc_game(proc_root, 1234, "1091500")
+
+    processes = find_steam_game_processes(proc_root)
+
+    assert processes == [GameProcess(pid=1234, appid="1091500", command="Cyberpunk2077.exe")]
