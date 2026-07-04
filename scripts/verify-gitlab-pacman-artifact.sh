@@ -72,9 +72,11 @@ tar -tf "$main_pkg" | grep -Fx "etc/systemd/user/steamos-intel-handheld-gamescop
 tar -tf "$main_pkg" | grep -Fx "etc/systemd/user/gamescope-session.service.wants/steamos-intel-handheld-gamescope-display.service" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "etc/gamescope/scripts/00-steamos-intel-handheld/displays/msi.claw-8-ai-plus.lcd.lua" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-ec/plugin.json" >/dev/null
+tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-ec/package.json" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-ec/main.py" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-ec/dist/index.js" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/plugin.json" >/dev/null
+tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/package.json" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/main.py" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/dist/index.js" >/dev/null
 tar -tf "$main_pkg" | grep -Fx ".INSTALL" >/dev/null

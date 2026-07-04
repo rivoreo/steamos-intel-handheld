@@ -200,9 +200,14 @@ def test_arch_release_workflow_verifies_repository_artifact_before_pages_deploy(
         "msi.claw-8-ai-plus.lcd.lua"
     ) in workflow
     assert "home/deck/homebrew/plugins/steamos-intel-handheld-ec/plugin.json" in workflow
+    assert "home/deck/homebrew/plugins/steamos-intel-handheld-ec/package.json" in workflow
     assert "home/deck/homebrew/plugins/steamos-intel-handheld-ec/dist/index.js" in workflow
     assert (
         "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/plugin.json"
+        in workflow
+    )
+    assert (
+        "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/package.json"
         in workflow
     )
     assert (

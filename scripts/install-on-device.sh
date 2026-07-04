@@ -18,10 +18,12 @@ tar -C "$repo_root" -czf - \
   decky/steamos-intel-handheld-ec/README.md \
   decky/steamos-intel-handheld-ec/dist/index.js \
   decky/steamos-intel-handheld-ec/main.py \
+  decky/steamos-intel-handheld-ec/package.json \
   decky/steamos-intel-handheld-ec/plugin.json \
   decky/steamos-intel-handheld-game-power/README.md \
   decky/steamos-intel-handheld-game-power/dist/index.js \
   decky/steamos-intel-handheld-game-power/main.py \
+  decky/steamos-intel-handheld-game-power/package.json \
   decky/steamos-intel-handheld-game-power/plugin.json \
   | ssh "$target" "
   set -euo pipefail
@@ -128,6 +130,7 @@ WRAPPER
   decky_dst=/home/deck/homebrew/plugins/steamos-intel-handheld-ec
   install -d -m 0755 \"\$decky_dst/dist\"
   install -m 0644 \"\$decky_src/plugin.json\" \"\$decky_dst/plugin.json\"
+  install -m 0644 \"\$decky_src/package.json\" \"\$decky_dst/package.json\"
   install -m 0644 \"\$decky_src/main.py\" \"\$decky_dst/main.py\"
   install -m 0644 \"\$decky_src/dist/index.js\" \"\$decky_dst/dist/index.js\"
   install -m 0644 \"\$decky_src/README.md\" \"\$decky_dst/README.md\"
@@ -136,6 +139,7 @@ WRAPPER
   game_power_decky_dst=/home/deck/homebrew/plugins/steamos-intel-handheld-game-power
   install -d -m 0755 \"\$game_power_decky_dst/dist\"
   install -m 0644 \"\$game_power_decky_src/plugin.json\" \"\$game_power_decky_dst/plugin.json\"
+  install -m 0644 \"\$game_power_decky_src/package.json\" \"\$game_power_decky_dst/package.json\"
   install -m 0644 \"\$game_power_decky_src/main.py\" \"\$game_power_decky_dst/main.py\"
   install -m 0644 \"\$game_power_decky_src/dist/index.js\" \"\$game_power_decky_dst/dist/index.js\"
   install -m 0644 \"\$game_power_decky_src/README.md\" \"\$game_power_decky_dst/README.md\"

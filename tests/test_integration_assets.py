@@ -224,6 +224,7 @@ def test_manual_installer_installs_decky_charge_limit_plugin():
     assert "/home/deck/homebrew/plugins/steamos-intel-handheld-ec" in script
     assert "install -m 0644" in script
     assert "decky_src/plugin.json" in script
+    assert "decky_src/package.json" in script
     assert "decky_src/dist/index.js" in script
     assert "report_decky_loader_status" in script
     assert "/home/deck/homebrew/services/PluginLoader" in script
@@ -237,6 +238,7 @@ def test_manual_installer_installs_decky_game_power_plugin():
     assert "/home/deck/homebrew/plugins/steamos-intel-handheld-game-power" in script
     assert "game_power_decky_src" in script
     assert "game_power_decky_dst" in script
+    assert "game_power_decky_src/package.json" in script
     assert "game_power_decky_src/dist/index.js" in script
     assert "Game Power plugin files are installed" in script
 
@@ -250,6 +252,7 @@ def test_arch_package_installs_decky_game_power_plugin():
         'steamos-intel-handheld-game-power"'
     ) in pkgbuild
     assert '"$game_power_decky_src/plugin.json"' in pkgbuild
+    assert '"$game_power_decky_src/package.json"' in pkgbuild
     assert '"$game_power_decky_src/main.py"' in pkgbuild
     assert '"$game_power_decky_src/dist/index.js"' in pkgbuild
 

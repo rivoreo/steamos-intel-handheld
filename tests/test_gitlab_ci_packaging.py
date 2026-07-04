@@ -160,8 +160,13 @@ def test_gitlab_artifact_dry_run_script_checks_package_and_repo_shape() -> None:
         "msi.claw-8-ai-plus.lcd.lua"
     ) in script
     assert "home/deck/homebrew/plugins/steamos-intel-handheld-ec/plugin.json" in script
+    assert "home/deck/homebrew/plugins/steamos-intel-handheld-ec/package.json" in script
     assert (
         "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/plugin.json"
+        in script
+    )
+    assert (
+        "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/package.json"
         in script
     )
     assert (
