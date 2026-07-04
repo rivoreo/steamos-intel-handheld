@@ -75,16 +75,19 @@ system.
 
 The Game power governor is a separate control loop for foreground Steam games
 on Intel integrated graphics. It is enabled by default with the reversible
-GPU-priority policy plus a balanced CPU max-frequency cap: P-core 3000MHz,
-E-core 2400MHz, and a 0.30 core-share entry threshold. It does not replace
-SteamOS Manager's TDP slider and does not raise PL1 automatically. The TDP
-backend continues to own the total package-power contract.
+GPU-priority EPP policy. CPU max-frequency caps remain available as explicit
+profile/debug candidates using the measured P-core 3000MHz, E-core 2400MHz,
+and 0.30 core-share entry threshold, but they are not part of the daemon
+default. It does not replace SteamOS Manager's TDP slider and does not raise
+PL1 automatically. The TDP backend continues to own the total package-power
+contract.
 
 The governor observes Steam game cgroups, RAPL package/core/uncore power, and
-DRM fdinfo engine activity. In `gpu-priority` mode it uses reversible CPU EPP hints and CPU max-frequency caps to reduce CPU package pressure when the iGPU
-is active and package power is already near PL1. CPU-cap entry and sustain use
-separate hysteresis so a successful cap lowering core share does not immediately
-self-cancel.
+DRM fdinfo engine activity. In default `gpu-priority` mode it uses reversible
+CPU EPP hints to reduce CPU package pressure when the iGPU is active and
+package power is already near PL1. Explicit CPU-cap runs add max-frequency caps
+with separate entry and sustain hysteresis so a successful cap lowering core
+share does not immediately self-cancel.
 
 Every active write starts from a CPUFreq snapshot. The service restores the
 previous EPP and `scaling_max_freq` values when the game disappears, the samples

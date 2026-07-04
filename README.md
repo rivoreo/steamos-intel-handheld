@@ -205,12 +205,14 @@ until the `xe` kernel driver exposes a real DRM hwmon temperature input such as
 
 The optional game power governor helps Intel integrated graphics keep package
 headroom when CPU boost competes with the iGPU under the same SteamOS TDP. It
-is installed default-on with the reversible GPU-priority policy and a balanced
-CPU cap tuned from controlled 12W, 17W, 22W, and 30W A/B profiles:
+is installed default-on with the reversible GPU-priority EPP policy. CPU
+max-frequency caps stay available as explicit profiler candidates, but the
+daemon default is EPP-only because the current controlled profiles show the cap
+can hurt frame pacing in some low-TDP scenes:
 
 ```bash
 --game-power-mode gpu-priority \
---game-power-cpu-cap on \
+--game-power-cpu-cap off \
 --game-power-pcore-max-mhz 3000 \
 --game-power-ecore-max-mhz 2400 \
 --game-power-cpu-cap-core-share-threshold 0.30 \
@@ -237,12 +239,15 @@ VERIFY_GAME_POWER_APPID=1091500 scripts/verify-game-power-on-device.sh root@10.1
 ```
 
 `observe` only reads sensors. `gpu-priority` snapshots CPUFreq policy state,
-applies reversible EPP hints, and applies max-frequency caps when the service's
-default `--game-power-cpu-cap on` or the standalone `--cpu-cap` flag is used.
-CPU-cap activation still requires high core pressure,
-but once active the governor does not restore only because the cap successfully
+applies reversible EPP hints, and applies max-frequency caps only when the
+daemon is launched with explicit `--game-power-cpu-cap on` or the standalone
+CLI uses `--cpu-cap`. CPU-cap activation still requires high core pressure, but
+once active the governor does not restore only because the cap successfully
 lowered core share; that avoids cap/restore oscillation while the game remains
-package-limited with GPU activity. The governor restores the previous CPU EPP and frequency limits when the active policy deactivates, the command exits, the service stops, or a write fails. It does not raise the SteamOS TDP, does not raise PL1, and does not replace SteamOS Manager's TDP slider.
+package-limited with GPU activity. The governor restores the previous CPU EPP
+and frequency limits when the active policy deactivates, the command exits, the
+service stops, or a write fails. It does not raise the SteamOS TDP, does not
+raise PL1, and does not replace SteamOS Manager's TDP slider.
 
 ### Game-power profiling
 

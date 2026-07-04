@@ -1267,7 +1267,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--game-power-epp", default="balance_power")
     parser.add_argument("--game-power-pcore-max-mhz", type=int, default=3000)
     parser.add_argument("--game-power-ecore-max-mhz", type=int, default=2400)
-    parser.add_argument("--game-power-cpu-cap", choices=["on", "off"], default="on")
+    parser.add_argument("--game-power-cpu-cap", choices=["on", "off"], default="off")
     parser.add_argument("--game-power-cpu-cap-core-share-threshold", type=float, default=0.30)
     parser.add_argument("--game-power-target-appid")
     parser.add_argument(

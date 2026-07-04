@@ -45,7 +45,8 @@ def test_power_control_service_enables_game_power_governor_by_default():
 
     assert "--game-power-mode gpu-priority" in unit
     assert "--game-power-target-appid" not in unit
-    assert "--game-power-cpu-cap on" in unit
+    assert "--game-power-cpu-cap off" in unit
+    assert "--game-power-cpu-cap on" not in unit
     assert "--game-power-pcore-max-mhz 3000" in unit
     assert "--game-power-ecore-max-mhz 2400" in unit
     assert "--game-power-cpu-cap-core-share-threshold 0.30" in unit
@@ -819,14 +820,17 @@ def test_local_check_does_not_lint_external_submodules():
     assert "ruff check ." not in script
 
 
-def test_docs_describe_game_power_governor_default_on_and_reversible():
+def test_docs_describe_game_power_governor_default_epp_only_and_reversible():
     readme = (ROOT / "README.md").read_text()
     design = (ROOT / "docs/design.md").read_text()
+    readme_text = " ".join(readme.split())
+    design_text = " ".join(design.split())
 
     assert "Game power governor" in readme
     assert "--game-power-mode gpu-priority" in readme
-    assert "restores the previous CPU EPP and frequency limits" in readme
-    assert "--game-power-cpu-cap on" in readme
+    assert "restores the previous CPU EPP and frequency limits" in readme_text
+    assert "--game-power-cpu-cap off" in readme
+    assert "default `--game-power-cpu-cap on`" not in readme
     assert "--game-power-pcore-max-mhz 3000" in readme
     assert "--game-power-ecore-max-mhz 2400" in readme
     assert "--game-power-cpu-cap-core-share-threshold 0.30" in readme
@@ -869,8 +873,8 @@ def test_docs_describe_game_power_governor_default_on_and_reversible():
     )
     assert "Game power governor" in design
     assert "enabled by default" in design
-    assert "does not raise PL1 automatically" in design
-    assert "reversible CPU EPP hints" in design
+    assert "does not raise PL1 automatically" in design_text
+    assert "reversible CPU EPP hints" in design_text
 
 
 def test_mangohud_submodule_tracks_fork_branch():
