@@ -8,6 +8,49 @@ import { callable, definePlugin } from "@decky/api";
 import { FC, useEffect, useState } from "react";
 import { FaGamepad } from "react-icons/fa";
 
+type TargetState = {
+  status: string;
+  source: string;
+  confidence: string;
+  fps: number | null;
+  target_frame_ms: number | null;
+  raw: string | null;
+};
+
+type FrameSourceState = {
+  status: string;
+  source: string;
+  confidence: string;
+  avg_fps: number | null;
+  p95_ms: number | null;
+  p99_ms: number | null;
+  sample_count: number | null;
+  window_s: number | null;
+};
+
+type RuntimeSnapshot = {
+  schema_version: string;
+  timestamp_monotonic_s: number | null;
+  source: string;
+  mode: string | null;
+  control_active: boolean;
+  sample_source: string;
+  appid: string | null;
+  last_action: string | null;
+  last_reason: string | null;
+  classification_primary: string | null;
+  classification_confidence: string | null;
+  fps_target: TargetState;
+  frame_source: FrameSourceState;
+  package_w: number | null;
+  core_w: number | null;
+  uncore_w: number | null;
+  pl1_w: number | null;
+  render_busy: number | null;
+  stale: boolean;
+  error: string | null;
+};
+
 type ServiceStatus = {
   active_state: string;
   sub_state: string;
@@ -18,10 +61,12 @@ type ServiceStatus = {
 
 type StatusPayload = {
   service: ServiceStatus;
+  runtime: RuntimeSnapshot;
 };
 
 type SamplePayload = {
   appid: string | null;
+  sample_source: string;
   action: string | null;
   reason: string | null;
   package_w: number | null;
@@ -29,6 +74,8 @@ type SamplePayload = {
   uncore_w: number | null;
   pl1_w: number | null;
   render_busy: number | null;
+  fps_target: TargetState;
+  frame_source: FrameSourceState;
 };
 
 type Mode = "automatic" | "observe" | "off";
@@ -49,7 +96,10 @@ type Copy = {
   unavailable: string;
   currentMode: string;
   serviceState: string;
-  sample: string;
+  telemetry: string;
+  control: string;
+  manualProbe: string;
+  probeNotice: string;
   action: string;
   game: string;
   package: string;
@@ -57,13 +107,18 @@ type Copy = {
   graphics: string;
   noSample: string;
   refresh: string;
+  readProbe: string;
   restore: string;
   applying: string;
   restored: string;
   modes: Record<string, string>;
   modeDescriptions: Record<string, string>;
+  telemetryLabels: Record<string, string>;
+  targetStates: Record<string, string>;
+  frameStates: Record<string, string>;
   actions: Record<string, string>;
   reasons: Record<string, string>;
+  classifications: Record<string, string>;
   policyLabels: Record<string, string>;
   errorPrefix: string;
 };
@@ -76,7 +131,10 @@ const COPY: Record<LocaleKey, Copy> = {
     unavailable: "Game-power status is unavailable.",
     currentMode: "Current mode",
     serviceState: "Background service",
-    sample: "Live status",
+    telemetry: "Runtime telemetry",
+    control: "Control",
+    manualProbe: "Manual sample",
+    probeNotice: "Probe sample - not daemon control",
     action: "Action",
     game: "Current game",
     package: "Package",
@@ -84,34 +142,66 @@ const COPY: Record<LocaleKey, Copy> = {
     graphics: "GPU side",
     noSample: "No foreground game sample",
     refresh: "Refresh",
+    readProbe: "Read one sample",
     restore: "Use service default",
     applying: "Applying...",
     restored: "Using the service default.",
     modes: {
-      automatic: "Balance CPU/GPU",
-      observe: "View data only",
+      automatic: "Balancing from power signals - FPS target unknown",
+      observe: "View data only - no power changes",
       off: "Turn scheduler off",
       default: "Service default",
       unknown: "Unknown",
     },
     modeDescriptions: {
-      automatic: "Balances CPU and GPU power while a game is running.",
-      observe: "Keeps sampling and decisions visible without changing power settings.",
-      off: "Stops game-power sampling and leaves power behavior to the system.",
+      automatic: "Collecting data before changing power",
+      observe: "View data only - no power changes",
+      off: "Scheduler off - no sampling or power changes",
       default: "Uses the packaged default power policy.",
       unknown: "The active game-power mode could not be identified.",
+    },
+    telemetryLabels: {
+      targetAware: "Target-aware balancing",
+      powerSignals: "Balancing from power signals - FPS target unknown",
+      collecting: "Collecting data before changing power",
+      stale: "Runtime data is stale",
+      unavailable: "Daemon runtime data is unavailable",
+    },
+    targetStates: {
+      known: "FPS target known",
+      unknown: "FPS target unknown",
+      unlimited: "FPS target unlimited",
+      unsupported: "FPS target unsupported",
+    },
+    frameStates: {
+      live: "Frame data live",
+      missing: "Frame data missing",
+      stale: "Frame data stale",
+      malformed: "Frame data malformed",
+      unsupported: "Frame data unsupported",
     },
     actions: {
       "observe-only": "Viewing data only",
       "gpu-priority-epp": "GPU priority",
       "gpu-priority-cpu-cap": "GPU priority with CPU cap",
-      "off": "Scheduler off",
+      idle: "Idle",
+      restore: "Restoring system policy",
     },
     reasons: {
       "mode is observe": "Data-only mode is active; no power settings are changed.",
       "mode is off": "The scheduler is off; sampling and power changes are stopped.",
       "package limited with GPU activity": "GPU activity is high, so power is being held for graphics.",
       "package limited with high core pressure": "CPU pressure is high, so CPU power is capped to protect GPU power.",
+    },
+    classifications: {
+      "control-disabled": "Scheduler off",
+      "observe-only": "View data only - no power changes",
+      "no-foreground-game": "No foreground game sample",
+      "fps-target-satisfied": "FPS target already satisfied",
+      "insufficient-power-evidence": "Collecting data before changing power",
+      "not-package-bound": "Package power is not the limit",
+      "gpu-package-bound": "GPU-side package pressure detected",
+      "gpu-package-bound-cpu-contention": "CPU/GPU power contention detected",
     },
     policyLabels: {
       "Balanced automatic policy": "Game balance policy",
@@ -125,7 +215,10 @@ const COPY: Record<LocaleKey, Copy> = {
     unavailable: "無法讀取遊戲電力狀態。",
     currentMode: "目前模式",
     serviceState: "背景服務",
-    sample: "即時狀態",
+    telemetry: "執行中資料",
+    control: "控制",
+    manualProbe: "手動採樣",
+    probeNotice: "手動採樣 - 不代表 daemon 正在控制",
     action: "動作",
     game: "目前遊戲",
     package: "封包",
@@ -133,34 +226,66 @@ const COPY: Record<LocaleKey, Copy> = {
     graphics: "GPU 側",
     noSample: "目前沒有前景遊戲樣本",
     refresh: "重新讀取",
+    readProbe: "讀取一次樣本",
     restore: "使用服務預設",
     applying: "正在套用...",
     restored: "已切回服務預設。",
     modes: {
-      automatic: "平衡 CPU/GPU",
-      observe: "只看數據",
+      automatic: "依功耗訊號平衡 - FPS 目標未知",
+      observe: "只看數據 - 不改動功耗",
       off: "完全停用",
       default: "服務預設",
       unknown: "未知",
     },
     modeDescriptions: {
-      automatic: "遊戲執行時自動平衡 CPU 與 GPU 功耗。",
-      observe: "保留採樣與判斷，只顯示數據，不改變功耗設定。",
-      off: "停止遊戲電力採樣與調度，交回系統處理。",
+      automatic: "正在累積資料，暫不改動功耗",
+      observe: "只看數據 - 不改動功耗",
+      off: "已完全停用 - 不採樣、不改動功耗",
       default: "使用套件內建的預設電力策略。",
       unknown: "無法辨識目前的遊戲電力模式。",
+    },
+    telemetryLabels: {
+      targetAware: "依 FPS 目標平衡",
+      powerSignals: "依功耗訊號平衡 - FPS 目標未知",
+      collecting: "正在累積資料，暫不改動功耗",
+      stale: "執行中資料已過期",
+      unavailable: "缺少 daemon 執行中資料",
+    },
+    targetStates: {
+      known: "FPS 目標已知",
+      unknown: "FPS 目標未知",
+      unlimited: "FPS 目標未限制",
+      unsupported: "FPS 目標不支援",
+    },
+    frameStates: {
+      live: "影格資料即時可用",
+      missing: "缺少影格資料",
+      stale: "影格資料已過期",
+      malformed: "影格資料格式異常",
+      unsupported: "影格資料不支援",
     },
     actions: {
       "observe-only": "只看數據",
       "gpu-priority-epp": "GPU 優先",
       "gpu-priority-cpu-cap": "GPU 優先，限制 CPU 搶功耗",
-      "off": "已完全停用",
+      idle: "閒置",
+      restore: "正在還原系統策略",
     },
     reasons: {
       "mode is observe": "目前只看數據，不會改動功耗設定。",
       "mode is off": "目前已完全停用，停止採樣與調度。",
       "package limited with GPU activity": "GPU 負載偏高，正在把功耗留給顯示核心。",
       "package limited with high core pressure": "CPU 壓力偏高，正在限制 CPU 搶功耗。",
+    },
+    classifications: {
+      "control-disabled": "已完全停用 - 不採樣、不改動功耗",
+      "observe-only": "只看數據 - 不改動功耗",
+      "no-foreground-game": "目前沒有前景遊戲樣本",
+      "fps-target-satisfied": "FPS 目標已達成",
+      "insufficient-power-evidence": "正在累積資料，暫不改動功耗",
+      "not-package-bound": "封包功耗尚未成為限制",
+      "gpu-package-bound": "偵測到 GPU 側封包功耗壓力",
+      "gpu-package-bound-cpu-contention": "偵測到 CPU/GPU 搶功耗",
     },
     policyLabels: {
       "Balanced automatic policy": "遊戲平衡策略",
@@ -233,8 +358,12 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function fmtWatts(value: number | null): string {
-  return value === null ? "-" : `${value.toFixed(1)} W`;
+function fmtWatts(value: number | null | undefined): string {
+  return value === null || value === undefined ? "-" : `${value.toFixed(1)} W`;
+}
+
+function fmtPercent(value: number | null | undefined): string {
+  return value === null || value === undefined ? "-" : `${Math.round(value * 100)}%`;
 }
 
 function mappedText(map: Record<string, string>, value: string | null | undefined): string {
@@ -251,12 +380,67 @@ function modeKey(mode: string | null | undefined): string {
   return "unknown";
 }
 
-function modeLabel(t: Copy, mode: string | null | undefined): string {
+function modeLabel(
+  t: Copy,
+  mode: string | null | undefined,
+  runtime: RuntimeSnapshot | null,
+): string {
+  if (
+    mode === "automatic" &&
+    !runtime?.stale &&
+    !runtime?.error &&
+    runtime?.fps_target?.status === "known" &&
+    runtime?.frame_source?.status === "live"
+  ) {
+    return t.telemetryLabels.targetAware;
+  }
   return t.modes[modeKey(mode)] ?? t.modes.unknown;
 }
 
 function modeDescription(t: Copy, mode: string | null | undefined): string {
   return t.modeDescriptions[modeKey(mode)] ?? t.modeDescriptions.unknown;
+}
+
+function targetText(t: Copy, target: TargetState | null | undefined): string {
+  if (!target) {
+    return t.targetStates.unknown;
+  }
+  const label = mappedText(t.targetStates, target.status);
+  return target.fps ? `${label}: ${target.fps.toFixed(0)} FPS` : label;
+}
+
+function frameText(t: Copy, frame: FrameSourceState | null | undefined): string {
+  if (!frame) {
+    return t.frameStates.missing;
+  }
+  const label = mappedText(t.frameStates, frame.status);
+  return frame.avg_fps ? `${label}: ${frame.avg_fps.toFixed(1)} FPS` : label;
+}
+
+function runtimeHeadline(
+  t: Copy,
+  mode: string | null | undefined,
+  runtime: RuntimeSnapshot | null,
+): string {
+  if (mode === "off") {
+    return t.modeDescriptions.off;
+  }
+  if (mode === "observe") {
+    return t.modeDescriptions.observe;
+  }
+  if (!runtime || runtime.error) {
+    return t.telemetryLabels.unavailable;
+  }
+  if (runtime.stale) {
+    return t.telemetryLabels.stale;
+  }
+  if (runtime.fps_target.status === "known" && runtime.frame_source.status === "live") {
+    return t.telemetryLabels.targetAware;
+  }
+  if (runtime.frame_source.status !== "live") {
+    return t.telemetryLabels.collecting;
+  }
+  return t.telemetryLabels.powerSignals;
 }
 
 const PluginTitle: FC = () => {
@@ -267,6 +451,7 @@ const PluginTitle: FC = () => {
 const GamePowerPanel: FC = () => {
   const t = COPY[useLocale()];
   const [status, setStatus] = useState<ServiceStatus | null>(null);
+  const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [sample, setSample] = useState<SamplePayload | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -279,6 +464,22 @@ const GamePowerPanel: FC = () => {
     try {
       const statusResult = await getStatus();
       setStatus(statusResult.service);
+      setRuntime(statusResult.runtime);
+    } catch (error) {
+      setError(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const readProbe = async () => {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    setError(null);
+    try {
       setSample(await sampleOnce());
     } catch (error) {
       setError(errorText(error));
@@ -298,7 +499,7 @@ const GamePowerPanel: FC = () => {
       await setMode(mode);
       const statusResult = await getStatus();
       setStatus(statusResult.service);
-      setSample(await sampleOnce());
+      setRuntime(statusResult.runtime);
       setNotice(null);
     } catch (error) {
       setError(errorText(error));
@@ -319,7 +520,7 @@ const GamePowerPanel: FC = () => {
       await restoreDefaults();
       const statusResult = await getStatus();
       setStatus(statusResult.service);
-      setSample(await sampleOnce());
+      setRuntime(statusResult.runtime);
       setNotice(t.restored);
     } catch (error) {
       setError(errorText(error));
@@ -333,7 +534,8 @@ const GamePowerPanel: FC = () => {
     load();
   }, []);
 
-  const sampleTitle = sample?.appid ? `${t.game}: ${sample.appid}` : t.noSample;
+  const runtimeTitle = runtime?.appid ? `${t.game}: ${runtime.appid}` : t.noSample;
+  const probeTitle = sample?.appid ? `${t.game}: ${sample.appid}` : t.noSample;
 
   return (
     <>
@@ -342,7 +544,7 @@ const GamePowerPanel: FC = () => {
           <div style={blockStyle}>
             <div className={staticClasses.Title} style={titleStyle}>
               {status
-                ? `${t.currentMode}: ${modeLabel(t, status.mode)}`
+                ? `${t.currentMode}: ${modeLabel(t, status.mode, runtime)}`
                 : busy
                   ? t.loading
                   : t.unavailable}
@@ -354,6 +556,9 @@ const GamePowerPanel: FC = () => {
                 </div>
                 <div style={detailStyle}>{mappedText(t.policyLabels, status.policy_label)}</div>
                 <div style={detailStyle}>{modeDescription(t, status.mode)}</div>
+                <div style={detailStyle}>{runtimeHeadline(t, status.mode, runtime)}</div>
+                <div style={detailStyle}>{targetText(t, runtime?.fps_target)}</div>
+                <div style={detailStyle}>{frameText(t, runtime?.frame_source)}</div>
               </>
             ) : null}
             {notice ? <div style={detailStyle}>{notice}</div> : null}
@@ -364,6 +569,9 @@ const GamePowerPanel: FC = () => {
             ) : null}
           </div>
         </PanelSectionRow>
+      </PanelSection>
+
+      <PanelSection title={t.control}>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => applyMode("automatic")}>
             {busy ? t.applying : t.modes.automatic}
@@ -381,29 +589,31 @@ const GamePowerPanel: FC = () => {
         </PanelSectionRow>
       </PanelSection>
 
-      <PanelSection title={t.sample}>
+      <PanelSection title={t.telemetry}>
         <PanelSectionRow>
           <div style={blockStyle}>
             <div className={staticClasses.Title} style={titleStyle}>
-              {sampleTitle}
+              {runtimeTitle}
             </div>
-            {sample ? (
+            {runtime ? (
               <>
                 <div>
-                  {t.action}: {mappedText(t.actions, sample.action)}
+                  {t.action}: {mappedText(t.actions, runtime.last_action)}
                 </div>
                 <div>
-                  {t.package}: {fmtWatts(sample.package_w)}
+                  {t.package}: {fmtWatts(runtime.package_w)}
                 </div>
                 <div>
-                  {t.core}: {fmtWatts(sample.core_w)}
+                  {t.core}: {fmtWatts(runtime.core_w)}
                 </div>
                 <div>
-                  {t.graphics}: {fmtWatts(sample.uncore_w)}
+                  {t.graphics}: {fmtWatts(runtime.uncore_w)}
                 </div>
-                {sample.reason ? (
-                  <div style={detailStyle}>{mappedText(t.reasons, sample.reason)}</div>
-                ) : null}
+                <div style={detailStyle}>
+                  {mappedText(t.classifications, runtime.classification_primary)}
+                </div>
+                <div style={detailStyle}>{mappedText(t.reasons, runtime.last_reason)}</div>
+                <div style={detailStyle}>Render: {fmtPercent(runtime.render_busy)}</div>
               </>
             ) : (
               <div style={detailStyle}>{busy ? t.loading : t.noSample}</div>
@@ -418,6 +628,43 @@ const GamePowerPanel: FC = () => {
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={restore}>
             {busy ? t.applying : t.restore}
+          </ButtonItem>
+        </PanelSectionRow>
+      </PanelSection>
+
+      <PanelSection title={t.manualProbe}>
+        <PanelSectionRow>
+          <div style={blockStyle}>
+            <div className={staticClasses.Title} style={titleStyle}>
+              {probeTitle}
+            </div>
+            <div style={detailStyle}>{t.probeNotice}</div>
+            {sample ? (
+              <>
+                <div>
+                  {t.action}: {mappedText(t.actions, sample.action)}
+                </div>
+                <div>
+                  {t.package}: {fmtWatts(sample.package_w)}
+                </div>
+                <div>
+                  {t.core}: {fmtWatts(sample.core_w)}
+                </div>
+                <div>
+                  {t.graphics}: {fmtWatts(sample.uncore_w)}
+                </div>
+                <div style={detailStyle}>{targetText(t, sample.fps_target)}</div>
+                <div style={detailStyle}>{frameText(t, sample.frame_source)}</div>
+                {sample.reason ? (
+                  <div style={detailStyle}>{mappedText(t.reasons, sample.reason)}</div>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={readProbe}>
+            {busy ? t.applying : t.readProbe}
           </ButtonItem>
         </PanelSectionRow>
       </PanelSection>

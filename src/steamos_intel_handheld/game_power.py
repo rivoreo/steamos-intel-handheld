@@ -20,6 +20,10 @@ from enum import Enum
 from pathlib import Path
 
 MICROJOULES_PER_JOULE = 1_000_000
+RUNTIME_SNAPSHOT_SCHEMA_VERSION = "game-power-runtime-snapshot-v1"
+DEFAULT_RUNTIME_SNAPSHOT_FILE = Path(
+    "/run/steamos-intel-handheld/game-power-runtime.json"
+)
 
 
 class GamePowerMode(str, Enum):
@@ -89,6 +93,117 @@ class FramePerformanceTelemetry:
     window_s: float | None = None
     source: str | None = None
     confidence: str | None = None
+
+
+@dataclass(frozen=True)
+class GamePowerTargetState:
+    status: str
+    source: str
+    confidence: str
+    fps: float | None = None
+    target_frame_ms: float | None = None
+    raw: str | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "source": self.source,
+            "confidence": self.confidence,
+            "fps": self.fps,
+            "target_frame_ms": self.target_frame_ms,
+            "raw": self.raw,
+        }
+
+
+@dataclass(frozen=True)
+class GamePowerFrameSourceState:
+    status: str
+    source: str
+    confidence: str
+    avg_fps: float | None = None
+    p95_ms: float | None = None
+    p99_ms: float | None = None
+    sample_count: int | None = None
+    window_s: float | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "source": self.source,
+            "confidence": self.confidence,
+            "avg_fps": self.avg_fps,
+            "p95_ms": self.p95_ms,
+            "p99_ms": self.p99_ms,
+            "sample_count": self.sample_count,
+            "window_s": self.window_s,
+        }
+
+
+def target_state_from_telemetry(
+    frame_target: FrameTargetTelemetry | None,
+) -> GamePowerTargetState:
+    if frame_target is None:
+        return GamePowerTargetState(
+            status="unknown",
+            source="none",
+            confidence="low",
+        )
+
+    source = frame_target.source or "none"
+    confidence = frame_target.confidence or "low"
+    if frame_target.fps_target is None:
+        status = (
+            "unlimited"
+            if source in {"manual-unlimited", "gamescope-unlimited", "unlimited"}
+            else "unknown"
+        )
+        return GamePowerTargetState(
+            status=status,
+            source=source,
+            confidence=confidence,
+        )
+
+    return GamePowerTargetState(
+        status="known",
+        source=source,
+        confidence=confidence,
+        fps=_round_or_none(frame_target.fps_target),
+        target_frame_ms=frame_target.target_frame_ms,
+    )
+
+
+def frame_source_state_from_telemetry(
+    frame_performance: FramePerformanceTelemetry | None,
+) -> GamePowerFrameSourceState:
+    if frame_performance is None:
+        return GamePowerFrameSourceState(
+            status="missing",
+            source="none",
+            confidence="low",
+        )
+
+    source = frame_performance.source or "unknown"
+    confidence = frame_performance.confidence or "low"
+    malformed = (
+        frame_performance.sample_count <= 0
+        or frame_performance.avg_fps is None
+        or frame_performance.p95_frame_ms is None
+    )
+    return GamePowerFrameSourceState(
+        status="malformed" if malformed else "live",
+        source=source,
+        confidence=confidence,
+        avg_fps=_round_or_none(frame_performance.avg_fps),
+        p95_ms=_round_or_none(frame_performance.p95_frame_ms),
+        sample_count=frame_performance.sample_count,
+        window_s=_round_or_none(frame_performance.window_s),
+    )
+
+
+def public_game_power_mode(mode: GamePowerMode) -> str:
+    if mode == GamePowerMode.GPU_PRIORITY:
+        return "automatic"
+    return mode.value
 
 
 class MangoHudCsvFramePerformanceReader:
@@ -1472,6 +1587,7 @@ class GamePowerGovernor:
         hint_store: GamePowerHintStore | None = None,
         hint_context_provider: Callable[[GamePowerSample], GamePowerHintContext | None]
         | None = None,
+        runtime_snapshot_path: str | Path | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.base_config = config
@@ -1483,6 +1599,9 @@ class GamePowerGovernor:
         self.sleep = sleep
         self.hint_store = hint_store
         self.hint_context_provider = hint_context_provider
+        self.runtime_snapshot_path = (
+            Path(runtime_snapshot_path) if runtime_snapshot_path is not None else None
+        )
         self.controller = GamePowerController(config)
         self._started_s = time.monotonic()
         self._snapshot: object | None = None
@@ -1520,10 +1639,7 @@ class GamePowerGovernor:
                 classification=classify_game_power_sample(self.config, sample),
             )
             elapsed_s = time.monotonic() - self._started_s
-            if self.output_format == "jsonl":
-                print(format_decision_jsonl(sample, decision, elapsed_s=elapsed_s), flush=True)
-            else:
-                print(_format_decision(sample, decision), flush=True)
+            self._emit_decision(sample, decision, elapsed_s=elapsed_s)
             return decision
         sample = await self.observer.sample()
         self._prepare_context(sample)
@@ -1531,11 +1647,32 @@ class GamePowerGovernor:
         outcome = self._apply_decision(decision)
         self._record_session_sample(decision, outcome)
         elapsed_s = time.monotonic() - self._started_s
+        self._emit_decision(sample, decision, elapsed_s=elapsed_s)
+        return decision
+
+    def _emit_decision(
+        self,
+        sample: GamePowerSample,
+        decision: GamePowerDecision,
+        *,
+        elapsed_s: float,
+    ) -> None:
         if self.output_format == "jsonl":
             print(format_decision_jsonl(sample, decision, elapsed_s=elapsed_s), flush=True)
         else:
             print(_format_decision(sample, decision), flush=True)
-        return decision
+        if self.runtime_snapshot_path is None:
+            return
+        payload = runtime_snapshot_payload(
+            self.config,
+            sample,
+            decision,
+            elapsed_s=time.monotonic(),
+        )
+        try:
+            write_runtime_snapshot(self.runtime_snapshot_path, payload)
+        except OSError as exc:
+            print(f"game-power: runtime snapshot write failed: {exc}", file=sys.stderr)
 
     def restore(self) -> GamePowerActuatorOutcome:
         if self._snapshot is not None:
@@ -1791,6 +1928,83 @@ def format_decision_jsonl(
         "pressure": _pressure_json(sample.pressure),
     }
     return json.dumps(payload, sort_keys=True)
+
+
+def runtime_snapshot_payload(
+    config: GamePowerConfig,
+    sample: GamePowerSample,
+    decision: GamePowerDecision,
+    *,
+    elapsed_s: float,
+    source: str = "daemon",
+    sample_source: str = "governor",
+    stale: bool = False,
+    error: str | None = None,
+) -> dict[str, object]:
+    rapl = sample.rapl
+    classification = decision.classification
+    return {
+        "schema_version": RUNTIME_SNAPSHOT_SCHEMA_VERSION,
+        "timestamp_monotonic_s": round(elapsed_s, 3),
+        "source": source,
+        "mode": public_game_power_mode(config.mode),
+        "control_active": config.mode == GamePowerMode.GPU_PRIORITY,
+        "sample_source": sample_source,
+        "appid": sample.appid,
+        "last_action": decision.action.value,
+        "last_reason": decision.reason,
+        "classification_primary": (
+            classification.primary if classification is not None else None
+        ),
+        "classification_confidence": (
+            classification.confidence if classification is not None else None
+        ),
+        "fps_target": target_state_from_telemetry(sample.frame_target).to_json(),
+        "frame_source": frame_source_state_from_telemetry(
+            sample.frame_performance
+        ).to_json(),
+        "package_w": _round_or_none(rapl.package_w if rapl else None),
+        "core_w": _round_or_none(rapl.core_w if rapl else None),
+        "uncore_w": _round_or_none(rapl.uncore_w if rapl else None),
+        "pl1_w": sample.pl1_w,
+        "render_busy": _round_or_none(sample.fdinfo_busy.get("render")),
+        "stale": stale,
+        "error": error,
+    }
+
+
+def format_runtime_snapshot_json(
+    config: GamePowerConfig,
+    sample: GamePowerSample,
+    decision: GamePowerDecision,
+    *,
+    elapsed_s: float,
+    source: str = "daemon",
+    sample_source: str = "governor",
+    stale: bool = False,
+    error: str | None = None,
+) -> str:
+    return json.dumps(
+        runtime_snapshot_payload(
+            config,
+            sample,
+            decision,
+            elapsed_s=elapsed_s,
+            source=source,
+            sample_source=sample_source,
+            stale=stale,
+            error=error,
+        ),
+        sort_keys=True,
+    )
+
+
+def write_runtime_snapshot(path: str | Path, payload: dict[str, object]) -> None:
+    snapshot_path = Path(path)
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = snapshot_path.with_name(f".{snapshot_path.name}.tmp")
+    tmp_path.write_text(json.dumps(payload, sort_keys=True) + "\n")
+    tmp_path.replace(snapshot_path)
 
 
 def _fmt_w(value: float | None) -> str:
@@ -2052,6 +2266,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--frame-performance-csv")
     parser.add_argument("--frame-performance-window-samples", type=_positive_int, default=20)
     parser.add_argument("--frame-performance-min-samples", type=_positive_int, default=12)
+    parser.add_argument("--runtime-snapshot-file")
     parser.add_argument("--hint-cache")
     return parser
 
@@ -2137,6 +2352,7 @@ async def run_cli(args: argparse.Namespace) -> None:
         actuator=actuator,
         output_format=args.output_format,
         hint_store=GamePowerHintStore(args.hint_cache) if args.hint_cache else None,
+        runtime_snapshot_path=args.runtime_snapshot_file,
     )
     iterations = max(1, int(args.duration_s / config.poll_s))
     try:

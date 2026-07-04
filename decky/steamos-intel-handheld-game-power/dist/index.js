@@ -96,7 +96,10 @@ const COPY = {
         unavailable: "Game-power status is unavailable.",
         currentMode: "Current mode",
         serviceState: "Background service",
-        sample: "Live status",
+        telemetry: "Runtime telemetry",
+        control: "Control",
+        manualProbe: "Manual sample",
+        probeNotice: "Probe sample - not daemon control",
         action: "Action",
         game: "Current game",
         package: "Package",
@@ -104,34 +107,66 @@ const COPY = {
         graphics: "GPU side",
         noSample: "No foreground game sample",
         refresh: "Refresh",
+        readProbe: "Read one sample",
         restore: "Use service default",
         applying: "Applying...",
         restored: "Using the service default.",
         modes: {
-            automatic: "Balance CPU/GPU",
-            observe: "View data only",
+            automatic: "Balancing from power signals - FPS target unknown",
+            observe: "View data only - no power changes",
             off: "Turn scheduler off",
             default: "Service default",
             unknown: "Unknown",
         },
         modeDescriptions: {
-            automatic: "Balances CPU and GPU power while a game is running.",
-            observe: "Keeps sampling and decisions visible without changing power settings.",
-            off: "Stops game-power sampling and leaves power behavior to the system.",
+            automatic: "Collecting data before changing power",
+            observe: "View data only - no power changes",
+            off: "Scheduler off - no sampling or power changes",
             default: "Uses the packaged default power policy.",
             unknown: "The active game-power mode could not be identified.",
+        },
+        telemetryLabels: {
+            targetAware: "Target-aware balancing",
+            powerSignals: "Balancing from power signals - FPS target unknown",
+            collecting: "Collecting data before changing power",
+            stale: "Runtime data is stale",
+            unavailable: "Daemon runtime data is unavailable",
+        },
+        targetStates: {
+            known: "FPS target known",
+            unknown: "FPS target unknown",
+            unlimited: "FPS target unlimited",
+            unsupported: "FPS target unsupported",
+        },
+        frameStates: {
+            live: "Frame data live",
+            missing: "Frame data missing",
+            stale: "Frame data stale",
+            malformed: "Frame data malformed",
+            unsupported: "Frame data unsupported",
         },
         actions: {
             "observe-only": "Viewing data only",
             "gpu-priority-epp": "GPU priority",
             "gpu-priority-cpu-cap": "GPU priority with CPU cap",
-            "off": "Scheduler off",
+            idle: "Idle",
+            restore: "Restoring system policy",
         },
         reasons: {
             "mode is observe": "Data-only mode is active; no power settings are changed.",
             "mode is off": "The scheduler is off; sampling and power changes are stopped.",
             "package limited with GPU activity": "GPU activity is high, so power is being held for graphics.",
             "package limited with high core pressure": "CPU pressure is high, so CPU power is capped to protect GPU power.",
+        },
+        classifications: {
+            "control-disabled": "Scheduler off",
+            "observe-only": "View data only - no power changes",
+            "no-foreground-game": "No foreground game sample",
+            "fps-target-satisfied": "FPS target already satisfied",
+            "insufficient-power-evidence": "Collecting data before changing power",
+            "not-package-bound": "Package power is not the limit",
+            "gpu-package-bound": "GPU-side package pressure detected",
+            "gpu-package-bound-cpu-contention": "CPU/GPU power contention detected",
         },
         policyLabels: {
             "Balanced automatic policy": "Game balance policy",
@@ -145,7 +180,10 @@ const COPY = {
         unavailable: "無法讀取遊戲電力狀態。",
         currentMode: "目前模式",
         serviceState: "背景服務",
-        sample: "即時狀態",
+        telemetry: "執行中資料",
+        control: "控制",
+        manualProbe: "手動採樣",
+        probeNotice: "手動採樣 - 不代表 daemon 正在控制",
         action: "動作",
         game: "目前遊戲",
         package: "封包",
@@ -153,34 +191,66 @@ const COPY = {
         graphics: "GPU 側",
         noSample: "目前沒有前景遊戲樣本",
         refresh: "重新讀取",
+        readProbe: "讀取一次樣本",
         restore: "使用服務預設",
         applying: "正在套用...",
         restored: "已切回服務預設。",
         modes: {
-            automatic: "平衡 CPU/GPU",
-            observe: "只看數據",
+            automatic: "依功耗訊號平衡 - FPS 目標未知",
+            observe: "只看數據 - 不改動功耗",
             off: "完全停用",
             default: "服務預設",
             unknown: "未知",
         },
         modeDescriptions: {
-            automatic: "遊戲執行時自動平衡 CPU 與 GPU 功耗。",
-            observe: "保留採樣與判斷，只顯示數據，不改變功耗設定。",
-            off: "停止遊戲電力採樣與調度，交回系統處理。",
+            automatic: "正在累積資料，暫不改動功耗",
+            observe: "只看數據 - 不改動功耗",
+            off: "已完全停用 - 不採樣、不改動功耗",
             default: "使用套件內建的預設電力策略。",
             unknown: "無法辨識目前的遊戲電力模式。",
+        },
+        telemetryLabels: {
+            targetAware: "依 FPS 目標平衡",
+            powerSignals: "依功耗訊號平衡 - FPS 目標未知",
+            collecting: "正在累積資料，暫不改動功耗",
+            stale: "執行中資料已過期",
+            unavailable: "缺少 daemon 執行中資料",
+        },
+        targetStates: {
+            known: "FPS 目標已知",
+            unknown: "FPS 目標未知",
+            unlimited: "FPS 目標未限制",
+            unsupported: "FPS 目標不支援",
+        },
+        frameStates: {
+            live: "影格資料即時可用",
+            missing: "缺少影格資料",
+            stale: "影格資料已過期",
+            malformed: "影格資料格式異常",
+            unsupported: "影格資料不支援",
         },
         actions: {
             "observe-only": "只看數據",
             "gpu-priority-epp": "GPU 優先",
             "gpu-priority-cpu-cap": "GPU 優先，限制 CPU 搶功耗",
-            "off": "已完全停用",
+            idle: "閒置",
+            restore: "正在還原系統策略",
         },
         reasons: {
             "mode is observe": "目前只看數據，不會改動功耗設定。",
             "mode is off": "目前已完全停用，停止採樣與調度。",
             "package limited with GPU activity": "GPU 負載偏高，正在把功耗留給顯示核心。",
             "package limited with high core pressure": "CPU 壓力偏高，正在限制 CPU 搶功耗。",
+        },
+        classifications: {
+            "control-disabled": "已完全停用 - 不採樣、不改動功耗",
+            "observe-only": "只看數據 - 不改動功耗",
+            "no-foreground-game": "目前沒有前景遊戲樣本",
+            "fps-target-satisfied": "FPS 目標已達成",
+            "insufficient-power-evidence": "正在累積資料，暫不改動功耗",
+            "not-package-bound": "封包功耗尚未成為限制",
+            "gpu-package-bound": "偵測到 GPU 側封包功耗壓力",
+            "gpu-package-bound-cpu-contention": "偵測到 CPU/GPU 搶功耗",
         },
         policyLabels: {
             "Balanced automatic policy": "遊戲平衡策略",
@@ -242,7 +312,10 @@ function errorText(error) {
     return error instanceof Error ? error.message : String(error);
 }
 function fmtWatts(value) {
-    return value === null ? "-" : `${value.toFixed(1)} W`;
+    return value === null || value === undefined ? "-" : `${value.toFixed(1)} W`;
+}
+function fmtPercent(value) {
+    return value === null || value === undefined ? "-" : `${Math.round(value * 100)}%`;
 }
 function mappedText(map, value) {
     if (!value) {
@@ -256,11 +329,53 @@ function modeKey(mode) {
     }
     return "unknown";
 }
-function modeLabel(t, mode) {
+function modeLabel(t, mode, runtime) {
+    if (mode === "automatic" &&
+        !runtime?.stale &&
+        !runtime?.error &&
+        runtime?.fps_target?.status === "known" &&
+        runtime?.frame_source?.status === "live") {
+        return t.telemetryLabels.targetAware;
+    }
     return t.modes[modeKey(mode)] ?? t.modes.unknown;
 }
 function modeDescription(t, mode) {
     return t.modeDescriptions[modeKey(mode)] ?? t.modeDescriptions.unknown;
+}
+function targetText(t, target) {
+    if (!target) {
+        return t.targetStates.unknown;
+    }
+    const label = mappedText(t.targetStates, target.status);
+    return target.fps ? `${label}: ${target.fps.toFixed(0)} FPS` : label;
+}
+function frameText(t, frame) {
+    if (!frame) {
+        return t.frameStates.missing;
+    }
+    const label = mappedText(t.frameStates, frame.status);
+    return frame.avg_fps ? `${label}: ${frame.avg_fps.toFixed(1)} FPS` : label;
+}
+function runtimeHeadline(t, mode, runtime) {
+    if (mode === "off") {
+        return t.modeDescriptions.off;
+    }
+    if (mode === "observe") {
+        return t.modeDescriptions.observe;
+    }
+    if (!runtime || runtime.error) {
+        return t.telemetryLabels.unavailable;
+    }
+    if (runtime.stale) {
+        return t.telemetryLabels.stale;
+    }
+    if (runtime.fps_target.status === "known" && runtime.frame_source.status === "live") {
+        return t.telemetryLabels.targetAware;
+    }
+    if (runtime.frame_source.status !== "live") {
+        return t.telemetryLabels.collecting;
+    }
+    return t.telemetryLabels.powerSignals;
 }
 const PluginTitle = () => {
     const t = COPY[useLocale()];
@@ -269,6 +384,7 @@ const PluginTitle = () => {
 const GamePowerPanel = () => {
     const t = COPY[useLocale()];
     const [status, setStatus] = SP_REACT.useState(null);
+    const [runtime, setRuntime] = SP_REACT.useState(null);
     const [sample, setSample] = SP_REACT.useState(null);
     const [notice, setNotice] = SP_REACT.useState(null);
     const [error, setError] = SP_REACT.useState(null);
@@ -280,6 +396,23 @@ const GamePowerPanel = () => {
         try {
             const statusResult = await getStatus();
             setStatus(statusResult.service);
+            setRuntime(statusResult.runtime);
+        }
+        catch (error) {
+            setError(errorText(error));
+        }
+        finally {
+            setBusy(false);
+        }
+    };
+    const readProbe = async () => {
+        if (busy) {
+            return;
+        }
+        setBusy(true);
+        setNotice(null);
+        setError(null);
+        try {
             setSample(await sampleOnce());
         }
         catch (error) {
@@ -300,7 +433,7 @@ const GamePowerPanel = () => {
             await setMode(mode);
             const statusResult = await getStatus();
             setStatus(statusResult.service);
-            setSample(await sampleOnce());
+            setRuntime(statusResult.runtime);
             setNotice(null);
         }
         catch (error) {
@@ -322,7 +455,7 @@ const GamePowerPanel = () => {
             await restoreDefaults();
             const statusResult = await getStatus();
             setStatus(statusResult.service);
-            setSample(await sampleOnce());
+            setRuntime(statusResult.runtime);
             setNotice(t.restored);
         }
         catch (error) {
@@ -336,12 +469,13 @@ const GamePowerPanel = () => {
     SP_REACT.useEffect(() => {
         load();
     }, []);
-    const sampleTitle = sample?.appid ? `${t.game}: ${sample.appid}` : t.noSample;
-    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs(DFL.PanelSection, { title: t.panelTitle, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: status
-                                        ? `${t.currentMode}: ${modeLabel(t, status.mode)}`
-                                        : busy
-                                            ? t.loading
-                                            : t.unavailable }), status ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.serviceState, ": ", status.active_state, "/", status.sub_state] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.policyLabels, status.policy_label) }), SP_JSX.jsx("div", { style: detailStyle, children: modeDescription(t, status.mode) })] })) : null, notice ? SP_JSX.jsx("div", { style: detailStyle, children: notice }) : null, error ? (SP_JSX.jsxs("div", { role: "alert", style: detailStyle, children: [t.errorPrefix, ": ", error] })) : null] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("automatic"), children: busy ? t.applying : t.modes.automatic }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("observe"), children: busy ? t.applying : t.modes.observe }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("off"), children: busy ? t.applying : t.modes.off }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.sample, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: sampleTitle }), sample ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, sample.action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(sample.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(sample.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(sample.uncore_w)] }), sample.reason ? (SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, sample.reason) })) : null] })) : (SP_JSX.jsx("div", { style: detailStyle, children: busy ? t.loading : t.noSample }))] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: load, children: busy ? t.applying : t.refresh }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: restore, children: busy ? t.applying : t.restore }) })] })] }));
+    const runtimeTitle = runtime?.appid ? `${t.game}: ${runtime.appid}` : t.noSample;
+    const probeTitle = sample?.appid ? `${t.game}: ${sample.appid}` : t.noSample;
+    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.PanelSection, { title: t.panelTitle, children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: status
+                                    ? `${t.currentMode}: ${modeLabel(t, status.mode, runtime)}`
+                                    : busy
+                                        ? t.loading
+                                        : t.unavailable }), status ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.serviceState, ": ", status.active_state, "/", status.sub_state] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.policyLabels, status.policy_label) }), SP_JSX.jsx("div", { style: detailStyle, children: modeDescription(t, status.mode) }), SP_JSX.jsx("div", { style: detailStyle, children: runtimeHeadline(t, status.mode, runtime) }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, runtime?.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, runtime?.frame_source) })] })) : null, notice ? SP_JSX.jsx("div", { style: detailStyle, children: notice }) : null, error ? (SP_JSX.jsxs("div", { role: "alert", style: detailStyle, children: [t.errorPrefix, ": ", error] })) : null] }) }) }), SP_JSX.jsxs(DFL.PanelSection, { title: t.control, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("automatic"), children: busy ? t.applying : t.modes.automatic }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("observe"), children: busy ? t.applying : t.modes.observe }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("off"), children: busy ? t.applying : t.modes.off }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.telemetry, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: runtimeTitle }), runtime ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, runtime.last_action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(runtime.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(runtime.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(runtime.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.classifications, runtime.classification_primary) }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, runtime.last_reason) }), SP_JSX.jsxs("div", { style: detailStyle, children: ["Render: ", fmtPercent(runtime.render_busy)] })] })) : (SP_JSX.jsx("div", { style: detailStyle, children: busy ? t.loading : t.noSample }))] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: load, children: busy ? t.applying : t.refresh }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: restore, children: busy ? t.applying : t.restore }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.manualProbe, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: probeTitle }), SP_JSX.jsx("div", { style: detailStyle, children: t.probeNotice }), sample ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, sample.action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(sample.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(sample.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(sample.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, sample.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, sample.frame_source) }), sample.reason ? (SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, sample.reason) })) : null] })) : null] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: readProbe, children: busy ? t.applying : t.readProbe }) })] })] }));
 };
 var index = definePlugin(() => ({
     name: "Game Power",

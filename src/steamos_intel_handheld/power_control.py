@@ -21,6 +21,7 @@ from pathlib import Path
 
 from steamos_intel_handheld import game_power_control
 from steamos_intel_handheld.game_power import (
+    DEFAULT_RUNTIME_SNAPSHOT_FILE,
     CpuPolicyActuator,
     GamePowerConfig,
     GamePowerGovernor,
@@ -1147,6 +1148,7 @@ def build_game_power_governor(
         config_provider=config_provider,
         hint_store=hint_store,
         hint_context_provider=_build_game_power_hint_context_provider(args, backend),
+        runtime_snapshot_path=args.game_power_runtime_snapshot_file,
     )
 
 
@@ -1273,6 +1275,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--game-power-control-file",
         default=str(game_power_control.DEFAULT_CONTROL_FILE),
+    )
+    parser.add_argument(
+        "--game-power-runtime-snapshot-file",
+        default=str(DEFAULT_RUNTIME_SNAPSHOT_FILE),
     )
     parser.add_argument("--game-power-hint-cache", default=DEFAULT_GAME_POWER_HINT_CACHE)
     parser.add_argument("--user", default="deck")

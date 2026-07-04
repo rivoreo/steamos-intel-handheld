@@ -86,6 +86,27 @@ def test_parser_configures_game_power_defaults_gpu_priority_epp_only():
     assert config.target_appid is None
     assert power_control.build_game_power_governor(args) is not None
     assert args.game_power_hint_cache == "/var/lib/steamos-intel-handheld/game-power-hints.json"
+    assert (
+        args.game_power_runtime_snapshot_file
+        == "/run/steamos-intel-handheld/game-power-runtime.json"
+    )
+
+
+def test_build_game_power_governor_wires_runtime_snapshot_path(tmp_path):
+    args = power_control.build_parser().parse_args(
+        [
+            "serve",
+            "--sysfs-root",
+            str(tmp_path / "sys"),
+            "--game-power-runtime-snapshot-file",
+            str(tmp_path / "runtime.json"),
+        ]
+    )
+
+    governor = power_control.build_game_power_governor(args)
+
+    assert governor is not None
+    assert governor.runtime_snapshot_path == tmp_path / "runtime.json"
 
 
 def test_build_game_power_governor_wires_power_source_context_provider(tmp_path):

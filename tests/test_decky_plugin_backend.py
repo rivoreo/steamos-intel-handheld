@@ -192,6 +192,73 @@ def test_game_power_backend_status_combines_service_and_runtime_control(monkeypa
     ]
 
 
+def test_game_power_backend_status_includes_authoritative_runtime_snapshot(
+    monkeypatch,
+    tmp_path,
+):
+    backend = load_game_power_backend()
+    snapshot_path = tmp_path / "game-power-runtime.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "game-power-runtime-snapshot-v1",
+                "timestamp_monotonic_s": 10.0,
+                "source": "daemon",
+                "mode": "automatic",
+                "control_active": True,
+                "sample_source": "governor",
+                "appid": "1091500",
+                "last_action": "gpu-priority-epp",
+                "last_reason": "package limited with GPU activity",
+                "classification_primary": "gpu-package-bound",
+                "classification_confidence": "high",
+                "fps_target": {
+                    "status": "unknown",
+                    "source": "none",
+                    "confidence": "low",
+                    "fps": None,
+                    "target_frame_ms": None,
+                    "raw": None,
+                },
+                "frame_source": {
+                    "status": "missing",
+                    "source": "none",
+                    "confidence": "low",
+                    "avg_fps": None,
+                    "p95_ms": None,
+                    "p99_ms": None,
+                    "sample_count": None,
+                    "window_s": None,
+                },
+                "package_w": 24.0,
+                "core_w": 7.0,
+                "uncore_w": 10.0,
+                "pl1_w": 30,
+                "render_busy": 0.91,
+                "stale": False,
+                "error": None,
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(backend, "RUNTIME_SNAPSHOT", str(snapshot_path))
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        if cmd[0] == "systemctl":
+            return FakeCommandProcess(stdout=b"ActiveState=active\nSubState=running\n")
+        return FakeCommandProcess(stdout=b'{"mode": "default", "override_active": false}')
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = asyncio.run(backend.Plugin().get_status())
+
+    assert result["runtime"]["schema_version"] == "game-power-runtime-snapshot-v1"
+    assert result["runtime"]["source"] == "daemon"
+    assert result["runtime"]["sample_source"] == "governor"
+    assert result["runtime"]["fps_target"]["status"] == "unknown"
+    assert result["runtime"]["frame_source"]["status"] == "missing"
+
+
 def test_game_power_backend_sample_once_returns_public_subset(monkeypatch):
     backend = load_game_power_backend()
     private_row = {
@@ -220,6 +287,7 @@ def test_game_power_backend_sample_once_returns_public_subset(monkeypatch):
 
     assert result == {
         "appid": "1091500",
+        "sample_source": "probe",
         "action": "observe-only",
         "reason": "sample",
         "package_w": 22.0,
@@ -227,6 +295,24 @@ def test_game_power_backend_sample_once_returns_public_subset(monkeypatch):
         "uncore_w": 9.0,
         "pl1_w": 22.0,
         "render_busy": 0.86,
+        "fps_target": {
+            "status": "unknown",
+            "source": "none",
+            "confidence": "low",
+            "fps": None,
+            "target_frame_ms": None,
+            "raw": None,
+        },
+        "frame_source": {
+            "status": "missing",
+            "source": "none",
+            "confidence": "low",
+            "avg_fps": None,
+            "p95_ms": None,
+            "p99_ms": None,
+            "sample_count": None,
+            "window_s": None,
+        },
     }
 
 
@@ -242,6 +328,7 @@ def test_game_power_backend_sample_once_fallback_uses_public_subset(monkeypatch)
 
     assert result == {
         "appid": None,
+        "sample_source": "probe",
         "action": "observe-only",
         "reason": "no foreground game sample",
         "package_w": None,
@@ -249,6 +336,24 @@ def test_game_power_backend_sample_once_fallback_uses_public_subset(monkeypatch)
         "uncore_w": None,
         "pl1_w": None,
         "render_busy": None,
+        "fps_target": {
+            "status": "unknown",
+            "source": "none",
+            "confidence": "low",
+            "fps": None,
+            "target_frame_ms": None,
+            "raw": None,
+        },
+        "frame_source": {
+            "status": "missing",
+            "source": "none",
+            "confidence": "low",
+            "avg_fps": None,
+            "p95_ms": None,
+            "p99_ms": None,
+            "sample_count": None,
+            "window_s": None,
+        },
     }
 
 

@@ -101,20 +101,22 @@ def test_game_power_decky_frontend_exposes_intent_not_raw_policy_knobs():
     assert '"sample_once"' in frontend
     assert '"set_mode"' in frontend
     assert '"restore_defaults"' in frontend
-    assert "Balance CPU/GPU" in frontend
-    assert "View data only" in frontend
+    assert "Balancing from power signals - FPS target unknown" in frontend
+    assert "View data only - no power changes" in frontend
     assert "Turn scheduler off" in frontend
     assert "遊戲電力" in frontend
-    assert "平衡 CPU/GPU" in frontend
-    assert "只看數據" in frontend
+    assert "依功耗訊號平衡 - FPS 目標未知" in frontend
+    assert "只看數據 - 不改動功耗" in frontend
     assert "完全停用" in frontend
-    assert "平衡 CPU/GPU" in bundled
-    assert "只看數據" in bundled
+    assert "依功耗訊號平衡 - FPS 目標未知" in bundled
+    assert "只看數據 - 不改動功耗" in bundled
     assert "完全停用" in bundled
     assert "模式: automatic" not in frontend
     assert "動作: observe-only" not in frontend
     assert "模式: automatic" not in bundled
     assert "動作: observe-only" not in bundled
+    assert "自動觀察" not in frontend
+    assert "自動觀察" not in bundled
     for forbidden in (
         "P-core",
         "E-core",
@@ -137,12 +139,22 @@ def test_game_power_decky_mode_copy_explains_control_state_differences():
     bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
 
     required_copy = (
-        "Balances CPU and GPU power while a game is running.",
-        "Keeps sampling and decisions visible without changing power settings.",
-        "Stops game-power sampling and leaves power behavior to the system.",
-        "遊戲執行時自動平衡 CPU 與 GPU 功耗。",
-        "保留採樣與判斷，只顯示數據，不改變功耗設定。",
-        "停止遊戲電力採樣與調度，交回系統處理。",
+        "Balancing from power signals - FPS target unknown",
+        "Target-aware balancing",
+        "Collecting data before changing power",
+        "View data only - no power changes",
+        "Scheduler off - no sampling or power changes",
+        "Frame data missing",
+        "Frame data live",
+        "FPS target unknown",
+        "依功耗訊號平衡 - FPS 目標未知",
+        "依 FPS 目標平衡",
+        "正在累積資料，暫不改動功耗",
+        "只看數據 - 不改動功耗",
+        "已完全停用 - 不採樣、不改動功耗",
+        "缺少影格資料",
+        "影格資料即時可用",
+        "FPS 目標未知",
     )
     ambiguous_copy = (
         "Monitor only",
@@ -151,6 +163,7 @@ def test_game_power_decky_mode_copy_explains_control_state_differences():
         "停用調度",
         "只讀取遊戲電力資料，不改變功耗行為。",
         "不接管 CPU/GPU 功耗，交回系統處理。",
+        "自動觀察",
     )
 
     for text in required_copy:
@@ -161,6 +174,36 @@ def test_game_power_decky_mode_copy_explains_control_state_differences():
         assert text not in bundled
 
 
+def test_game_power_decky_automatic_copy_requires_live_target_and_frame_data():
+    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
+    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
+    compact_frontend = "".join(frontend.split())
+    compact_bundled = "".join(bundled.split())
+
+    assert (
+        '!runtime?.stale&&!runtime?.error&&'
+        'runtime?.fps_target?.status==="known"&&'
+        'runtime?.frame_source?.status==="live"'
+    ) in compact_frontend
+    assert (
+        '!runtime?.stale&&!runtime?.error&&'
+        'runtime?.fps_target?.status==="known"&&'
+        'runtime?.frame_source?.status==="live"'
+    ) in compact_bundled
+
+
+def test_game_power_decky_headline_respects_observe_and_off_before_telemetry_state():
+    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
+    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
+
+    assert 'if (mode === "off")' in frontend
+    assert 'if (mode === "observe")' in frontend
+    assert 'runtimeHeadline(t, status.mode, runtime)' in frontend
+    compact_bundled = "".join(bundled.split())
+    assert 'mode==="off"' in compact_bundled
+    assert 'mode==="observe"' in compact_bundled
+
+
 def test_game_power_decky_backend_exposes_safe_mode_api():
     backend = (GAME_POWER_PLUGIN / "main.py").read_text()
 
@@ -169,6 +212,7 @@ def test_game_power_decky_backend_exposes_safe_mode_api():
     assert "async def sample_once" in backend
     assert "async def set_mode" in backend
     assert "async def restore_defaults" in backend
+    assert "RUNTIME_SNAPSHOT" in backend
     assert "steamos-intel-handheld-game-power-control" in backend
     assert "steamos-intel-handheld-power-control.service" in backend
     assert "70-game-power-decky.conf" not in backend

@@ -1046,6 +1046,129 @@ def test_format_decision_jsonl_emits_frame_performance_schema():
     assert row["frame_performance_confidence"] == "high"
 
 
+def test_runtime_snapshot_schema_reports_unknown_target_and_missing_frame_source():
+    sample = make_sample(frame_target=None, frame_performance=None)
+    decision = game_power.GamePowerDecision(
+        GamePowerAction.OBSERVE_ONLY,
+        "package limited with GPU activity",
+        classification=GamePowerClassification(
+            primary="gpu-package-bound",
+            confidence="high",
+        ),
+    )
+
+    row = json.loads(
+        game_power.format_runtime_snapshot_json(
+            GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY),
+            sample,
+            decision,
+            elapsed_s=2.0,
+            sample_source="governor",
+        )
+    )
+
+    assert row["schema_version"] == "game-power-runtime-snapshot-v1"
+    assert row["source"] == "daemon"
+    assert row["mode"] == "automatic"
+    assert row["control_active"] is True
+    assert row["sample_source"] == "governor"
+    assert row["appid"] == "1091500"
+    assert row["last_action"] == "observe-only"
+    assert row["classification_primary"] == "gpu-package-bound"
+    assert row["classification_confidence"] == "high"
+    assert row["fps_target"] == {
+        "status": "unknown",
+        "source": "none",
+        "confidence": "low",
+        "fps": None,
+        "target_frame_ms": None,
+        "raw": None,
+    }
+    assert row["frame_source"] == {
+        "status": "missing",
+        "source": "none",
+        "confidence": "low",
+        "avg_fps": None,
+        "p95_ms": None,
+        "p99_ms": None,
+        "sample_count": None,
+        "window_s": None,
+    }
+    assert row["package_w"] == 22.0
+    assert row["core_w"] == 8.8
+    assert row["uncore_w"] == 7.4
+    assert row["pl1_w"] == 22
+    assert row["render_busy"] == 0.75
+
+
+def test_runtime_snapshot_schema_reports_known_target_and_live_frame_source():
+    sample = make_sample(
+        frame_target=FrameTargetTelemetry(
+            fps_target=40.0,
+            source="manual",
+            confidence="high",
+        ),
+        frame_performance=frame_performance(avg_fps=56.0, p95_frame_ms=22.0),
+    )
+
+    row = json.loads(
+        game_power.format_runtime_snapshot_json(
+            GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY),
+            sample,
+            game_power.GamePowerDecision(GamePowerAction.OBSERVE_ONLY, "sample"),
+            elapsed_s=4.0,
+        )
+    )
+
+    assert row["fps_target"] == {
+        "status": "known",
+        "source": "manual",
+        "confidence": "high",
+        "fps": 40.0,
+        "target_frame_ms": 25.0,
+        "raw": None,
+    }
+    assert row["frame_source"] == {
+        "status": "live",
+        "source": "mangohud-csv",
+        "confidence": "high",
+        "avg_fps": 56.0,
+        "p95_ms": 22.0,
+        "p99_ms": None,
+        "sample_count": 20,
+        "window_s": 2.0,
+    }
+
+
+def test_runtime_snapshot_schema_can_represent_unlimited_fps_target():
+    sample = make_sample(
+        frame_target=FrameTargetTelemetry(
+            fps_target=None,
+            source="manual-unlimited",
+            confidence="high",
+        )
+    )
+
+    row = json.loads(
+        game_power.format_runtime_snapshot_json(
+            GamePowerConfig(mode=GamePowerMode.OBSERVE),
+            sample,
+            game_power.GamePowerDecision(GamePowerAction.OBSERVE_ONLY, "mode is observe"),
+            elapsed_s=1.0,
+        )
+    )
+
+    assert row["control_active"] is False
+    assert row["fps_target"] == {
+        "status": "unlimited",
+        "source": "manual-unlimited",
+        "confidence": "high",
+        "fps": None,
+        "target_frame_ms": None,
+        "raw": None,
+    }
+
+
 def test_low_core_share_still_allows_low_risk_epp_gpu_priority():
     config = GamePowerConfig(
         mode=GamePowerMode.GPU_PRIORITY,
