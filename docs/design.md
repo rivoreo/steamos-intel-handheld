@@ -75,10 +75,16 @@ system.
 
 The Game power governor is a separate control loop for foreground Steam games
 on Intel integrated graphics. It is enabled by default with the reversible
-EPP-only policy. It does not replace SteamOS Manager's TDP slider and does not raise PL1 automatically. The TDP backend continues to own the total package-power contract.
+GPU-priority policy plus a balanced CPU max-frequency cap: P-core 3000MHz,
+E-core 2400MHz, and a 0.30 core-share entry threshold. It does not replace
+SteamOS Manager's TDP slider and does not raise PL1 automatically. The TDP
+backend continues to own the total package-power contract.
 
 The governor observes Steam game cgroups, RAPL package/core/uncore power, and
-DRM fdinfo engine activity. In `gpu-priority` mode it uses reversible CPU EPP hints, and only then optional CPU max-frequency caps, to reduce CPU package pressure when the iGPU is active and package power is already near PL1.
+DRM fdinfo engine activity. In `gpu-priority` mode it uses reversible CPU EPP hints and CPU max-frequency caps to reduce CPU package pressure when the iGPU
+is active and package power is already near PL1. CPU-cap entry and sustain use
+separate hysteresis so a successful cap lowering core share does not immediately
+self-cancel.
 
 Every active write starts from a CPUFreq snapshot. The service restores the
 previous EPP and `scaling_max_freq` values when the game disappears, the samples
@@ -88,10 +94,10 @@ The guarded device verifier runs `observe` and `gpu-priority` through
 snapshot differs from the pre-test snapshot.
 
 The game-power profiler is the measurement layer for future scheduler policy
-work. It keeps the installed default at the validated EPP-only `gpu-priority`
-mode, then temporarily disables the service governor during an A/B profiling
-session so the standalone profiler can compare `off` and candidate policies
-without background policy interference. Profile artifacts include MangoHud FPS
+work. It temporarily disables the service governor during an A/B profiling
+session so the standalone profiler can compare `off`, `gpu-priority`, and
+candidate CPU-cap/background-helper policies without background policy
+interference. Profile artifacts include MangoHud FPS
 CSV data, game-power JSONL decisions, package/core/uncore power summaries,
 render-busy samples, cgroup CPU pressure peaks, TDP snapshots, and CPU policy
 restore diffs.

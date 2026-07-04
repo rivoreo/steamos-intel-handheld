@@ -45,7 +45,10 @@ def test_power_control_service_enables_game_power_governor_by_default():
 
     assert "--game-power-mode gpu-priority" in unit
     assert "--game-power-target-appid" not in unit
-    assert "--game-power-cpu-cap on" not in unit
+    assert "--game-power-cpu-cap on" in unit
+    assert "--game-power-pcore-max-mhz 3000" in unit
+    assert "--game-power-ecore-max-mhz 2400" in unit
+    assert "--game-power-cpu-cap-core-share-threshold 0.30" in unit
 
 
 def test_restore_service_unit_runs_restore_cli_before_power_control():
@@ -452,6 +455,12 @@ def test_game_power_profile_wrapper_supports_cpu_cap_policy_variants():
     assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ" in script
     assert "PROFILE_GAME_POWER_ECORE_MAX_MHZ" in script
     assert "PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD" in script
+    assert 'pcore_max_mhz="${PROFILE_GAME_POWER_PCORE_MAX_MHZ:-3000}"' in script
+    assert 'ecore_max_mhz="${PROFILE_GAME_POWER_ECORE_MAX_MHZ:-2400}"' in script
+    assert (
+        'cpu_cap_core_share_threshold="${PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD:-0.30}"'
+        in script
+    )
     assert "gpu-priority-cpu-cap" in script
     assert "--cpu-cap" in script
     assert '--pcore-max-mhz "$variant_pcore_max_mhz"' in script
@@ -461,6 +470,36 @@ def test_game_power_profile_wrapper_supports_cpu_cap_policy_variants():
     assert '--duration-s "$DURATION_S"' in script
     assert '--warmup-s "$WARMUP_S"' in script
     assert '--poll-s "$POLL_S"' in script
+
+
+def test_game_power_profile_wrapper_supports_background_shaping_policy_variants():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert "apply_background_shaping_variant()" in script
+    assert "restore_background_shaping_variant()" in script
+    assert "gpu-priority-bg-weight" in script
+    assert "gpu-priority-bg-uclamp" in script
+    assert "apply-background-shaping" in script
+    assert "restore-background-shaping" in script
+    assert '--variant "$variant"' in script
+    assert 'background_shaping_variant="cpu-weight-80"' in script
+    assert 'background_shaping_variant="uclamp-max-85"' in script
+    assert "background-shaping-writes.json" in script
+    assert "background-shaping-restore.json" in script
+    assert 'restore_background_shaping_variant "$run_dir" || restored=false' in script
+
+
+def test_game_power_profile_wrapper_aborts_after_unrestored_policy_run():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert "failure_marker=\"${remote_root##*/}.failed\"" in script
+    assert "FAILURE_MARKER='$failure_marker'" in script
+    assert "profile_failed=false" in script
+    assert 'if [ "$restored" != true ]; then' in script
+    assert 'echo "run did not restore cleanly: $run_dir" >&2' in script
+    assert '>"$REMOTE_ROOT/$FAILURE_MARKER"' in script
+    assert "break 4" in script
+    assert 'if [ -f "$local_root/$failure_marker" ]; then' in script
 
 
 def test_game_power_profile_wrapper_records_affinity_restore_snapshot():
@@ -644,6 +683,10 @@ def test_docs_describe_game_power_governor_default_on_and_reversible():
     assert "Game power governor" in readme
     assert "--game-power-mode gpu-priority" in readme
     assert "restores the previous CPU EPP and frequency limits" in readme
+    assert "--game-power-cpu-cap on" in readme
+    assert "--game-power-pcore-max-mhz 3000" in readme
+    assert "--game-power-ecore-max-mhz 2400" in readme
+    assert "--game-power-cpu-cap-core-share-threshold 0.30" in readme
     assert "scripts/verify-game-power-on-device.sh root@10.100.0.19" in readme
     assert 'PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap"' in readme
     assert "PROFILE_GAME_POWER_CAPTURE_MODE=controlled" in readme

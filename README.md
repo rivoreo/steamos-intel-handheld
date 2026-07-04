@@ -205,10 +205,15 @@ until the `xe` kernel driver exposes a real DRM hwmon temperature input such as
 
 The optional game power governor helps Intel integrated graphics keep package
 headroom when CPU boost competes with the iGPU under the same SteamOS TDP. It
-is installed default-on with the reversible EPP-only policy:
+is installed default-on with the reversible GPU-priority policy and a balanced
+CPU cap tuned from controlled 12W, 17W, 22W, and 30W A/B profiles:
 
 ```bash
---game-power-mode gpu-priority
+--game-power-mode gpu-priority \
+--game-power-cpu-cap on \
+--game-power-pcore-max-mhz 3000 \
+--game-power-ecore-max-mhz 2400 \
+--game-power-cpu-cap-core-share-threshold 0.30
 ```
 
 Use the standalone validation CLI when checking a specific game scene:
@@ -220,8 +225,12 @@ VERIFY_GAME_POWER_APPID=1091500 scripts/verify-game-power-on-device.sh root@10.1
 ```
 
 `observe` only reads sensors. `gpu-priority` snapshots CPUFreq policy state,
-applies reversible EPP hints, and only applies max-frequency caps when
-`--cpu-cap` is requested. The governor restores the previous CPU EPP and frequency limits when the active policy deactivates, the command exits, the service stops, or a write fails. It does not raise the SteamOS TDP, does not raise PL1, and does not replace SteamOS Manager's TDP slider.
+applies reversible EPP hints, and applies max-frequency caps when the service's
+default `--game-power-cpu-cap on` or the standalone `--cpu-cap` flag is used.
+CPU-cap activation still requires high core pressure,
+but once active the governor does not restore only because the cap successfully
+lowered core share; that avoids cap/restore oscillation while the game remains
+package-limited with GPU activity. The governor restores the previous CPU EPP and frequency limits when the active policy deactivates, the command exits, the service stops, or a write fails. It does not raise the SteamOS TDP, does not raise PL1, and does not replace SteamOS Manager's TDP slider.
 
 ### Game-power profiling
 
@@ -245,9 +254,9 @@ PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
 PROFILE_GAME_POWER_REPEATS=3 \
 PROFILE_GAME_POWER_FPS_TARGET=40 \
 PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap" \
-PROFILE_GAME_POWER_CPU_CAP_VARIANTS="loose:3400:2600:0.35 balanced:3200:2400:0.35 conservative:3000:2200:0.30" \
+PROFILE_GAME_POWER_CPU_CAP_VARIANTS="balanced:3000:2400:0.30 conservative:2600:2200:0.30" \
 PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000 \
-PROFILE_GAME_POWER_ECORE_MAX_MHZ=2200 \
+PROFILE_GAME_POWER_ECORE_MAX_MHZ=2400 \
 PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD=0.30 \
 scripts/profile-game-power-on-device.sh root@10.100.0.19
 ```
@@ -341,6 +350,18 @@ identifies whether a future guarded background-helper `cpu.weight` or
 `cpu.uclamp.max` soft-cap experiment is justified. A background candidate is not
 eligible for that plan unless its own cgroup appears in `restore-affinity.json`
 with CPU-controller restore files in every run where the candidate was observed.
+When those gates pass, the plan includes a dry-run write ladder for the next
+A/B run. The ladder records the candidate cgroup, observed restore values, and
+one-control-per-run proposals such as `cpu.weight=80` or
+`cpu.uclamp.max=85.00`. It still performs no writes; it is the reviewable input
+for a guarded writer and rollback verifier. The device profiler also exposes
+two guarded candidate policies, `gpu-priority-bg-weight` and
+`gpu-priority-bg-uclamp`, which apply one background-helper cgroup control for
+one run and immediately restore it before the run summary is accepted. For
+systemd-managed user `.service` cgroups, `cpu.weight` is applied through
+`systemctl --user set-property --runtime CPUWeight=...` instead of by directly
+writing the transient cgroup file, so restore follows systemd's own controller
+lifecycle.
 AppID is an experiment grouping key; production game-power policy should remain
 a generic telemetry-driven governor rather than a per-game table.
 

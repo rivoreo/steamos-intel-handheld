@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import subprocess
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -33,6 +34,10 @@ BACKGROUND_SHAPING_MIN_CPU_TIME_S = 1.0
 CGROUP_CPU_CONTROLLER_RESTORE_FILES = frozenset(
     {"cpu.uclamp.max", "cpu.uclamp.min", "cpu.weight", "cpu.max"}
 )
+BACKGROUND_SHAPING_WRITE_VARIANTS = {
+    "cpu-weight-80": ("cpu.weight", "80"),
+    "uclamp-max-85": ("cpu.uclamp.max", "85.00"),
+}
 
 
 @dataclass(frozen=True)
@@ -97,6 +102,7 @@ class RestoreAffinitySummary:
     cgroups: list[str]
     files: list[str]
     cgroup_files: dict[str, list[str]]
+    cgroup_file_values: dict[str, dict[str, str]]
 
 
 @dataclass(frozen=True)
@@ -151,6 +157,7 @@ class RunSummary:
     restore_affinity_cgroups: list[str] | None = None
     restore_affinity_files: list[str] | None = None
     restore_affinity_cgroup_files: dict[str, list[str]] | None = None
+    restore_affinity_cgroup_file_values: dict[str, dict[str, str]] | None = None
     actions: dict[str, int] | None = None
     restored: bool = False
 
@@ -196,6 +203,7 @@ class PolicyAggregate:
     restore_affinity_cgroups: list[str] | None = None
     restore_affinity_files: list[str] | None = None
     restore_affinity_cgroup_files: dict[str, list[str]] | None = None
+    restore_affinity_cgroup_file_values: dict[str, dict[str, list[str]]] | None = None
 
 
 class PolicyVerdict(str, Enum):
@@ -642,6 +650,7 @@ def summarize_restore_affinity_json(path: str | Path) -> RestoreAffinitySummary:
     cgroup_paths: set[str] = set()
     files: set[str] = set()
     cgroup_files_by_path: dict[str, list[str]] = {}
+    cgroup_file_values_by_path: dict[str, dict[str, str]] = {}
     for cgroup in cgroups:
         if not isinstance(cgroup, dict):
             continue
@@ -654,6 +663,10 @@ def summarize_restore_affinity_json(path: str | Path) -> RestoreAffinitySummary:
             files.update(file_names)
             if cgroup_path:
                 cgroup_files_by_path[cgroup_path] = file_names
+                cgroup_file_values_by_path[cgroup_path] = {
+                    str(key): "" if value is None else str(value)
+                    for key, value in sorted(cgroup_files.items())
+                }
 
     return RestoreAffinitySummary(
         thread_count=len(threads),
@@ -661,6 +674,7 @@ def summarize_restore_affinity_json(path: str | Path) -> RestoreAffinitySummary:
         cgroups=sorted(cgroup_paths),
         files=sorted(files),
         cgroup_files=dict(sorted(cgroup_files_by_path.items())),
+        cgroup_file_values=dict(sorted(cgroup_file_values_by_path.items())),
     )
 
 
@@ -845,6 +859,9 @@ def merge_run_summary(
         restore_affinity_cgroup_files=(
             restore_affinity.cgroup_files if restore_affinity else None
         ),
+        restore_affinity_cgroup_file_values=(
+            restore_affinity.cgroup_file_values if restore_affinity else None
+        ),
         actions=power.actions if power else None,
         restored=restored,
     )
@@ -1027,6 +1044,9 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
         restore_affinity_cgroups=_aggregate_restore_affinity_cgroups(runs),
         restore_affinity_files=_aggregate_restore_affinity_files(runs),
         restore_affinity_cgroup_files=_aggregate_restore_affinity_cgroup_files(runs),
+        restore_affinity_cgroup_file_values=_aggregate_restore_affinity_cgroup_file_values(
+            runs
+        ),
     )
 
 
@@ -1209,6 +1229,29 @@ def _aggregate_restore_affinity_cgroup_files(
     }
 
 
+def _aggregate_restore_affinity_cgroup_file_values(
+    runs: list[RunSummary],
+) -> dict[str, dict[str, list[str]]]:
+    values_by_cgroup: dict[str, dict[str, set[str]]] = {}
+    for run in runs:
+        if not run.restore_affinity_cgroup_file_values:
+            continue
+        for cgroup, file_values in run.restore_affinity_cgroup_file_values.items():
+            if not isinstance(file_values, dict):
+                continue
+            state = values_by_cgroup.setdefault(cgroup, {})
+            for filename, value in file_values.items():
+                values = state.setdefault(str(filename), set())
+                values.add(str(value))
+    return {
+        cgroup: {
+            filename: sorted(values)
+            for filename, values in sorted(file_values.items())
+        }
+        for cgroup, file_values in sorted(values_by_cgroup.items())
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -1265,6 +1308,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=CaptureMode.CONTROLLED.value,
     )
     aggregate.add_argument("--min-runs", type=int, default=3)
+
+    apply_background = subcommands.add_parser("apply-background-shaping")
+    apply_background.add_argument("--restore-affinity-json", required=True)
+    apply_background.add_argument("--output", required=True)
+    apply_background.add_argument("--appid", required=True)
+    apply_background.add_argument(
+        "--variant",
+        choices=sorted(BACKGROUND_SHAPING_WRITE_VARIANTS),
+        required=True,
+    )
+
+    restore_background = subcommands.add_parser("restore-background-shaping")
+    restore_background.add_argument("--writes-json", required=True)
+    restore_background.add_argument("--output", required=True)
     return parser
 
 
@@ -1669,7 +1726,7 @@ def build_background_shaping_experiment_plan(
         reasons.append("baseline background/helper evidence is available for comparison")
 
     guarded_candidates = [
-        _guarded_background_shaping_candidate(item)
+        _guarded_background_shaping_candidate(item, aggregate=candidate)
         for item in candidate_candidates
         if _background_candidate_is_ready_for_guarded_experiment(item)
     ]
@@ -1735,7 +1792,12 @@ def _background_candidate_has_restore_coverage(candidate: dict[str, object]) -> 
 
 def _guarded_background_shaping_candidate(
     candidate: dict[str, object],
+    *,
+    aggregate: PolicyAggregate,
 ) -> dict[str, object]:
+    cgroup = _optional_str(candidate.get("cgroup")) or ""
+    restore_files = _restore_files_for_cgroup(aggregate, cgroup)
+    restore_values = _restore_values_for_cgroup(aggregate, cgroup)
     return {
         "candidate_key": candidate.get("candidate_key"),
         "cgroup": candidate.get("cgroup"),
@@ -1753,7 +1815,449 @@ def _guarded_background_shaping_candidate(
             "restore_snapshot_run_coverage"
         ),
         "cpu_time_s_delta_median": candidate.get("cpu_time_s_delta_median"),
+        "restore_files": restore_files,
+        "restore_values": restore_values,
+        "dry_run_writes": _background_shaping_dry_run_writes(
+            restore_files,
+            restore_values,
+        ),
+        "acceptance_thresholds": {
+            "avg_fps_regression_max_pct": -2.0,
+            "one_percent_low_regression_max_pct": PACING_REGRESSION_REJECT_PCT,
+            "p99_frametime_regression_max_pct": PACING_REGRESSION_REJECT_PCT,
+            "target_power_saving_min_pct": TARGET_POWER_SAVING_MIN_PCT,
+        },
     }
+
+
+def _restore_files_for_cgroup(
+    aggregate: PolicyAggregate,
+    cgroup: str,
+) -> list[str]:
+    files_by_cgroup = aggregate.restore_affinity_cgroup_files or {}
+    return sorted(str(item) for item in files_by_cgroup.get(cgroup, []))
+
+
+def _restore_values_for_cgroup(
+    aggregate: PolicyAggregate,
+    cgroup: str,
+) -> dict[str, list[str]]:
+    values_by_cgroup = aggregate.restore_affinity_cgroup_file_values or {}
+    file_values = values_by_cgroup.get(cgroup, {})
+    if not isinstance(file_values, dict):
+        return {}
+    normalized: dict[str, list[str]] = {}
+    for filename, values in file_values.items():
+        if isinstance(values, list):
+            normalized[str(filename)] = sorted(str(value) for value in values)
+        else:
+            normalized[str(filename)] = [str(values)]
+    return dict(sorted(normalized.items()))
+
+
+def _background_shaping_dry_run_writes(
+    restore_files: list[str],
+    restore_values: dict[str, list[str]],
+) -> list[dict[str, object]]:
+    writes: list[dict[str, object]] = []
+    if "cpu.weight" in restore_files:
+        writes.append(
+            {
+                "variant": "background-helper-cpu-weight-80",
+                "control_file": "cpu.weight",
+                "proposed_value": "80",
+                "value_policy": "lower-only-min-current-or-80",
+                "restore_values_observed": restore_values.get("cpu.weight", []),
+                "write_mode": "one-control-per-ab-run",
+            }
+        )
+    if "cpu.uclamp.max" in restore_files:
+        writes.append(
+            {
+                "variant": "background-helper-uclamp-max-85",
+                "control_file": "cpu.uclamp.max",
+                "proposed_value": "85.00",
+                "value_policy": "lower-only-max-85-percent",
+                "restore_values_observed": restore_values.get("cpu.uclamp.max", []),
+                "write_mode": "one-control-per-ab-run",
+            }
+        )
+    return writes
+
+
+def apply_background_shaping_writes(
+    restore_affinity_json: str | Path,
+    output: str | Path,
+    *,
+    appid: str,
+    variant: str,
+    command_runner: Any | None = None,
+) -> dict[str, object]:
+    control_file, proposed_value = _background_write_variant(variant)
+    payload = json.loads(Path(restore_affinity_json).read_text())
+    writes: list[dict[str, object]] = []
+    for cgroup in payload.get("cgroups") or []:
+        if not isinstance(cgroup, dict):
+            continue
+        cgroup_name = _optional_str(cgroup.get("cgroup"))
+        cgroup_path = _optional_str(cgroup.get("path"))
+        if cgroup_name is None or cgroup_path is None:
+            continue
+        if not _is_background_shaping_write_target(cgroup_name, appid=appid):
+            continue
+        path = Path(cgroup_path)
+        control_path = path / control_file
+        if _should_use_systemd_user_property(cgroup_name, control_file):
+            write = _apply_systemd_user_background_write(
+                cgroup_name,
+                path,
+                control_file,
+                proposed_value,
+                command_runner=command_runner,
+            )
+        elif control_path.is_file():
+            write = _apply_direct_cgroup_background_write(
+                cgroup_name,
+                path,
+                control_file,
+                proposed_value,
+            )
+        else:
+            write = _apply_systemd_user_background_write(
+                cgroup_name,
+                path,
+                control_file,
+                proposed_value,
+                command_runner=command_runner,
+            )
+        if write is not None:
+            writes.append(write)
+
+    report = {
+        "mode": "background-shaping-writes",
+        "write_policy": "guarded-background-shaping",
+        "appid": appid,
+        "variant": variant,
+        "control_file": control_file,
+        "proposed_value": proposed_value,
+        "writes": writes,
+    }
+    Path(output).write_text(json.dumps(_json_ready(report), indent=2, sort_keys=True) + "\n")
+    return report
+
+
+def restore_background_shaping_writes(
+    writes_json: str | Path,
+    output: str | Path,
+    *,
+    command_runner: Any | None = None,
+) -> dict[str, object]:
+    payload = json.loads(Path(writes_json).read_text())
+    restores: list[dict[str, object]] = []
+    restored = True
+    for item in payload.get("writes") or []:
+        if not isinstance(item, dict) or item.get("status") != "written":
+            continue
+        cgroup = _optional_str(item.get("cgroup")) or ""
+        path = _optional_str(item.get("path")) or ""
+        control_file = _optional_str(item.get("control_file")) or ""
+        original_value = _optional_str(item.get("original_value")) or ""
+        method = _optional_str(item.get("method")) or "direct-cgroup-file"
+        if method == "systemd-user-property":
+            restore_item = _restore_systemd_user_background_write(
+                item,
+                command_runner=command_runner,
+            )
+            current_value = _optional_str(restore_item.get("current_value"))
+            status = _optional_str(restore_item.get("status")) or "restore-failed"
+            restores.append(restore_item)
+            if status != "restored":
+                restored = False
+            continue
+
+        control_path = Path(path) / control_file
+        status = "restored"
+        try:
+            _write_control_value(control_path, original_value)
+            current_value = _read_control_value(control_path)
+        except OSError:
+            current_value = None
+            status = "restore-failed"
+        if current_value != original_value:
+            restored = False
+            status = "restore-mismatch" if status == "restored" else status
+        restores.append(
+            {
+                "cgroup": cgroup,
+                "path": path,
+                "control_file": control_file,
+                "restored_value": original_value,
+                "current_value": current_value,
+                "status": status,
+                "method": method,
+            }
+        )
+
+    report = {
+        "mode": "background-shaping-restore",
+        "write_policy": "restore-background-shaping",
+        "restored": restored,
+        "restores": restores,
+    }
+    Path(output).write_text(json.dumps(_json_ready(report), indent=2, sort_keys=True) + "\n")
+    return report
+
+
+def _background_write_variant(variant: str) -> tuple[str, str]:
+    try:
+        return BACKGROUND_SHAPING_WRITE_VARIANTS[variant]
+    except KeyError as exc:
+        choices = ", ".join(sorted(BACKGROUND_SHAPING_WRITE_VARIANTS))
+        raise ValueError(
+            f"unsupported background shaping variant {variant}; choices: {choices}"
+        ) from exc
+
+
+def _apply_direct_cgroup_background_write(
+    cgroup: str,
+    path: Path,
+    control_file: str,
+    proposed_value: str,
+) -> dict[str, object] | None:
+    control_path = path / control_file
+    current_value = _read_control_value(control_path)
+    if current_value is None:
+        return None
+    if not _background_write_lowers_value(control_file, current_value, proposed_value):
+        return None
+    _write_control_value(control_path, proposed_value)
+    written_value = _read_control_value(control_path)
+    return {
+        "cgroup": cgroup,
+        "path": str(path),
+        "control_file": control_file,
+        "original_value": current_value,
+        "proposed_value": proposed_value,
+        "status": "written" if written_value == proposed_value else "write-mismatch",
+        "method": "direct-cgroup-file",
+    }
+
+
+def _apply_systemd_user_background_write(
+    cgroup: str,
+    path: Path,
+    control_file: str,
+    proposed_value: str,
+    *,
+    command_runner: Any | None,
+) -> dict[str, object] | None:
+    if control_file != "cpu.weight":
+        return None
+    unit = _systemd_user_unit_from_cgroup(cgroup)
+    if unit is None:
+        return None
+    current_value = _systemd_user_show_property(
+        unit,
+        "CPUWeight",
+        command_runner=command_runner,
+    )
+    if not _background_write_lowers_value(control_file, current_value, proposed_value):
+        return None
+    try:
+        _systemd_user_set_property(
+            unit,
+            f"CPUWeight={proposed_value}",
+            command_runner=command_runner,
+        )
+        written_value = _systemd_user_show_property(
+            unit,
+            "CPUWeight",
+            command_runner=command_runner,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        written_value = None
+    return {
+        "cgroup": cgroup,
+        "path": str(path),
+        "control_file": control_file,
+        "original_value": current_value,
+        "proposed_value": proposed_value,
+        "status": (
+            "written"
+            if written_value == proposed_value
+            else "write-failed"
+            if written_value is None
+            else "write-mismatch"
+        ),
+        "method": "systemd-user-property",
+        "unit": unit,
+        "property": "CPUWeight",
+    }
+
+
+def _restore_systemd_user_background_write(
+    item: dict[str, object],
+    *,
+    command_runner: Any | None,
+) -> dict[str, object]:
+    unit = _optional_str(item.get("unit")) or ""
+    property_name = _optional_str(item.get("property")) or "CPUWeight"
+    original_value = _optional_str(item.get("original_value")) or ""
+    restored_assignment = (
+        f"{property_name}="
+        if original_value == "[not set]"
+        else f"{property_name}={original_value}"
+    )
+    status = "restored"
+    try:
+        _systemd_user_set_property(
+            unit,
+            restored_assignment,
+            command_runner=command_runner,
+        )
+        current_value = _systemd_user_show_property(
+            unit,
+            property_name,
+            command_runner=command_runner,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        current_value = None
+        status = "restore-failed"
+    if current_value != original_value and status == "restored":
+        status = "restore-mismatch"
+    return {
+        "cgroup": item.get("cgroup"),
+        "path": item.get("path"),
+        "control_file": item.get("control_file"),
+        "restored_value": original_value,
+        "current_value": current_value,
+        "status": status,
+        "method": "systemd-user-property",
+        "unit": unit,
+        "property": property_name,
+    }
+
+
+def _systemd_user_unit_from_cgroup(cgroup: str) -> str | None:
+    for part in reversed(cgroup.split("/")):
+        if part.endswith((".service", ".scope", ".slice")):
+            return part
+    return None
+
+
+def _systemd_user_show_property(
+    unit: str,
+    property_name: str,
+    *,
+    command_runner: Any | None,
+) -> str:
+    output = _run_systemd_user_command(
+        ["show", unit, "-p", property_name],
+        command_runner=command_runner,
+    )
+    prefix = f"{property_name}="
+    for line in output.splitlines():
+        if line.startswith(prefix):
+            return line.removeprefix(prefix)
+    return "[not set]"
+
+
+def _systemd_user_set_property(
+    unit: str,
+    assignment: str,
+    *,
+    command_runner: Any | None,
+) -> None:
+    _run_systemd_user_command(
+        ["set-property", "--runtime", unit, assignment],
+        command_runner=command_runner,
+    )
+
+
+def _run_systemd_user_command(
+    args: list[str],
+    *,
+    command_runner: Any | None,
+) -> str:
+    command = [
+        "runuser",
+        "-u",
+        "deck",
+        "--",
+        "env",
+        "XDG_RUNTIME_DIR=/run/user/1000",
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+        "systemctl",
+        "--user",
+        *args,
+    ]
+    if command_runner is not None:
+        return str(command_runner(command))
+    return subprocess.run(
+        command,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+
+
+def _is_background_shaping_write_target(cgroup: str, *, appid: str) -> bool:
+    lowered = cgroup.lower()
+    if f"app-steam-app{appid}".lower() in lowered:
+        return False
+    relative = lowered.removeprefix("0::").rstrip("/")
+    if relative in {"/user.slice", "/system.slice"}:
+        return False
+    helper_tokens = (
+        "app-steam-client",
+        "steam-launcher",
+        "steamwebhelper",
+        "gamescope-session.service",
+        "gamescope-mangoapp.service",
+    )
+    return any(token in lowered for token in helper_tokens)
+
+
+def _should_use_systemd_user_property(cgroup: str, control_file: str) -> bool:
+    if control_file != "cpu.weight":
+        return False
+    lowered = cgroup.lower()
+    relative = lowered.removeprefix("0::")
+    unit = _systemd_user_unit_from_cgroup(cgroup)
+    return relative.startswith("/user.slice/") and unit is not None and unit.endswith(
+        ".service"
+    )
+
+
+def _background_write_lowers_value(
+    control_file: str,
+    current_value: str,
+    proposed_value: str,
+) -> bool:
+    if control_file == "cpu.weight":
+        if current_value == "[not set]":
+            current_value = "100"
+        current = _float(current_value)
+        proposed = _float(proposed_value)
+        return current is not None and proposed is not None and current > proposed
+    if control_file == "cpu.uclamp.max":
+        if current_value == "max":
+            return True
+        current = _float(current_value)
+        proposed = _float(proposed_value)
+        return current is not None and proposed is not None and current > proposed
+    return False
+
+
+def _read_control_value(path: Path) -> str | None:
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def _write_control_value(path: Path, value: str) -> None:
+    path.write_text(f"{value}\n")
 
 
 def _load_run_summary(path: str | Path) -> RunSummary:
@@ -2596,6 +3100,19 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "aggregate":
         report = run_aggregate(args)
+        print(json.dumps(_json_ready(report), sort_keys=True))
+        return
+    if args.command == "apply-background-shaping":
+        report = apply_background_shaping_writes(
+            args.restore_affinity_json,
+            args.output,
+            appid=args.appid,
+            variant=args.variant,
+        )
+        print(json.dumps(_json_ready(report), sort_keys=True))
+        return
+    if args.command == "restore-background-shaping":
+        report = restore_background_shaping_writes(args.writes_json, args.output)
         print(json.dumps(_json_ready(report), sort_keys=True))
         return
     raise SystemExit(f"unsupported command: {args.command}")

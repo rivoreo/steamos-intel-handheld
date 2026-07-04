@@ -17,6 +17,7 @@ from steamos_intel_handheld.game_power_profile import (
     ThreadAffinitySummary,
     ThreadSchedstatSummary,
     aggregate_run_summaries,
+    apply_background_shaping_writes,
     build_affinity_advice,
     build_background_shaping_advice,
     compare_policy_aggregates,
@@ -26,6 +27,7 @@ from steamos_intel_handheld.game_power_profile import (
     parse_mangohud_fps_csv,
     parse_mangohud_summary_csv,
     parse_pressure_file,
+    restore_background_shaping_writes,
     summarize_cpu_topology,
     summarize_pressure_jsonl,
     summarize_process_cgroups_jsonl,
@@ -517,6 +519,424 @@ def test_summarize_restore_affinity_json_counts_threads_cgroups_and_files(tmp_pa
             "cpuset.cpus",
             "cpuset.cpus.effective",
         ]
+    }
+    assert summary.cgroup_file_values == {
+        "0::/user.slice/app-steam-app1091500.scope": {
+            "cpu.uclamp.max": "max",
+            "cpu.uclamp.min": "0.00",
+            "cpuset.cpus": "",
+            "cpuset.cpus.effective": "0-3",
+        }
+    }
+
+
+def test_apply_background_shaping_writes_only_lowers_helper_cgroups(tmp_path):
+    foreground = tmp_path / "foreground"
+    helper = tmp_path / "helper"
+    already_lower = tmp_path / "already-lower"
+    broad_user = tmp_path / "broad-user"
+    for path in (foreground, helper, already_lower, broad_user):
+        path.mkdir()
+        (path / "cpu.weight").write_text("100\n")
+    (already_lower / "cpu.weight").write_text("50\n")
+
+    restore = tmp_path / "restore-affinity.json"
+    restore.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "mode": "restore-snapshot",
+                "write_policy": "snapshot-only",
+                "threads": [],
+                "cgroups": [
+                    {
+                        "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        "path": str(foreground),
+                        "files": {"cpu.weight": "100"},
+                    },
+                    {
+                        "cgroup": "0::/user.slice/app-steam-client.scope",
+                        "path": str(helper),
+                        "files": {"cpu.weight": "100"},
+                    },
+                    {
+                        "cgroup": "0::/user.slice/steamwebhelper.scope",
+                        "path": str(already_lower),
+                        "files": {"cpu.weight": "50"},
+                    },
+                    {
+                        "cgroup": "0::/user.slice/",
+                        "path": str(broad_user),
+                        "files": {"cpu.weight": "100"},
+                    },
+                ],
+            }
+        )
+        + "\n"
+    )
+    writes = tmp_path / "background-shaping-writes.json"
+
+    payload = apply_background_shaping_writes(
+        restore,
+        writes,
+        appid="1091500",
+        variant="cpu-weight-80",
+    )
+
+    assert (foreground / "cpu.weight").read_text() == "100\n"
+    assert (helper / "cpu.weight").read_text() == "80\n"
+    assert (already_lower / "cpu.weight").read_text() == "50\n"
+    assert (broad_user / "cpu.weight").read_text() == "100\n"
+    assert payload["write_policy"] == "guarded-background-shaping"
+    assert payload["variant"] == "cpu-weight-80"
+    assert payload["writes"] == [
+        {
+            "cgroup": "0::/user.slice/app-steam-client.scope",
+            "path": str(helper),
+            "control_file": "cpu.weight",
+            "original_value": "100",
+            "proposed_value": "80",
+            "status": "written",
+            "method": "direct-cgroup-file",
+        }
+    ]
+    assert json.loads(writes.read_text()) == payload
+
+
+def test_restore_background_shaping_writes_restores_original_values(tmp_path):
+    helper = tmp_path / "helper"
+    helper.mkdir()
+    (helper / "cpu.weight").write_text("80\n")
+    writes = tmp_path / "background-shaping-writes.json"
+    writes.write_text(
+        json.dumps(
+            {
+                "mode": "background-shaping-writes",
+                "write_policy": "guarded-background-shaping",
+                "writes": [
+                    {
+                        "cgroup": "0::/user.slice/app-steam-client.scope",
+                        "path": str(helper),
+                        "control_file": "cpu.weight",
+                        "original_value": "100",
+                        "proposed_value": "80",
+                        "status": "written",
+                    }
+                ],
+            }
+        )
+        + "\n"
+    )
+    output = tmp_path / "background-shaping-restore.json"
+
+    payload = restore_background_shaping_writes(writes, output)
+
+    assert (helper / "cpu.weight").read_text() == "100\n"
+    assert payload["restored"] is True
+    assert payload["restores"] == [
+        {
+            "cgroup": "0::/user.slice/app-steam-client.scope",
+            "path": str(helper),
+            "control_file": "cpu.weight",
+            "restored_value": "100",
+            "current_value": "100",
+            "status": "restored",
+            "method": "direct-cgroup-file",
+        }
+    ]
+    assert json.loads(output.read_text()) == payload
+
+
+def test_background_shaping_writer_uses_systemd_user_property_when_cpu_file_missing(
+    tmp_path,
+):
+    helper = tmp_path / "steam-launcher.service"
+    helper.mkdir()
+    restore = tmp_path / "restore-affinity.json"
+    restore.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "mode": "restore-snapshot",
+                "write_policy": "snapshot-only",
+                "threads": [],
+                "cgroups": [
+                    {
+                        "cgroup": (
+                            "0::/user.slice/user-1000.slice/user@1000.service/"
+                            "app.slice/steam-launcher.service"
+                        ),
+                        "path": str(helper),
+                        "files": {"cgroup.type": "domain"},
+                    }
+                ],
+            }
+        )
+        + "\n"
+    )
+    state = {"CPUWeight": "[not set]"}
+    calls: list[list[str]] = []
+
+    def runner(command: list[str]) -> str:
+        calls.append(command)
+        if "show" in command:
+            return f"CPUWeight={state['CPUWeight']}\n"
+        if "set-property" in command:
+            value = command[-1].split("=", 1)[1]
+            state["CPUWeight"] = value or "[not set]"
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    writes = tmp_path / "background-shaping-writes.json"
+    apply_payload = apply_background_shaping_writes(
+        restore,
+        writes,
+        appid="1091500",
+        variant="cpu-weight-80",
+        command_runner=runner,
+    )
+
+    assert apply_payload["writes"] == [
+        {
+            "cgroup": (
+                "0::/user.slice/user-1000.slice/user@1000.service/"
+                "app.slice/steam-launcher.service"
+            ),
+            "path": str(helper),
+            "control_file": "cpu.weight",
+            "original_value": "[not set]",
+            "proposed_value": "80",
+            "status": "written",
+            "method": "systemd-user-property",
+            "unit": "steam-launcher.service",
+            "property": "CPUWeight",
+        }
+    ]
+    assert state["CPUWeight"] == "80"
+
+    output = tmp_path / "background-shaping-restore.json"
+    restore_payload = restore_background_shaping_writes(
+        writes,
+        output,
+        command_runner=runner,
+    )
+
+    assert restore_payload["restored"] is True
+    assert restore_payload["restores"] == [
+        {
+            "cgroup": (
+                "0::/user.slice/user-1000.slice/user@1000.service/"
+                "app.slice/steam-launcher.service"
+            ),
+            "path": str(helper),
+            "control_file": "cpu.weight",
+            "restored_value": "[not set]",
+            "current_value": "[not set]",
+            "status": "restored",
+            "method": "systemd-user-property",
+            "unit": "steam-launcher.service",
+            "property": "CPUWeight",
+        }
+    ]
+    assert state["CPUWeight"] == "[not set]"
+    assert any(command[-1] == "CPUWeight=80" for command in calls)
+    assert any(command[-1] == "CPUWeight=" for command in calls)
+
+
+def test_background_shaping_writer_prefers_systemd_user_property_for_user_services(
+    tmp_path,
+):
+    helper = tmp_path / "steam-launcher.service"
+    helper.mkdir()
+    (helper / "cpu.weight").write_text("100\n")
+    restore = tmp_path / "restore-affinity.json"
+    restore.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "mode": "restore-snapshot",
+                "write_policy": "snapshot-only",
+                "threads": [],
+                "cgroups": [
+                    {
+                        "cgroup": (
+                            "0::/user.slice/user-1000.slice/user@1000.service/"
+                            "app.slice/steam-launcher.service"
+                        ),
+                        "path": str(helper),
+                        "files": {"cpu.weight": "100"},
+                    }
+                ],
+            }
+        )
+        + "\n"
+    )
+    state = {"CPUWeight": "[not set]"}
+    calls: list[list[str]] = []
+
+    def runner(command: list[str]) -> str:
+        calls.append(command)
+        if "show" in command:
+            return f"CPUWeight={state['CPUWeight']}\n"
+        if "set-property" in command:
+            value = command[-1].split("=", 1)[1]
+            state["CPUWeight"] = value or "[not set]"
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    payload = apply_background_shaping_writes(
+        restore,
+        tmp_path / "background-shaping-writes.json",
+        appid="1091500",
+        variant="cpu-weight-80",
+        command_runner=runner,
+    )
+
+    assert (helper / "cpu.weight").read_text() == "100\n"
+    assert payload["writes"] == [
+        {
+            "cgroup": (
+                "0::/user.slice/user-1000.slice/user@1000.service/"
+                "app.slice/steam-launcher.service"
+            ),
+            "path": str(helper),
+            "control_file": "cpu.weight",
+            "original_value": "[not set]",
+            "proposed_value": "80",
+            "status": "written",
+            "method": "systemd-user-property",
+            "unit": "steam-launcher.service",
+            "property": "CPUWeight",
+        }
+    ]
+    assert any(command[-1] == "CPUWeight=80" for command in calls)
+
+
+def test_background_shaping_writer_does_not_match_steamos_service_names(tmp_path):
+    steamos_service = tmp_path / "steamos-intel-handheld-power-control.service"
+    steamos_service.mkdir()
+    restore = tmp_path / "restore-affinity.json"
+    restore.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "mode": "restore-snapshot",
+                "write_policy": "snapshot-only",
+                "threads": [],
+                "cgroups": [
+                    {
+                        "cgroup": (
+                            "0::/system.slice/"
+                            "steamos-intel-handheld-power-control.service"
+                        ),
+                        "path": str(steamos_service),
+                        "files": {"cgroup.type": "domain"},
+                    }
+                ],
+            }
+        )
+        + "\n"
+    )
+    calls: list[list[str]] = []
+
+    def runner(command: list[str]) -> str:
+        calls.append(command)
+        return "CPUWeight=[not set]\n"
+
+    payload = apply_background_shaping_writes(
+        restore,
+        tmp_path / "background-shaping-writes.json",
+        appid="1091500",
+        variant="cpu-weight-80",
+        command_runner=runner,
+    )
+
+    assert payload["writes"] == []
+    assert calls == []
+
+
+def test_background_shaping_writer_only_matches_explicit_gamescope_helpers(tmp_path):
+    cgroups = {
+        "gamescope-session.service": (
+            "0::/user.slice/user-1000.slice/user@1000.service/"
+            "app.slice/gamescope-session.service"
+        ),
+        "gamescope-mangoapp.service": (
+            "0::/user.slice/user-1000.slice/user@1000.service/"
+            "app.slice/gamescope-mangoapp.service"
+        ),
+        "xdg-desktop-portal-gamescope.service": (
+            "0::/user.slice/user-1000.slice/user@1000.service/"
+            "app.slice/xdg-desktop-portal-gamescope.service"
+        ),
+        "ibus-gamescope.service": (
+            "0::/user.slice/user-1000.slice/user@1000.service/"
+            "app.slice/ibus-gamescope.service"
+        ),
+        "gamescope-xbindkeys.service": (
+            "0::/user.slice/user-1000.slice/user@1000.service/"
+            "app.slice/gamescope-xbindkeys.service"
+        ),
+    }
+    restore_cgroups = []
+    for unit, cgroup in cgroups.items():
+        path = tmp_path / unit
+        path.mkdir()
+        restore_cgroups.append(
+            {
+                "cgroup": cgroup,
+                "path": str(path),
+                "files": {"cgroup.type": "domain"},
+            }
+        )
+    restore = tmp_path / "restore-affinity.json"
+    restore.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "mode": "restore-snapshot",
+                "write_policy": "snapshot-only",
+                "threads": [],
+                "cgroups": restore_cgroups,
+            }
+        )
+        + "\n"
+    )
+    state = {
+        "gamescope-session.service": "[not set]",
+        "gamescope-mangoapp.service": "[not set]",
+        "xdg-desktop-portal-gamescope.service": "[not set]",
+        "ibus-gamescope.service": "[not set]",
+        "gamescope-xbindkeys.service": "[not set]",
+    }
+
+    def runner(command: list[str]) -> str:
+        unit = command[-3] if "show" in command else command[-2]
+        if "show" in command:
+            return f"CPUWeight={state[unit]}\n"
+        if "set-property" in command:
+            state[unit] = command[-1].split("=", 1)[1] or "[not set]"
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    payload = apply_background_shaping_writes(
+        restore,
+        tmp_path / "background-shaping-writes.json",
+        appid="1091500",
+        variant="cpu-weight-80",
+        command_runner=runner,
+    )
+
+    assert [item["unit"] for item in payload["writes"]] == [
+        "gamescope-session.service",
+        "gamescope-mangoapp.service",
+    ]
+    assert state == {
+        "gamescope-session.service": "80",
+        "gamescope-mangoapp.service": "80",
+        "xdg-desktop-portal-gamescope.service": "[not set]",
+        "ibus-gamescope.service": "[not set]",
+        "gamescope-xbindkeys.service": "[not set]",
     }
 
 
@@ -1385,6 +1805,13 @@ def test_profile_cli_summarize_writes_manifest_and_summary_json(tmp_path):
             "cpuset.cpus.effective",
         ]
     }
+    assert summary["restore_affinity_cgroup_file_values"] == {
+        "0::/user.slice/app-steam-app1091500.scope": {
+            "cpu.uclamp.max": "max",
+            "cpu.uclamp.min": "0.00",
+            "cpuset.cpus.effective": "0-3",
+        }
+    }
     assert summary["restored"] is True
     assert advice["mode"] == "observe-only"
     assert advice["preferred_latency_cpus"] == [0, 1]
@@ -1868,6 +2295,18 @@ def test_profile_cli_aggregate_builds_background_shaping_experiment_plan(tmp_pat
                             "cpu.weight",
                         ],
                     },
+                    "restore_affinity_cgroup_file_values": {
+                        "0::/user.slice/app-steam-app1091500.scope": {
+                            "cpu.uclamp.max": "max",
+                            "cpu.uclamp.min": "0.00",
+                            "cpu.weight": "100",
+                            "cpuset.cpus.effective": "0-7",
+                        },
+                        "0::/user.slice/app-steam-client.scope": {
+                            "cpu.uclamp.max": "max",
+                            "cpu.weight": "100",
+                        },
+                    },
                     "restored": True,
                 }
             )
@@ -1951,6 +2390,35 @@ def test_profile_cli_aggregate_builds_background_shaping_experiment_plan(tmp_pat
         "restore_snapshot_observed_run_count": 2,
         "restore_snapshot_run_coverage": 1.0,
         "cpu_time_s_delta_median": 2.2,
+        "restore_files": ["cpu.uclamp.max", "cpu.weight"],
+        "restore_values": {
+            "cpu.uclamp.max": ["max"],
+            "cpu.weight": ["100"],
+        },
+        "dry_run_writes": [
+            {
+                "variant": "background-helper-cpu-weight-80",
+                "control_file": "cpu.weight",
+                "proposed_value": "80",
+                "value_policy": "lower-only-min-current-or-80",
+                "restore_values_observed": ["100"],
+                "write_mode": "one-control-per-ab-run",
+            },
+            {
+                "variant": "background-helper-uclamp-max-85",
+                "control_file": "cpu.uclamp.max",
+                "proposed_value": "85.00",
+                "value_policy": "lower-only-max-85-percent",
+                "restore_values_observed": ["max"],
+                "write_mode": "one-control-per-ab-run",
+            },
+        ],
+        "acceptance_thresholds": {
+            "avg_fps_regression_max_pct": -2.0,
+            "one_percent_low_regression_max_pct": -3.0,
+            "p99_frametime_regression_max_pct": -3.0,
+            "target_power_saving_min_pct": 5.0,
+        },
     }
     assert "background/helper cgroup candidate is stable across candidate runs" in plan[
         "reasons"

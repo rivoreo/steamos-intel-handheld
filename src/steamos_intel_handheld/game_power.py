@@ -365,7 +365,7 @@ class GamePowerController:
         if self.config.mode == GamePowerMode.OBSERVE:
             return GamePowerDecision(GamePowerAction.OBSERVE_ONLY, "mode is observe")
 
-        positive = self._sample_supports_gpu_priority(sample)
+        positive = self._sample_supports_gpu_priority(sample, active=self._active)
         if positive:
             self._positive_samples += 1
             self._negative_samples = 0
@@ -396,7 +396,12 @@ class GamePowerController:
             "package limited with GPU activity",
         )
 
-    def _sample_supports_gpu_priority(self, sample: GamePowerSample) -> bool:
+    def _sample_supports_gpu_priority(
+        self,
+        sample: GamePowerSample,
+        *,
+        active: bool = False,
+    ) -> bool:
         if sample.appid is None:
             return False
         if self.config.target_appid is not None and sample.appid != self.config.target_appid:
@@ -406,7 +411,9 @@ class GamePowerController:
         if sample.rapl.package_w < self.config.package_pressure_ratio * sample.pl1_w:
             return False
         core_share = sample.rapl.core_share
-        if core_share is None or core_share < self.config.core_share_threshold:
+        if not active and (
+            core_share is None or core_share < self.config.core_share_threshold
+        ):
             return False
         uncore_share = sample.rapl.uncore_share
         render_busy = sample.fdinfo_busy.get("render")

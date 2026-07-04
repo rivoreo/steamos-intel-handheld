@@ -262,6 +262,46 @@ def test_controller_cpu_cap_threshold_is_configurable_for_profile_sweeps():
     assert decision.action == GamePowerAction.GPU_PRIORITY_CPU_CAP
 
 
+def test_controller_does_not_restore_cpu_cap_only_because_cap_lowered_core_share():
+    config = GamePowerConfig(
+        mode=GamePowerMode.GPU_PRIORITY,
+        cpu_cap_enabled=True,
+        cpu_cap_core_share_threshold=0.30,
+    )
+    controller = GamePowerController(config)
+
+    controller.evaluate(make_sample(core_w=7.2, package_w=22.0, uncore_w=8.6))
+    assert (
+        controller.evaluate(make_sample(core_w=7.2, package_w=22.0, uncore_w=8.6)).action
+        == GamePowerAction.GPU_PRIORITY_CPU_CAP
+    )
+    low_core_samples = [
+        controller.evaluate(make_sample(core_w=6.0, package_w=22.0, uncore_w=9.4))
+        for _ in range(config.restore_samples)
+    ]
+
+    assert [sample.action for sample in low_core_samples] == [
+        GamePowerAction.GPU_PRIORITY_EPP,
+        GamePowerAction.GPU_PRIORITY_EPP,
+        GamePowerAction.GPU_PRIORITY_EPP,
+    ]
+
+
+def test_controller_still_requires_core_pressure_before_initial_activation():
+    config = GamePowerConfig(
+        mode=GamePowerMode.GPU_PRIORITY,
+        cpu_cap_enabled=True,
+        cpu_cap_core_share_threshold=0.30,
+    )
+    controller = GamePowerController(config)
+
+    first = controller.evaluate(make_sample(core_w=6.0, package_w=22.0, uncore_w=9.4))
+    second = controller.evaluate(make_sample(core_w=6.0, package_w=22.0, uncore_w=9.4))
+
+    assert first.action == GamePowerAction.OBSERVE_ONLY
+    assert second.action == GamePowerAction.OBSERVE_ONLY
+
+
 class FakeObserver:
     def __init__(self, samples):
         self.samples = list(samples)

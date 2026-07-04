@@ -17,14 +17,15 @@ poll_s="${PROFILE_GAME_POWER_POLL_S:-2}"
 capture_mode="${PROFILE_GAME_POWER_CAPTURE_MODE:-imported}"
 fps_target="${PROFILE_GAME_POWER_FPS_TARGET:-}"
 epp="${PROFILE_GAME_POWER_EPP:-balance_power}"
-pcore_max_mhz="${PROFILE_GAME_POWER_PCORE_MAX_MHZ:-3200}"
-ecore_max_mhz="${PROFILE_GAME_POWER_ECORE_MAX_MHZ:-2800}"
-cpu_cap_core_share_threshold="${PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD:-0.38}"
+pcore_max_mhz="${PROFILE_GAME_POWER_PCORE_MAX_MHZ:-3000}"
+ecore_max_mhz="${PROFILE_GAME_POWER_ECORE_MAX_MHZ:-2400}"
+cpu_cap_core_share_threshold="${PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD:-0.30}"
 cpu_cap_variants="${PROFILE_GAME_POWER_CPU_CAP_VARIANTS:-}"
 local_root="${PROFILE_GAME_POWER_OUTPUT_ROOT:-.cache/game-power/profiles}"
 mkdir -p "$local_root"
 
 remote_root="$(ssh "$target" "mktemp -d /tmp/game-power-profile.XXXXXX")"
+failure_marker="${remote_root##*/}.failed"
 
 ssh "$target" \
   "APPID='$appid' TDP_LEVELS='$tdp_levels' POLICIES='$policies' \
@@ -33,6 +34,7 @@ CAPTURE_MODE='$capture_mode' FPS_TARGET='$fps_target' EPP='$epp' PCORE_MAX_MHZ='
 ECORE_MAX_MHZ='$ecore_max_mhz' \
 CPU_CAP_CORE_SHARE_THRESHOLD='$cpu_cap_core_share_threshold' \
 CPU_CAP_VARIANTS='$cpu_cap_variants' \
+FAILURE_MARKER='$failure_marker' \
 REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
 set -euo pipefail
 MANGOHUD_OUTPUT_DIR="$REMOTE_ROOT/mangohud-logs"
@@ -845,6 +847,37 @@ output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
 }
 
+apply_background_shaping_variant() {
+  local run_dir="$1"
+  local variant="$2"
+  [ -n "$variant" ] || return 0
+  /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile \
+    apply-background-shaping \
+    --appid "$APPID" \
+    --restore-affinity-json "$run_dir/restore-affinity.json" \
+    --variant "$variant" \
+    --output "$run_dir/background-shaping-writes.json" \
+    >"$run_dir/background-shaping-apply.stdout"
+}
+
+restore_background_shaping_variant() {
+  local run_dir="$1"
+  [ -f "$run_dir/background-shaping-writes.json" ] || return 0
+  /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile \
+    restore-background-shaping \
+    --writes-json "$run_dir/background-shaping-writes.json" \
+    --output "$run_dir/background-shaping-restore.json" \
+    >"$run_dir/background-shaping-restore.stdout"
+  python3 - "$run_dir/background-shaping-restore.json" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+raise SystemExit(0 if payload.get("restored") is True else 1)
+PY
+}
+
 collect_cpu_topology() {
   local output="$1"
   python3 - "$output" <<'PY'
@@ -952,6 +985,7 @@ provider_tdp >"$REMOTE_ROOT/tdp.initial"
 trap restore_state EXIT
 set_service_game_power_mode off
 setup_mangohud_controlled_capture
+profile_failed=false
 FPS_TARGET_SOURCE="unknown"
 if [ -n "$FPS_TARGET" ]; then
   FPS_TARGET_SOURCE="manual"
@@ -993,6 +1027,7 @@ for repeat in $(seq 1 "$REPEATS"); do
         snapshot_cpu_policy >"$run_dir/cpu-policy.before"
         provider_tdp >"$run_dir/tdp.before"
 
+        background_shaping_variant=""
         case "$policy" in
           off)
             mode="observe"
@@ -1015,12 +1050,26 @@ for repeat in $(seq 1 "$REPEATS"); do
               --cpu-cap-core-share-threshold "$variant_core_share_threshold"
             )
           ;;
+          gpu-priority-bg-weight)
+            mode="gpu-priority"
+            cpu_cap_enabled=false
+            background_shaping_variant="cpu-weight-80"
+            policy_args=(--epp "$EPP")
+          ;;
+          gpu-priority-bg-uclamp)
+            mode="gpu-priority"
+            cpu_cap_enabled=false
+            background_shaping_variant="uclamp-max-85"
+            policy_args=(--epp "$EPP")
+          ;;
           *)
             echo "unsupported PROFILE_GAME_POWER_POLICIES entry: $policy" >&2
             exit 2
           ;;
         esac
 
+        restored=true
+        apply_background_shaping_variant "$run_dir" "$background_shaping_variant"
         start_mangohud_capture "$run_dir"
         sample_cgroup_pressure "$run_dir/cgroup-pressure.jsonl" "$DURATION_S" &
         pressure_pid="$!"
@@ -1042,6 +1091,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           wait "$thread_affinity_pid" || true
           wait "$thread_schedstat_pid" || true
           wait "$process_cgroups_pid" || true
+          restore_background_shaping_variant "$run_dir" || true
           exit 1
         fi
         stop_mangohud_capture
@@ -1049,12 +1099,12 @@ for repeat in $(seq 1 "$REPEATS"); do
         wait "$thread_affinity_pid" || true
         wait "$thread_schedstat_pid" || true
         wait "$process_cgroups_pid" || true
+        restore_background_shaping_variant "$run_dir" || restored=false
 
         collect_mangohud_csv "$run_dir"
 
         snapshot_cpu_policy >"$run_dir/cpu-policy.after"
         provider_tdp >"$run_dir/tdp.after"
-        restored=true
         if ! diff -u "$run_dir/cpu-policy.before" "$run_dir/cpu-policy.after" \
           >"$run_dir/cpu-policy.diff"; then
           restored=false
@@ -1103,6 +1153,13 @@ for repeat in $(seq 1 "$REPEATS"); do
           echo "missing background-shaping.json in $run_dir" >&2
           exit 1
         fi
+        if [ "$restored" != true ]; then
+          echo "run did not restore cleanly: $run_dir" >&2
+          printf '%s\n' "run did not restore cleanly: $run_dir" \
+            >"$REMOTE_ROOT/$FAILURE_MARKER"
+          profile_failed=true
+          break 4
+        fi
       done
     done
   done
@@ -1115,3 +1172,7 @@ REMOTE
 scp -r "$target:$remote_root/." "$local_root/"
 ssh "$target" "rm -rf '$remote_root'"
 echo "profiles copied to $local_root"
+if [ -f "$local_root/$failure_marker" ]; then
+  cat "$local_root/$failure_marker" >&2
+  exit 1
+fi

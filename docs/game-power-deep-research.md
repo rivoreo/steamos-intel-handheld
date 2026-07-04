@@ -1519,6 +1519,51 @@ unstable-or-unknown:
   checks, candidate-cgroup CPU-controller snapshot coverage, a better policy
   verdict, and stable helper-cgroup evidence all pass. The write policy remains
   disabled.
+- `restore-affinity.json` values are now preserved in each `summary.json`, and
+  aggregate reports merge the observed restore values per cgroup/controller
+  file. This makes the next writer step auditable: a plan can say which original
+  value will be restored before it ever proposes a control value.
+- `background_shaping_experiment_plan` now emits a write-disabled dry-run
+  ladder for each guarded helper cgroup. The first variants are conservative
+  one-control-per-run probes: `cpu.weight=80` and `cpu.uclamp.max=85.00`, only
+  when the candidate cgroup has matching restore files and original values. The
+  acceptance gate remains average FPS, 1% low, p99 frametime, target-sustained
+  package-power saving, and exact restore.
+- The profiler now has a guarded writer lane for those same two probes:
+  `gpu-priority-bg-weight` applies `cpu.weight=80` to eligible background helper
+  cgroups, and `gpu-priority-bg-uclamp` applies `cpu.uclamp.max=85.00`. The
+  writer excludes the foreground `app-steam-app<appid>` cgroup and broad
+  `/user.slice` or `/system.slice` roots, records the original values in
+  `background-shaping-writes.json`, restores them into
+  `background-shaping-restore.json`, and marks the run un-restored if the
+  rollback check fails.
+- Real device testing showed that systemd-managed user `.service` cgroups can
+  have `cpu.weight` appear after `CPUWeight=` is set and disappear again when
+  the runtime property is reset. The guarded `cpu.weight` writer therefore uses
+  `systemctl --user set-property --runtime` for user `.service` units even when
+  a transient `cpu.weight` file is currently visible. Direct cgroup-file writes
+  remain limited to non-service helper cgroups with an existing control file.
+- The writable background-helper allowlist is intentionally narrower than the
+  read-only classifier: Steam client/helper scopes, `steam-launcher.service`,
+  `gamescope-session.service`, and `gamescope-mangoapp.service`. Sidecar units
+  such as `xdg-desktop-portal-gamescope.service`, `ibus-gamescope.service`, and
+  `gamescope-xbindkeys.service` are excluded from guarded writes until an A/B
+  run proves they are useful and exactly restorable.
+- CPU-cap hysteresis now separates entry from sustain. Entry still requires high
+  foreground core share, but sustain only requires the active game to remain
+  package-limited with GPU activity. This avoids the control-loop bug where a
+  successful cap lowers core share below the entry threshold and is then treated
+  as a reason to restore, causing cap/restore oscillation and hurting low
+  percentiles.
+- Controlled Cyberpunk 2077 A/B profiles on the MSI Claw 8 AI+ selected the
+  current balanced service default: P-core 3000MHz, E-core 2400MHz, and a 0.30
+  core-share entry threshold. At 12W the median moved from 30.6 FPS / 22.33 1%
+  low to 34.3 FPS / 25.47 1% low while shifting core share down and uncore share
+  up. At 22W the median moved from 51.8 FPS / 41.35 1% low to 53.5 FPS / 43.08
+  1% low with exact restore. At 17W the cap kept the run above the 40 FPS target
+  while saving roughly 2W package power, so it is accepted as a target-based
+  efficiency win rather than a raw-FPS win. At 30W the cap rarely entered because
+  package pressure was not high; this is the desired no-harm behavior at high TDP.
 - The guarded profiler now emits `thread-schedstat.jsonl` for each run by
   sampling read-only `/proc/<pid>/task/<tid>/schedstat` for foreground Steam
   app cgroups. This is the first automatic-affinity latency signal because it
@@ -1561,6 +1606,8 @@ The recommended direction is a generic FPS-target, topology-aware governor:
 - activation is game-scoped,
 - objective is target frame-time and pacing, not maximum raw FPS,
 - primary controls are EPP and cgroup/uclamp,
+- CPU frequency caps use separate entry and sustain hysteresis so successful
+  caps do not self-cancel,
 - automatic thread-affinity work starts as observe-only hotspot detection and
   soft compact placement, not fixed per-game pinning,
 - CPU max frequency caps are measured variants, not default behavior,
@@ -1569,3 +1616,59 @@ The recommended direction is a generic FPS-target, topology-aware governor:
   policy rule,
 - every experiment must include repeated A/B runs, exact restore evidence, and
   low-percentile frame-time acceptance gates.
+
+## 2026-07-04 Additional Research: Generic Affinity And Soft Controls
+
+The strongest common thread across the newest sources is that generic game
+affinity should be soft, demand-sized, and reversible. Microsoft's CPU Sets API
+explicitly frames CPU Sets as soft affinity compatible with OS power management,
+with hard affinity masks taking precedence only when present:
+https://learn.microsoft.com/en-us/windows/win32/procthread/cpu-sets
+
+Hard per-thread affinity remains a last-resort profiler variant. Microsoft
+warns that hard thread affinity restricts where a thread can run and can reduce
+processor time, while Linux `sched_setaffinity()` has the same basic risk and is
+intersected with cpuset state:
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadaffinitymask
+https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html
+
+Linux cgroup v2 and systemd give us the safer first writer surface. cgroup v2
+documents CPU/cpuset as threaded controllers, `cpuset.cpus.effective` as the
+actual granted CPU set, and controller ownership/top-down constraints. systemd
+maps `CPUWeight=` to `cpu.weight`, `CPUQuota=` to `cpu.max`, and
+`AllowedCPUs=` to the unified cpuset controller:
+https://docs.kernel.org/admin-guide/cgroup-v2.html
+https://man7.org/linux/man-pages/man5/systemd.resource-control.5.html
+
+`uclamp` is the preferred first scheduler hint because the kernel documents it
+as userspace-assisted power/performance management affecting both task placement
+and frequency selection. The same document gives a background-task cap example,
+which matches our helper-cgroup shaping plan:
+https://docs.kernel.org/scheduler/sched-util-clamp.html
+
+Affinity Tailor is a useful algorithmic template even though it targets
+datacenter workloads: it sizes topologically compact preferred CPU sets from
+recent demand and treats them as soft hints rather than hard partitions. The
+handheld translation is "preferred compact placement for hot game roles and
+background-helper separation", not fixed per-game pinning tables:
+https://arxiv.org/abs/2604.27915
+
+sched_ext remains the future advanced lane. The upstream kernel docs show why it
+is attractive for experiments: BPF schedulers can group CPUs dynamically and the
+kernel restores the default scheduler on errors or stalls. The same docs also
+make it too heavy for the first production writer on this device because support
+must be present and tested:
+https://docs.kernel.org/scheduler/sched-ext.html
+
+Design consequence for this repo:
+
+1. Default path: EPP plus cgroup/uclamp helper shaping.
+2. Advisor path: observe foreground hot roles, migrations, runqueue wait, and
+   topology, then generate role/cgroup candidates.
+3. Dry-run path: emit exact proposed cgroup writes and restore values without
+   touching the machine.
+4. Guarded writer path: apply one control per A/B run, reject on FPS/pacing
+   regression, restore exact values, and never cache a result without topology,
+   kernel, AppID, TDP, FPS target, and policy version keys.
+5. Future scheduler path: test sched_ext/LAVD only as a separate guarded
+   experiment once the target kernel exposes it.
