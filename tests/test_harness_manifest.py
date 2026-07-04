@@ -615,6 +615,8 @@ def test_guarded_verifier_scripts_emit_machine_readable_artifact_markers():
     assert "--frame-performance-csv" in profile_game_power
     assert "--require-frame-performance" in profile_game_power
     assert "--require-fps-target-satisfied" in profile_game_power
+    assert 'if [ -n "${live_frame_performance_csv:-}" ] && \\' in profile_game_power
+    assert 'should_require_fps_target_satisfied "$tdp" "$policy"; then' in profile_game_power
     assert "mangoapp artifact path:" in qemu_build
     assert "rootfs build log: meson compile mangoapp completed" in qemu_build
 

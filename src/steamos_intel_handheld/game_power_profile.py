@@ -4078,6 +4078,7 @@ def _row_has_frame_performance(row: dict[str, object]) -> bool:
         and _finite_positive_float(row.get("frame_p95_ms")) is not None
         and _optional_int(row.get("frame_performance_sample_count")) is not None
         and _optional_str(row.get("frame_performance_confidence")) == "high"
+        and _optional_str(row.get("frame_performance_source")) == "mangohud-csv"
     )
 
 

@@ -1591,7 +1591,8 @@ PY
         if [ -n "${live_frame_performance_csv:-}" ]; then
           runtime_contract_args+=(--require-frame-performance)
         fi
-        if should_require_fps_target_satisfied "$tdp" "$policy"; then
+        if [ -n "${live_frame_performance_csv:-}" ] && \
+          should_require_fps_target_satisfied "$tdp" "$policy"; then
           runtime_contract_args+=(--require-fps-target-satisfied)
         fi
         /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile \
