@@ -47,24 +47,24 @@ type Copy = {
   panelTitle: string;
   loading: string;
   unavailable: string;
-  mode: string;
-  service: string;
+  currentMode: string;
+  serviceState: string;
   sample: string;
   action: string;
   game: string;
-  watts: string;
   package: string;
   core: string;
   graphics: string;
   noSample: string;
   refresh: string;
   restore: string;
-  measured: string;
   applying: string;
   restored: string;
-  automatic: string;
-  observe: string;
-  off: string;
+  modes: Record<string, string>;
+  modeDescriptions: Record<string, string>;
+  actions: Record<string, string>;
+  reasons: Record<string, string>;
+  policyLabels: Record<string, string>;
   errorPrefix: string;
 };
 
@@ -74,24 +74,48 @@ const COPY: Record<LocaleKey, Copy> = {
     panelTitle: "Game Power",
     loading: "Reading game-power status...",
     unavailable: "Game-power status is unavailable.",
-    mode: "Mode",
-    service: "Service",
-    sample: "Latest sample",
+    currentMode: "Current mode",
+    serviceState: "Background service",
+    sample: "Live status",
     action: "Action",
-    game: "Game",
-    watts: "Watts",
+    game: "Current game",
     package: "Package",
     core: "CPU",
     graphics: "GPU side",
     noSample: "No foreground game sample",
     refresh: "Refresh",
-    restore: "Restore defaults",
-    measured: "Automatic mode uses measured balanced settings.",
+    restore: "Use service default",
     applying: "Applying...",
-    restored: "Defaults restored.",
-    automatic: "Automatic",
-    observe: "Observe",
-    off: "Off",
+    restored: "Using the service default.",
+    modes: {
+      automatic: "Balanced power",
+      observe: "Monitor only",
+      off: "Power scheduler off",
+      default: "Service default",
+      unknown: "Unknown",
+    },
+    modeDescriptions: {
+      automatic: "Balances CPU and GPU power while a game is running.",
+      observe: "Reads game-power data without changing power behavior.",
+      off: "Leaves CPU and GPU power behavior to the system.",
+      default: "Uses the packaged default power policy.",
+      unknown: "The active game-power mode could not be identified.",
+    },
+    actions: {
+      "observe-only": "Monitor only",
+      "gpu-priority-epp": "GPU priority",
+      "gpu-priority-cpu-cap": "GPU priority with CPU cap",
+      "off": "Power scheduler off",
+    },
+    reasons: {
+      "mode is observe": "Monitor-only mode is active.",
+      "mode is off": "The power scheduler is off.",
+      "package limited with GPU activity": "GPU activity is high, so power is being held for graphics.",
+      "package limited with high core pressure": "CPU pressure is high, so CPU power is capped to protect GPU power.",
+    },
+    policyLabels: {
+      "Balanced automatic policy": "Game balance policy",
+    },
     errorPrefix: "Error",
   },
   zhHant: {
@@ -99,24 +123,48 @@ const COPY: Record<LocaleKey, Copy> = {
     panelTitle: "遊戲電力",
     loading: "正在讀取遊戲電力狀態...",
     unavailable: "無法讀取遊戲電力狀態。",
-    mode: "模式",
-    service: "服務",
-    sample: "最新樣本",
+    currentMode: "目前模式",
+    serviceState: "背景服務",
+    sample: "即時狀態",
     action: "動作",
-    game: "遊戲",
-    watts: "瓦數",
+    game: "目前遊戲",
     package: "封包",
     core: "CPU",
     graphics: "GPU 側",
     noSample: "目前沒有前景遊戲樣本",
     refresh: "重新讀取",
-    restore: "還原預設",
-    measured: "自動模式使用已測算的平衡設定。",
+    restore: "使用服務預設",
     applying: "正在套用...",
-    restored: "已還原預設。",
-    automatic: "自動",
-    observe: "觀察",
-    off: "關閉",
+    restored: "已切回服務預設。",
+    modes: {
+      automatic: "平衡調度",
+      observe: "只監測",
+      off: "停用調度",
+      default: "服務預設",
+      unknown: "未知",
+    },
+    modeDescriptions: {
+      automatic: "遊戲執行時會平衡 CPU 與 GPU 的功耗。",
+      observe: "只讀取遊戲電力資料，不改變功耗行為。",
+      off: "不接管 CPU/GPU 功耗，交回系統處理。",
+      default: "使用套件內建的預設電力策略。",
+      unknown: "無法辨識目前的遊戲電力模式。",
+    },
+    actions: {
+      "observe-only": "只監測",
+      "gpu-priority-epp": "GPU 優先",
+      "gpu-priority-cpu-cap": "GPU 優先，限制 CPU 搶功耗",
+      "off": "停用調度",
+    },
+    reasons: {
+      "mode is observe": "目前是只監測模式，不會改動功耗。",
+      "mode is off": "目前已停用電力調度。",
+      "package limited with GPU activity": "GPU 負載偏高，正在把功耗留給顯示核心。",
+      "package limited with high core pressure": "CPU 壓力偏高，正在限制 CPU 搶功耗。",
+    },
+    policyLabels: {
+      "Balanced automatic policy": "遊戲平衡策略",
+    },
     errorPrefix: "錯誤",
   },
 };
@@ -187,6 +235,28 @@ function errorText(error: unknown): string {
 
 function fmtWatts(value: number | null): string {
   return value === null ? "-" : `${value.toFixed(1)} W`;
+}
+
+function mappedText(map: Record<string, string>, value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+  return map[value] ?? value;
+}
+
+function modeKey(mode: string | null | undefined): string {
+  if (mode === "automatic" || mode === "observe" || mode === "off" || mode === "default") {
+    return mode;
+  }
+  return "unknown";
+}
+
+function modeLabel(t: Copy, mode: string | null | undefined): string {
+  return t.modes[modeKey(mode)] ?? t.modes.unknown;
+}
+
+function modeDescription(t: Copy, mode: string | null | undefined): string {
+  return t.modeDescriptions[modeKey(mode)] ?? t.modeDescriptions.unknown;
 }
 
 const PluginTitle: FC = () => {
@@ -271,15 +341,19 @@ const GamePowerPanel: FC = () => {
         <PanelSectionRow>
           <div style={blockStyle}>
             <div className={staticClasses.Title} style={titleStyle}>
-              {status ? `${t.mode}: ${status.mode}` : busy ? t.loading : t.unavailable}
+              {status
+                ? `${t.currentMode}: ${modeLabel(t, status.mode)}`
+                : busy
+                  ? t.loading
+                  : t.unavailable}
             </div>
             {status ? (
               <>
                 <div>
-                  {t.service}: {status.active_state}/{status.sub_state}
+                  {t.serviceState}: {status.active_state}/{status.sub_state}
                 </div>
-                <div style={detailStyle}>{status.policy_label}</div>
-                <div style={detailStyle}>{t.measured}</div>
+                <div style={detailStyle}>{mappedText(t.policyLabels, status.policy_label)}</div>
+                <div style={detailStyle}>{modeDescription(t, status.mode)}</div>
               </>
             ) : null}
             {notice ? <div style={detailStyle}>{notice}</div> : null}
@@ -292,17 +366,17 @@ const GamePowerPanel: FC = () => {
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => applyMode("automatic")}>
-            {busy ? t.applying : t.automatic}
+            {busy ? t.applying : t.modes.automatic}
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => applyMode("observe")}>
-            {busy ? t.applying : t.observe}
+            {busy ? t.applying : t.modes.observe}
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => applyMode("off")}>
-            {busy ? t.applying : t.off}
+            {busy ? t.applying : t.modes.off}
           </ButtonItem>
         </PanelSectionRow>
       </PanelSection>
@@ -316,7 +390,7 @@ const GamePowerPanel: FC = () => {
             {sample ? (
               <>
                 <div>
-                  {t.action}: {sample.action ?? "-"}
+                  {t.action}: {mappedText(t.actions, sample.action)}
                 </div>
                 <div>
                   {t.package}: {fmtWatts(sample.package_w)}
@@ -327,7 +401,9 @@ const GamePowerPanel: FC = () => {
                 <div>
                   {t.graphics}: {fmtWatts(sample.uncore_w)}
                 </div>
-                {sample.reason ? <div style={detailStyle}>{sample.reason}</div> : null}
+                {sample.reason ? (
+                  <div style={detailStyle}>{mappedText(t.reasons, sample.reason)}</div>
+                ) : null}
               </>
             ) : (
               <div style={detailStyle}>{busy ? t.loading : t.noSample}</div>

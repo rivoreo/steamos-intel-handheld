@@ -93,6 +93,7 @@ def test_game_power_decky_manifest_names_game_power_panel():
 
 def test_game_power_decky_frontend_exposes_intent_not_raw_policy_knobs():
     frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
+    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
 
     assert "definePlugin" in frontend
     assert "callable" in frontend
@@ -100,11 +101,20 @@ def test_game_power_decky_frontend_exposes_intent_not_raw_policy_knobs():
     assert '"sample_once"' in frontend
     assert '"set_mode"' in frontend
     assert '"restore_defaults"' in frontend
-    assert "Automatic" in frontend
-    assert "Observe" in frontend
-    assert "Off" in frontend
+    assert "Balanced power" in frontend
+    assert "Monitor only" in frontend
+    assert "Power scheduler off" in frontend
     assert "遊戲電力" in frontend
-    assert "自動" in frontend
+    assert "平衡調度" in frontend
+    assert "只監測" in frontend
+    assert "停用調度" in frontend
+    assert "平衡調度" in bundled
+    assert "只監測" in bundled
+    assert "停用調度" in bundled
+    assert "模式: automatic" not in frontend
+    assert "動作: observe-only" not in frontend
+    assert "模式: automatic" not in bundled
+    assert "動作: observe-only" not in bundled
     for forbidden in (
         "P-core",
         "E-core",
