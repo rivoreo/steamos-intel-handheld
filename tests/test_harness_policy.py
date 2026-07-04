@@ -34,6 +34,18 @@ def test_harness_has_a_single_local_verification_command():
     assert "compileall" in harness
 
 
+def test_ai_harness_documents_read_only_hook_reminders():
+    harness = (ROOT / "docs/ai-development-harness.md").read_text()
+    agents = (ROOT / "AGENTS.md").read_text()
+
+    assert "scripts/harness-hook.py" in harness
+    assert "read-only" in harness
+    assert "does not run checks" in harness
+    assert "does not change repository state" in harness
+    assert "scripts/harness-hook.py" in agents
+    assert "does not change repository state" in agents
+
+
 def test_local_harness_runs_shell_syntax_check_and_ci_summary():
     script = (ROOT / "scripts/check-local.sh").read_text()
 

@@ -8,8 +8,8 @@ fi
 
 target="$1"
 appid="${PROFILE_GAME_POWER_APPID:-1091500}"
-tdp_levels="${PROFILE_GAME_POWER_TDPS:-22}"
-policies="${PROFILE_GAME_POWER_POLICIES:-off gpu-priority}"
+tdp_levels="${PROFILE_GAME_POWER_TDPS:-12 22}"
+policies="${PROFILE_GAME_POWER_POLICIES:-off gpu-priority gpu-priority-cpu-cap}"
 repeats="${PROFILE_GAME_POWER_REPEATS:-1}"
 duration_s="${PROFILE_GAME_POWER_DURATION_S:-60}"
 warmup_s="${PROFILE_GAME_POWER_WARMUP_S:-10}"
@@ -1145,15 +1145,23 @@ set_service_game_power_mode off
 setup_mangohud_controlled_capture
 profile_failed=false
 FPS_TARGET_SOURCE="unknown"
+FPS_TARGET_CONFIDENCE="low"
 if [ -n "$FPS_TARGET" ]; then
   FPS_TARGET_SOURCE="manual"
+  FPS_TARGET_CONFIDENCE="high"
   write_manual_fps_target_discovery "$REMOTE_ROOT/fps-target.discovery.json"
 else
   FPS_TARGET="$(discover_fps_target "$REMOTE_ROOT/fps-target.discovery.json" || true)"
   if [ -n "$FPS_TARGET" ]; then
     FPS_TARGET_SOURCE="gamescope-cmdline"
+    FPS_TARGET_CONFIDENCE="medium"
   fi
 fi
+
+/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile \
+  replay-action-equivalence \
+  --output "$REMOTE_ROOT/action-equivalence.json" \
+  >"$REMOTE_ROOT/action-equivalence.stdout"
 
 for repeat in $(seq 1 "$REPEATS"); do
   for tdp in $TDP_LEVELS; do
@@ -1291,6 +1299,14 @@ for repeat in $(seq 1 "$REPEATS"); do
           fi
         fi
         start_mangohud_capture "$run_dir"
+        fps_target_runtime_args=()
+        if [ -n "$FPS_TARGET" ]; then
+          fps_target_runtime_args=(
+            --fps-target "$FPS_TARGET"
+            --fps-target-source "$FPS_TARGET_SOURCE"
+            --fps-target-confidence "$FPS_TARGET_CONFIDENCE"
+          )
+        fi
         sample_cgroup_pressure "$run_dir/cgroup-pressure.jsonl" "$DURATION_S" &
         pressure_pid="$!"
         sample_thread_affinity "$run_dir/thread-affinity.jsonl" "$DURATION_S" &
@@ -1306,6 +1322,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           --poll-s "$POLL_S" \
           --target-appid "$APPID" \
           --output-format jsonl \
+          "${fps_target_runtime_args[@]}" \
           "${policy_args[@]}" >"$run_dir/game-power.jsonl"; then
           stop_mangohud_capture || true
           wait "$pressure_pid" || true
@@ -1394,6 +1411,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           fps_target_args=(--fps-target "$FPS_TARGET")
         fi
         fps_target_source_args=(--fps-target-source "$FPS_TARGET_SOURCE")
+        fps_target_confidence_args=(--fps-target-confidence "$FPS_TARGET_CONFIDENCE")
 
         /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile summarize \
           --appid "$APPID" \
@@ -1403,6 +1421,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           "${mangohud_args[@]}" \
           "${fps_target_args[@]}" \
           "${fps_target_source_args[@]}" \
+          "${fps_target_confidence_args[@]}" \
           --game-power-jsonl "$run_dir/game-power.jsonl" \
           --pressure-jsonl "$run_dir/cgroup-pressure.jsonl" \
           --thread-affinity-jsonl "$run_dir/thread-affinity.jsonl" \
@@ -1421,6 +1440,35 @@ for repeat in $(seq 1 "$REPEATS"); do
           "${ab_summary_args[@]}" \
           --restored "$restored" \
           --output "$run_dir"
+
+        runtime_contract_args=(
+          --game-power-jsonl "$run_dir/game-power.jsonl"
+          --summary-json "$run_dir/summary.json"
+          --action-replay-json "$REMOTE_ROOT/action-equivalence.json"
+          --require-classification
+          --require-pressure
+        )
+        if [ -n "$FPS_TARGET" ]; then
+          runtime_contract_args+=(
+            --expect-fps-target "$FPS_TARGET"
+            --expect-fps-target-source "$FPS_TARGET_SOURCE"
+            --expect-fps-target-confidence "$FPS_TARGET_CONFIDENCE"
+            --expect-target-frame-ms "$(python3 - "$FPS_TARGET" <<'PY'
+import sys
+
+print(f"{1000.0 / float(sys.argv[1]):.3f}")
+PY
+)"
+          )
+        fi
+        if [ "$policy" = "gpu-priority-cpu-cap" ]; then
+          runtime_contract_args+=(--require-cpu-cap-action)
+        fi
+        /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile \
+          validate-runtime-telemetry \
+          "${runtime_contract_args[@]}" \
+          --output "$run_dir/runtime-telemetry-contract.json" \
+          >"$run_dir/runtime-telemetry-contract.stdout"
         if [ ! -f "$run_dir/affinity-advice.json" ]; then
           echo "missing affinity-advice.json in $run_dir" >&2
           exit 1
@@ -1441,10 +1489,41 @@ for repeat in $(seq 1 "$REPEATS"); do
         echo "profile artifact mangohud.csv: $run_dir/mangohud.csv"
         echo "profile artifact game-power.jsonl: $run_dir/game-power.jsonl"
         echo "profile artifact restore snapshot: $run_dir/restore-affinity.json"
+        echo "profile artifact runtime telemetry contract: $run_dir/runtime-telemetry-contract.json"
       done
     done
   done
 done
+
+python3 - "$REMOTE_ROOT" "$REMOTE_ROOT/profile-runtime-telemetry-contract.json" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+output = pathlib.Path(sys.argv[2])
+contracts = []
+for path in sorted(root.glob("*/runtime-telemetry-contract.json")):
+    payload = json.loads(path.read_text())
+    contracts.append(
+        {
+            "path": str(path),
+            "status": payload.get("status"),
+            "samples": payload.get("samples"),
+            "classification_samples": payload.get("classification_samples"),
+            "pressure_samples": payload.get("pressure_samples"),
+            "cpu_cap_action_reached": payload.get("cpu_cap_action_reached"),
+        }
+    )
+payload = {
+    "schema_version": "game-power-profile-runtime-telemetry-contract-v1",
+    "status": "pass" if contracts and all(item["status"] == "pass" for item in contracts) else "fail",
+    "run_contract_count": len(contracts),
+    "contracts": contracts,
+}
+output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+raise SystemExit(0 if payload["status"] == "pass" else 1)
+PY
 
 restore_state
 trap - EXIT
@@ -1453,6 +1532,8 @@ REMOTE
 scp -r "$target:$remote_root/." "$local_root/"
 ssh "$target" "rm -rf '$remote_root'"
 echo "profiles copied to $local_root"
+echo "profile artifact action equivalence: $local_root/action-equivalence.json"
+echo "profile artifact runtime telemetry aggregate: $local_root/profile-runtime-telemetry-contract.json"
 if [ -f "$local_root/$failure_marker" ]; then
   cat "$local_root/$failure_marker" >&2
   exit 1

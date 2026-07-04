@@ -712,11 +712,13 @@ fi
 meson compile -C /home/build/mangohud -j "$STEAMOS_QEMU_BUILD_JOBS" mangoapp
 file /home/build/mangohud/src/mangoapp
 EOS
+  echo "rootfs build log: meson compile mangoapp completed"
 
   mkdir -p "$(dirname "$mangoapp_artifact")"
   sudo_cmd cp "$rootfs_dir/home/build/mangohud/src/mangoapp" "$mangoapp_artifact"
   sudo_cmd chown "$(id -u):$(id -g)" "$mangoapp_artifact"
   chmod 0755 "$mangoapp_artifact"
+  echo "mangoapp artifact path: $mangoapp_artifact"
   file "$mangoapp_artifact"
 }
 

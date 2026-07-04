@@ -1,4 +1,7 @@
 version = 1
+trusted_suite = "scripts/harness.py sweep required --report .cache/harness/required.json"
+iteration_hint = ".venv/bin/python -m pytest <path-or-node>"
+report_path = ".cache/harness/required.json"
 
 [[checks]]
 id = "local"
@@ -10,6 +13,7 @@ tier = "required"
 expectation = "pass"
 expected_duration = "under 5 seconds"
 evidence = "Complete command output or CI job summary."
+evidence_artifacts = ["command-output", "ruff-summary", "engineering-policy-summary", "shell-syntax-summary", "pytest-summary", "compileall-summary"]
 
 [[checks]]
 id = "device-full"
@@ -21,6 +25,7 @@ tier = "guarded"
 expectation = "blocked"
 expected_duration = "about 1-5 minutes after the target is reachable"
 evidence = "Full verifier output from the target handheld."
+evidence_artifacts = ["verify-on-device-output", "systemd-state", "steamos-manager-state", "rapl-pl1-state", "failed-units-list"]
 
 [[checks]]
 id = "game-power-device"
@@ -32,6 +37,7 @@ tier = "guarded"
 expectation = "blocked"
 expected_duration = "about 1-3 minutes after a Steam game is running"
 evidence = "Observe and gpu-priority outputs plus a clean CPU policy restore diff."
+evidence_artifacts = ["observe-output", "gpu-priority-output", "cpu-policy-restore-diff"]
 
 [[checks]]
 id = "game-power-profile-device"
@@ -43,6 +49,7 @@ tier = "guarded"
 expectation = "blocked"
 expected_duration = "several minutes depending on PROFILE_GAME_POWER_TDPS and policies"
 evidence = "Profile directories with manifest.json, summary.json, MangoHud CSV, game-power JSONL, and restore snapshots."
+evidence_artifacts = ["profile-manifest-json", "profile-summary-json", "mangohud-csv", "game-power-jsonl", "restore-snapshot", "runtime-telemetry-contract-json", "profile-runtime-telemetry-contract-json", "action-equivalence-replay-summary"]
 
 [[checks]]
 id = "release-artifact"
@@ -54,6 +61,7 @@ tier = "guarded"
 expectation = "blocked"
 expected_duration = "under 1 minute after artifact download"
 evidence = "Verifier output naming the artifact root."
+evidence_artifacts = ["pacman-repository-shape", "artifact-root", "verification-output"]
 
 [[checks]]
 id = "qemu-mangoapp-rootfs"
@@ -65,3 +73,4 @@ tier = "guarded"
 expectation = "blocked"
 expected_duration = "tens of minutes on a cold cache"
 evidence = "mangoapp artifact path plus file output; real sensor behavior still needs device verification."
+evidence_artifacts = ["mangoapp-artifact-path", "file-output", "rootfs-build-log"]

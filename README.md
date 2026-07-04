@@ -253,10 +253,11 @@ machine-readable game-power samples:
 scripts/profile-game-power-on-device.sh root@10.100.0.19
 ```
 
-By default the guarded wrapper runs an imported-log capture at 22W for:
+By default the guarded wrapper runs an imported-log capture at 12W and 22W for:
 
 - `off`
 - `gpu-priority`
+- `gpu-priority-cpu-cap`
 
 For controlled A/B claims, run one candidate per invocation and keep the scene
 stable. The wrapper records a paired-baseline order, power-source samples,
@@ -298,9 +299,13 @@ baseline. Results are copied into `.cache/game-power/profiles/`. Each run
 directory contains `manifest.json`, `summary.json`, `game-power.jsonl`,
 `cgroup-pressure.jsonl`, `thread-affinity.jsonl`, `thread-schedstat.jsonl`,
 `cpu-topology.json`, `process-cgroups.jsonl`, `affinity-advice.json`,
-`background-shaping.json`, `restore-affinity.json`,
+`background-shaping.json`, `runtime-telemetry-contract.json`,
+`restore-affinity.json`,
 CPU policy snapshots, TDP snapshots, and the MangoHud CSV/summary used for FPS
-analysis. The thread-affinity capture is observe-only and records per-thread
+analysis. The wrapper also emits a top-level `action-equivalence.json` replay
+and `profile-runtime-telemetry-contract.json` aggregate so guarded profile
+evidence proves the runtime classification, pressure, FPS target metadata, and
+CPU-cap action path were observed. The thread-affinity capture is observe-only and records per-thread
 CPU time, migration, context-switch, current-CPU, affinity-mask, and cgroup
 samples for future automatic-affinity research. The thread-schedstat capture is
 also observe-only and records per-thread scheduler run time, run-queue wait
@@ -322,9 +327,12 @@ want an explicit controlled A/B target. If it is unset, the wrapper makes a
 best-effort read-only discovery from the live gamescope command line's focused
 `-r` frame-rate limit and stores `fps-target.discovery.json` next to the run
 artifacts. Summaries then include `fps_target`,
-`fps_target_source`, `target_frame_ms`, `avg_fps_target_ratio`, and
-`fps_target_met`, and repeated comparisons can accept a candidate that sustains
-the target while reducing package power. `restore-affinity.json` snapshots the
+`fps_target_source`, `fps_target_confidence`, `target_frame_ms`,
+`avg_fps_target_ratio`, `fps_target_met`, `pacing_proof`, and
+`post_run_classification`. Repeated comparisons can accept a candidate that
+sustains the target while reducing package power only when the average FPS,
+1% low, and p99 frametime all satisfy the target-sustained contract.
+`restore-affinity.json` snapshots the
 foreground app's original thread affinity masks plus cgroup `cpu.uclamp.*`,
 `cpu.weight`, `cpu.max`, and `cpuset.*` files before a run. It also snapshots
 the same cgroup controller files for Steam, gamescope/mangoapp, user, and

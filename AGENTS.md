@@ -10,6 +10,18 @@
   scripts/harness.py list --json
   ```
 
+- Inspect the current trusted-suite status with:
+
+  ```bash
+  scripts/harness.py status --json
+  ```
+
+  Check `freshness`, `pending_verification`, `gate_matrix`, each row's
+  `evidence_state`, and `evidence_artifact_results` before trusting a report.
+- `scripts/harness-hook.py` does not run checks. It does not change repository state.
+  It reminds or blocks on pending verification, and denies `git commit` while
+  required verification is pending.
+
 ## Local Loop
 
 - After any code or policy change, run the required sweep:
@@ -33,6 +45,9 @@
 
 - Do not run device, QEMU, release, or network-heavy checks unless the user
   asked for that validation or the task specifically requires it.
+- When a heavy check is explicitly needed, prefer `scripts/harness.py run <id>`
+  with the required `--allow-*` flags and `--report ...`; the report captures
+  output and validates declared `evidence_artifacts`.
 - Current handheld examples use `root@10.100.0.19`.
 - Device-facing changes need `scripts/verify-on-device.sh root@10.100.0.19`
   evidence before claiming hardware validation.

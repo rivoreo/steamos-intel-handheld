@@ -15,6 +15,7 @@ from steamos_intel_handheld.game_power_profile import (
     ProcessCgroupSummary,
     RestoreAffinitySummary,
     RunSummary,
+    RuntimeTelemetryCounts,
     ThreadAffinitySummary,
     ThreadSchedstatSummary,
     aggregate_run_summaries,
@@ -28,6 +29,7 @@ from steamos_intel_handheld.game_power_profile import (
     parse_mangohud_fps_csv,
     parse_mangohud_summary_csv,
     parse_pressure_file,
+    replay_action_equivalence,
     restore_background_shaping_writes,
     summarize_cpu_topology,
     summarize_pressure_jsonl,
@@ -35,6 +37,7 @@ from steamos_intel_handheld.game_power_profile import (
     summarize_restore_affinity_json,
     summarize_thread_affinity_jsonl,
     summarize_thread_schedstat_jsonl,
+    validate_runtime_telemetry,
 )
 
 
@@ -55,6 +58,7 @@ def controlled_ab_run(
     base_s: float = 0.0,
     avg_fps: float = 42.0,
     one_percent_low_fps: float = 30.0,
+    p99_frametime_ms: float = 35.0,
     avg_package_w: float | None = None,
     thermal_start_c: float = 61.0,
     thermal_end_c: float = 63.0,
@@ -81,6 +85,7 @@ def controlled_ab_run(
         fps_target_source="manual",
         avg_fps=avg_fps,
         one_percent_low_fps=one_percent_low_fps,
+        p99_frametime_ms=p99_frametime_ms,
         avg_package_w=avg_package_w,
         restored=True,
         ab_order_strategy="paired-baseline",
@@ -1323,7 +1328,7 @@ def test_compare_run_summaries_accepts_power_saving_when_target_is_sustained():
         capture_mode=CaptureMode.CONTROLLED,
         fps_target=40.0,
         avg_fps=42.0,
-        one_percent_low_fps=31.0,
+        one_percent_low_fps=32.0,
         p99_frametime_ms=35.0,
         avg_package_w=22.0,
         restored=True,
@@ -1335,7 +1340,7 @@ def test_compare_run_summaries_accepts_power_saving_when_target_is_sustained():
         capture_mode=CaptureMode.CONTROLLED,
         fps_target=40.0,
         avg_fps=40.4,
-        one_percent_low_fps=30.8,
+        one_percent_low_fps=32.1,
         p99_frametime_ms=35.6,
         avg_package_w=20.2,
         restored=True,
@@ -1892,14 +1897,14 @@ def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
                 policy="off",
                 position="baseline-before",
                 avg_fps=42.0,
-                one_percent_low_fps=31.0,
+                one_percent_low_fps=32.0,
                 avg_package_w=22.0,
             ),
             controlled_ab_run(
                 policy="off",
                 position="baseline-after",
                 avg_fps=41.5,
-                one_percent_low_fps=30.6,
+                one_percent_low_fps=32.0,
                 avg_package_w=21.8,
             ),
             controlled_ab_run(
@@ -1908,7 +1913,7 @@ def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
                 pair_id="pair-2",
                 base_s=500.0,
                 avg_fps=42.1,
-                one_percent_low_fps=31.1,
+                one_percent_low_fps=32.2,
                 avg_package_w=22.1,
             ),
             controlled_ab_run(
@@ -1917,7 +1922,7 @@ def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
                 pair_id="pair-2",
                 base_s=500.0,
                 avg_fps=41.9,
-                one_percent_low_fps=30.8,
+                one_percent_low_fps=32.0,
                 avg_package_w=21.9,
             ),
         ]
@@ -1928,7 +1933,7 @@ def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
                 policy="gpu-priority",
                 position="candidate",
                 avg_fps=40.9,
-                one_percent_low_fps=30.4,
+                one_percent_low_fps=32.0,
                 avg_package_w=20.2,
             ),
             controlled_ab_run(
@@ -1937,7 +1942,7 @@ def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
                 pair_id="pair-2",
                 base_s=500.0,
                 avg_fps=40.6,
-                one_percent_low_fps=30.3,
+                one_percent_low_fps=32.0,
                 avg_package_w=20.0,
             ),
         ]
@@ -3682,3 +3687,209 @@ def test_summarize_pressure_jsonl_reports_peak_cpu_pressure(tmp_path):
         "cpu_pressure_some_avg10_peak": 3.4,
         "cpu_pressure_full_avg10_peak": 0.2,
     }
+
+
+def test_parse_game_power_jsonl_counts_runtime_classification_and_target_metadata(tmp_path):
+    path = tmp_path / "game-power.jsonl"
+    rows = [
+        {
+            "appid": "1091500",
+            "action": "gpu-priority-cpu-cap",
+            "package_w": 22.0,
+            "core_w": 8.0,
+            "uncore_w": 9.0,
+            "render_busy": 0.8,
+            "fps_target": 40.0,
+            "fps_target_source": "manual",
+            "fps_target_confidence": "high",
+            "classification": {
+                "primary": "gpu-package-bound-cpu-contention",
+                "advisories": ["foreground-cpu-pressure"],
+                "confidence": "high",
+                "evidence": {},
+            },
+            "pressure": {
+                "cpu": [
+                    {
+                        "scope": "foreground_cgroup",
+                        "supported": True,
+                        "some_avg10": 2.5,
+                    }
+                ],
+                "memory": [],
+                "io": [],
+            },
+        },
+        {"appid": "1091500", "action": "observe-only", "classification": "bad"},
+        {"appid": None, "action": "observe-only"},
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    summary = parse_game_power_jsonl(path)
+
+    assert summary.classification_primary == {
+        "gpu-package-bound-cpu-contention": 1,
+        "unknown": 2,
+    }
+    assert summary.classification_advisories == {"foreground-cpu-pressure": 1}
+    assert summary.classification_malformed == 1
+    assert summary.fps_target_source_counts == {"manual": 1}
+    assert summary.fps_target_confidence_counts == {"high": 1}
+    assert summary.runtime_telemetry_counts == RuntimeTelemetryCounts(
+        foreground_runtime_rows=2,
+        unknown_foreground_rows=1,
+        foreground_pressure_signals=1,
+        supported_foreground_pressure_signals=1,
+        unsupported_foreground_pressure_signals=0,
+    )
+    assert summary.classification_unknown_ratio == 0.5
+    assert summary.pressure_supported_ratio == 1.0
+    assert summary.pressure_unsupported_ratio == 0.0
+
+
+def test_runtime_telemetry_counts_persist_for_weighted_aggregate_ratios(tmp_path):
+    first = RunSummary(
+        appid="1091500",
+        tdp_w=12,
+        policy="gpu-priority",
+        runtime_telemetry_counts=RuntimeTelemetryCounts(
+            foreground_runtime_rows=2,
+            unknown_foreground_rows=1,
+            foreground_pressure_signals=1,
+            supported_foreground_pressure_signals=1,
+        ),
+        restored=True,
+    )
+    second = replace(
+        first,
+        runtime_telemetry_counts=RuntimeTelemetryCounts(
+            foreground_runtime_rows=8,
+            unknown_foreground_rows=1,
+            foreground_pressure_signals=3,
+            supported_foreground_pressure_signals=1,
+            unsupported_foreground_pressure_signals=2,
+        ),
+    )
+    root = tmp_path / "runs"
+    for index, run in enumerate((first, second), start=1):
+        run_dir = root / f"run-{index}"
+        run_dir.mkdir(parents=True)
+        payload = asdict(run)
+        payload["capture_mode"] = run.capture_mode.value
+        (run_dir / "summary.json").write_text(json.dumps(payload) + "\n")
+
+    aggregate = aggregate_run_summaries(
+        [
+            RunSummary(**json.loads(path.read_text()))
+            for path in sorted(root.glob("*/summary.json"))
+        ]
+    )
+
+    assert aggregate.runtime_telemetry_counts == RuntimeTelemetryCounts(
+        foreground_runtime_rows=10,
+        unknown_foreground_rows=2,
+        foreground_pressure_signals=4,
+        supported_foreground_pressure_signals=2,
+        unsupported_foreground_pressure_signals=2,
+    )
+    assert aggregate.classification_unknown_ratio == 0.2
+    assert aggregate.pressure_supported_ratio == 0.5
+    assert aggregate.pressure_unsupported_ratio == 0.5
+
+
+def test_target_average_only_does_not_count_as_target_sustained():
+    baseline = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="off",
+                position="baseline-before",
+                avg_fps=42.0,
+                one_percent_low_fps=20.0,
+                avg_package_w=22.0,
+            ),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-after",
+                avg_fps=42.0,
+                one_percent_low_fps=20.0,
+                avg_package_w=22.0,
+            ),
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="gpu-priority",
+                position="candidate",
+                avg_fps=42.0,
+                one_percent_low_fps=20.0,
+                avg_package_w=20.0,
+            ),
+            controlled_ab_run(
+                policy="gpu-priority",
+                position="candidate",
+                pair_id="pair-2",
+                base_s=500.0,
+                avg_fps=42.0,
+                one_percent_low_fps=20.0,
+                avg_package_w=20.0,
+            ),
+        ]
+    )
+
+    verdict = compare_policy_aggregates(baseline, candidate, min_runs=2)
+
+    assert verdict.verdict == PolicyVerdict.INCONCLUSIVE
+    assert "target sustained" not in verdict.reason
+
+
+def test_validate_runtime_telemetry_requires_classification_pressure_and_target(tmp_path):
+    path = tmp_path / "game-power.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "action": "gpu-priority-cpu-cap",
+                "fps_target": 40.0,
+                "fps_target_source": "manual",
+                "fps_target_confidence": "high",
+                "target_frame_ms": 25.0,
+                "classification": {"primary": "gpu-package-bound", "advisories": []},
+                "pressure": {
+                    "cpu": [
+                        {"scope": "foreground_cgroup", "supported": True, "some_avg10": 1.0}
+                    ],
+                    "memory": [],
+                    "io": [],
+                },
+            }
+        )
+        + "\n"
+    )
+
+    verdict = validate_runtime_telemetry(
+        game_power_jsonl=path,
+        require_classification=True,
+        require_pressure=True,
+        expect_fps_target=40.0,
+        expect_fps_target_source="manual",
+        expect_fps_target_confidence="high",
+        expect_target_frame_ms=25.0,
+        require_cpu_cap_action=True,
+    )
+
+    assert verdict["status"] == "pass"
+    assert verdict["classification_samples"] == 1
+    assert verdict["pressure_samples"] == 1
+    assert verdict["cpu_cap_action_reached"] is True
+
+
+def test_replay_action_equivalence_outputs_zero_delta_artifact(tmp_path):
+    output = tmp_path / "action-equivalence.json"
+
+    verdict = replay_action_equivalence(output)
+
+    assert verdict["schema_version"] == "game-power-action-equivalence-v1"
+    assert verdict["action_delta_count"] == 0
+    assert verdict["reason_delta_count"] == 0
+    assert json.loads(output.read_text()) == verdict

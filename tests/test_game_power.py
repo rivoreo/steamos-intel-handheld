@@ -7,20 +7,27 @@ from steamos_intel_handheld.game_power import (
     CpuPolicyClass,
     CpuPolicySnapshot,
     EnergyReading,
+    FrameTargetTelemetry,
     GamePowerAction,
+    GamePowerClassification,
     GamePowerConfig,
     GamePowerController,
     GamePowerGovernor,
     GamePowerMode,
     GamePowerSample,
     GameProcess,
+    PressureSignal,
+    PressureTelemetry,
     RaplObserver,
     RaplPowerWindow,
+    classify_game_power_sample,
     compute_fdinfo_busy,
     compute_rapl_power_window,
     discover_cpu_policies,
     find_steam_game_processes,
     parse_fdinfo_engine_times,
+    parse_pressure_signal,
+    resolve_cgroup_v2_path,
 )
 
 
@@ -372,6 +379,154 @@ def test_format_decision_jsonl_contains_policy_sample_fields():
     assert row["render_busy"] == 0.75
 
 
+def test_format_decision_jsonl_emits_classification_pressure_and_target_schema():
+    sample = GamePowerSample(
+        appid="1091500",
+        rapl=RaplPowerWindow(
+            duration_s=2.0,
+            package_w=22.0,
+            core_w=8.8,
+            uncore_w=7.4,
+        ),
+        pl1_w=22,
+        fdinfo_busy={"render": 0.75},
+        frame_target=FrameTargetTelemetry(
+            fps_target=40.0,
+            source="manual",
+            confidence="high",
+        ),
+        pressure=PressureTelemetry(
+            cpu=(
+                PressureSignal(
+                    scope="foreground_cgroup",
+                    source_path="/sys/fs/cgroup/app/cpu.pressure",
+                    supported=True,
+                    some_avg10=2.4,
+                    full_avg10=0.1,
+                ),
+            ),
+            memory=(),
+            io=(),
+        ),
+    )
+    decision = game_power.GamePowerDecision(
+        GamePowerAction.GPU_PRIORITY_CPU_CAP,
+        "package limited with high core pressure",
+        classification=GamePowerClassification(
+            primary="gpu-package-bound-cpu-contention",
+            advisories=("foreground-cpu-pressure",),
+            confidence="high",
+            evidence={
+                "package_pressure_ratio": 1.0,
+                "target_frame_ms": 25.0,
+                "controller_active": False,
+            },
+        ),
+    )
+
+    row = json.loads(game_power.format_decision_jsonl(sample, decision, elapsed_s=2.0))
+
+    assert row["fps_target"] == 40.0
+    assert row["fps_target_source"] == "manual"
+    assert row["fps_target_confidence"] == "high"
+    assert row["target_frame_ms"] == 25.0
+    assert row["classification"] == {
+        "primary": "gpu-package-bound-cpu-contention",
+        "advisories": ["foreground-cpu-pressure"],
+        "confidence": "high",
+        "evidence": {
+            "controller_active": False,
+            "package_pressure_ratio": 1.0,
+            "target_frame_ms": 25.0,
+        },
+    }
+    assert row["pressure"]["cpu"] == [
+        {
+            "scope": "foreground_cgroup",
+            "source_path": "/sys/fs/cgroup/app/cpu.pressure",
+            "supported": True,
+            "some_avg10": 2.4,
+            "full_avg10": 0.1,
+            "error": None,
+        }
+    ]
+    assert row["pressure"]["memory"] == []
+    assert row["pressure"]["io"] == []
+
+
+def test_classification_uses_controller_active_state_for_core_share_gate():
+    config = GamePowerConfig(
+        mode=GamePowerMode.GPU_PRIORITY,
+        cpu_cap_enabled=True,
+        cpu_cap_core_share_threshold=0.30,
+    )
+    sample = make_sample(core_w=6.0, package_w=22.0, uncore_w=9.4, render_busy=0.9)
+
+    inactive = classify_game_power_sample(config, sample, controller_active=False)
+    active = classify_game_power_sample(config, sample, controller_active=True)
+    decision = GamePowerController(config).evaluate(sample)
+
+    assert inactive.primary == "insufficient-cpu-contention-evidence"
+    assert active.primary == "gpu-package-bound"
+    assert decision.action == GamePowerAction.OBSERVE_ONLY
+    assert decision.classification == inactive
+
+
+def test_pressure_parser_preserves_missing_full_as_none():
+    signal = parse_pressure_signal(
+        "cpu",
+        "foreground_cgroup",
+        "/sys/fs/cgroup/app/cpu.pressure",
+        "some avg10=2.50 avg60=1.00 total=123\n",
+    )
+
+    assert signal == PressureSignal(
+        scope="foreground_cgroup",
+        source_path="/sys/fs/cgroup/app/cpu.pressure",
+        supported=True,
+        some_avg10=2.5,
+        full_avg10=None,
+        error=None,
+    )
+
+
+def test_resolve_cgroup_v2_path_strips_leading_slash_under_root(tmp_path):
+    cgroup_root = tmp_path / "cgroup"
+    cgroup_root.mkdir()
+
+    resolved = resolve_cgroup_v2_path(
+        cgroup_root,
+        "0::/user.slice/user-1000.slice/app.slice/app-steam-app1091500.scope\n",
+    )
+
+    assert resolved == (
+        cgroup_root
+        / "user.slice"
+        / "user-1000.slice"
+        / "app.slice"
+        / "app-steam-app1091500.scope"
+    ).resolve()
+
+
+def test_fps_target_rejects_non_positive_nan_and_infinite_values():
+    parser = game_power.build_parser()
+
+    for value in ("0", "-1", "nan", "inf", "-inf"):
+        try:
+            parser.parse_args(["--fps-target", value])
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError(f"expected parse failure for {value}")
+
+    try:
+        game_power.config_from_args(parser.parse_args(["--fps-target-source", "manual"]))
+    except ValueError as exc:
+        assert "--fps-target-source requires --fps-target" in str(exc)
+    else:
+        raise AssertionError("expected source without target to fail")
+
+
 def test_build_parser_accepts_jsonl_output_format():
     args = game_power.build_parser().parse_args(["--output-format", "jsonl"])
 
@@ -482,4 +637,14 @@ def test_find_steam_game_processes_reads_appid_from_cgroup(tmp_path):
 
     processes = find_steam_game_processes(proc_root)
 
-    assert processes == [GameProcess(pid=1234, appid="1091500", command="Cyberpunk2077.exe")]
+    assert processes == [
+        GameProcess(
+            pid=1234,
+            appid="1091500",
+            command="Cyberpunk2077.exe",
+            cgroup_text=(
+                "0::/user.slice/user-1000.slice/user@1000.service/app.slice/"
+                "app-steam-app1091500-1234.scope"
+            ),
+        )
+    ]

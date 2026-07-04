@@ -425,6 +425,9 @@ def test_game_power_profile_device_check_is_guarded():
     assert check["safe_for_agents"] is False
     assert check["expectation"] == "blocked"
     assert check["requires"] == ["root-ssh", "handheld", "foreground-game"]
+    assert "runtime-telemetry-contract-json" in check["evidence_artifacts"]
+    assert "profile-runtime-telemetry-contract-json" in check["evidence_artifacts"]
+    assert "action-equivalence-replay-summary" in check["evidence_artifacts"]
 
 
 def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
@@ -469,6 +472,11 @@ def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
     assert "--process-cgroups-jsonl" in script
     assert "PROFILE_GAME_POWER_FPS_TARGET" in script
     assert "--fps-target" in script
+    assert "--fps-target-confidence" in script
+    assert "replay-action-equivalence" in script
+    assert "validate-runtime-telemetry" in script
+    assert "runtime-telemetry-contract.json" in script
+    assert "profile-runtime-telemetry-contract.json" in script
     assert "steamos-intel-handheld-game-power-profile summarize" in script
     assert "capture_mode" in script
     assert ".cache/game-power/profiles" in script
@@ -816,6 +824,7 @@ def test_docs_describe_game_power_governor_default_on_and_reversible():
     assert "--game-power-ecore-max-mhz 2400" in readme
     assert "--game-power-cpu-cap-core-share-threshold 0.30" in readme
     assert "scripts/verify-game-power-on-device.sh root@10.100.0.19" in readme
+    assert "12W and 22W" in readme
     assert "PROFILE_GAME_POWER_CAPTURE_MODE=controlled" in readme
     assert "PROFILE_GAME_POWER_REPEATS=3" in readme
     assert 'PROFILE_GAME_POWER_SCENE_EVIDENCE="save:<stable-scene>"' in readme
@@ -825,6 +834,11 @@ def test_docs_describe_game_power_governor_default_on_and_reversible():
         'PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap"'
         not in readme
     )
+    assert "runtime-telemetry-contract.json" in readme
+    assert "profile-runtime-telemetry-contract.json" in readme
+    assert "action-equivalence.json" in readme
+    assert "fps_target_confidence" in readme
+    assert "post_run_classification" in readme
     assert (
         'PROFILE_GAME_POWER_CPU_CAP_VARIANTS="balanced:3000:2400:0.30"'
         in readme

@@ -73,6 +73,24 @@ class GamePowerLogSummary:
     avg_uncore_share: float | None = None
     avg_render_busy: float | None = None
     actions: dict[str, int] | None = None
+    classification_primary: dict[str, int] | None = None
+    classification_advisories: dict[str, int] | None = None
+    classification_malformed: int = 0
+    fps_target_source_counts: dict[str, int] | None = None
+    fps_target_confidence_counts: dict[str, int] | None = None
+    runtime_telemetry_counts: RuntimeTelemetryCounts | None = None
+    classification_unknown_ratio: float | None = None
+    pressure_supported_ratio: float | None = None
+    pressure_unsupported_ratio: float | None = None
+
+
+@dataclass(frozen=True)
+class RuntimeTelemetryCounts:
+    foreground_runtime_rows: int = 0
+    unknown_foreground_rows: int = 0
+    foreground_pressure_signals: int = 0
+    supported_foreground_pressure_signals: int = 0
+    unsupported_foreground_pressure_signals: int = 0
 
 
 @dataclass(frozen=True)
@@ -171,9 +189,12 @@ class RunSummary:
     cpu_cap_core_share_threshold: float | None = None
     fps_target: float | None = None
     fps_target_source: str | None = None
+    fps_target_confidence: str | None = None
     target_frame_ms: float | None = None
     avg_fps_target_ratio: float | None = None
     fps_target_met: bool | None = None
+    pacing_proof: bool | None = None
+    post_run_classification: str | None = None
     avg_fps: float | None = None
     one_percent_low_fps: float | None = None
     point_one_percent_low_fps: float | None = None
@@ -229,6 +250,62 @@ class RunSummary:
     cooldown_started_at_s: float | None = None
     cooldown_ended_at_s: float | None = None
     cooldown_elapsed_s: float | None = None
+    classification_primary: dict[str, int] | None = None
+    classification_advisories: dict[str, int] | None = None
+    classification_malformed: int = 0
+    fps_target_source_counts: dict[str, int] | None = None
+    fps_target_confidence_counts: dict[str, int] | None = None
+    runtime_telemetry_counts: RuntimeTelemetryCounts | dict[str, int] | None = None
+    classification_unknown_ratio: float | None = None
+    pressure_supported_ratio: float | None = None
+    pressure_unsupported_ratio: float | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.capture_mode, CaptureMode):
+            object.__setattr__(self, "capture_mode", CaptureMode(self.capture_mode))
+        if self.runtime_telemetry_counts is not None and not isinstance(
+            self.runtime_telemetry_counts,
+            RuntimeTelemetryCounts,
+        ):
+            object.__setattr__(
+                self,
+                "runtime_telemetry_counts",
+                _runtime_telemetry_counts(self.runtime_telemetry_counts),
+            )
+        if self.target_frame_ms is None:
+            object.__setattr__(self, "target_frame_ms", _target_frame_ms(self.fps_target))
+        if self.avg_fps_target_ratio is None:
+            object.__setattr__(
+                self,
+                "avg_fps_target_ratio",
+                _ratio(self.avg_fps, self.fps_target),
+            )
+        if self.fps_target_met is None:
+            object.__setattr__(
+                self,
+                "fps_target_met",
+                _fps_target_met(self.avg_fps, self.fps_target),
+            )
+        if self.pacing_proof is None:
+            object.__setattr__(
+                self,
+                "pacing_proof",
+                _pacing_proof_for_values(
+                    fps_target=self.fps_target,
+                    target_frame_ms=self.target_frame_ms,
+                    one_percent_low_fps=self.one_percent_low_fps,
+                    p99_frametime_ms=self.p99_frametime_ms,
+                ),
+            )
+        if self.post_run_classification is None:
+            object.__setattr__(
+                self,
+                "post_run_classification",
+                _post_run_classification_for_values(
+                    fps_target_met=self.fps_target_met,
+                    pacing_proof=self.pacing_proof,
+                ),
+            )
 
 
 @dataclass(frozen=True)
@@ -249,9 +326,12 @@ class PolicyAggregate:
     cpu_cap_core_share_threshold: float | None = None
     fps_target: float | None = None
     fps_target_source: str | None = None
+    fps_target_confidence: str | None = None
     target_frame_ms: float | None = None
     avg_fps_target_ratio_median: float | None = None
     fps_target_met_count: int = 0
+    target_sustained_count: int = 0
+    target_average_only_count: int = 0
     avg_fps_median: float | None = None
     one_percent_low_fps_median: float | None = None
     point_one_percent_low_fps_median: float | None = None
@@ -307,6 +387,28 @@ class PolicyAggregate:
     cooldown_run_gap_s_max: float | None = None
     pair_run_order_valid: bool = False
     ab_evidence_complete: bool = False
+    classification_primary: dict[str, int] | None = None
+    classification_advisories: dict[str, int] | None = None
+    classification_malformed: int = 0
+    fps_target_source_counts: dict[str, int] | None = None
+    fps_target_confidence_counts: dict[str, int] | None = None
+    runtime_telemetry_counts: RuntimeTelemetryCounts | dict[str, int] | None = None
+    classification_unknown_ratio: float | None = None
+    pressure_supported_ratio: float | None = None
+    pressure_unsupported_ratio: float | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.capture_mode, CaptureMode):
+            object.__setattr__(self, "capture_mode", CaptureMode(self.capture_mode))
+        if self.runtime_telemetry_counts is not None and not isinstance(
+            self.runtime_telemetry_counts,
+            RuntimeTelemetryCounts,
+        ):
+            object.__setattr__(
+                self,
+                "runtime_telemetry_counts",
+                _runtime_telemetry_counts(self.runtime_telemetry_counts),
+            )
 
 
 class PolicyVerdict(str, Enum):
@@ -403,6 +505,12 @@ def parse_game_power_jsonl(path: str | Path) -> GamePowerLogSummary:
     uncore_w: list[float] = []
     render_busy: list[float] = []
     actions: dict[str, int] = {}
+    classification_primary: dict[str, int] = {}
+    classification_advisories: dict[str, int] = {}
+    classification_malformed = 0
+    fps_target_source_counts: dict[str, int] = {}
+    fps_target_confidence_counts: dict[str, int] = {}
+    runtime_counts = RuntimeTelemetryCounts()
     samples = 0
     with Path(path).open() as handle:
         for line in handle:
@@ -418,6 +526,39 @@ def parse_game_power_jsonl(path: str | Path) -> GamePowerLogSummary:
             action = str(row.get("action") or "")
             if action:
                 actions[action] = actions.get(action, 0) + 1
+            appid = _optional_str(row.get("appid"))
+            foreground_row = appid is not None
+            classification = row.get("classification")
+            primary, advisories, malformed = _parse_runtime_classification(
+                classification,
+            )
+            classification_primary[primary] = classification_primary.get(primary, 0) + 1
+            for advisory in advisories:
+                classification_advisories[advisory] = (
+                    classification_advisories.get(advisory, 0) + 1
+                )
+            if malformed:
+                classification_malformed += 1
+            if foreground_row:
+                runtime_counts = _add_runtime_counts(
+                    runtime_counts,
+                    RuntimeTelemetryCounts(
+                        foreground_runtime_rows=1,
+                        unknown_foreground_rows=1 if primary == "unknown" else 0,
+                    ),
+                )
+                runtime_counts = _add_runtime_counts(
+                    runtime_counts,
+                    _foreground_pressure_counts(row.get("pressure")),
+                )
+            fps_target = _finite_positive_float(row.get("fps_target"))
+            if fps_target is not None:
+                source = _optional_str(row.get("fps_target_source")) or "unknown"
+                confidence = _optional_str(row.get("fps_target_confidence")) or "unknown"
+                fps_target_source_counts[source] = fps_target_source_counts.get(source, 0) + 1
+                fps_target_confidence_counts[confidence] = (
+                    fps_target_confidence_counts.get(confidence, 0) + 1
+                )
     avg_package = _avg(package_w)
     avg_core = _avg(core_w)
     avg_uncore = _avg(uncore_w)
@@ -430,6 +571,24 @@ def parse_game_power_jsonl(path: str | Path) -> GamePowerLogSummary:
         avg_uncore_share=_ratio(avg_uncore, avg_package),
         avg_render_busy=_avg(render_busy),
         actions=actions,
+        classification_primary=dict(sorted(classification_primary.items())),
+        classification_advisories=dict(sorted(classification_advisories.items())),
+        classification_malformed=classification_malformed,
+        fps_target_source_counts=dict(sorted(fps_target_source_counts.items())),
+        fps_target_confidence_counts=dict(sorted(fps_target_confidence_counts.items())),
+        runtime_telemetry_counts=runtime_counts,
+        classification_unknown_ratio=_ratio(
+            runtime_counts.unknown_foreground_rows,
+            runtime_counts.foreground_runtime_rows,
+        ),
+        pressure_supported_ratio=_ratio(
+            runtime_counts.supported_foreground_pressure_signals,
+            runtime_counts.foreground_pressure_signals,
+        ),
+        pressure_unsupported_ratio=_ratio(
+            runtime_counts.unsupported_foreground_pressure_signals,
+            runtime_counts.foreground_pressure_signals,
+        ),
     )
 
 
@@ -908,6 +1067,7 @@ def merge_run_summary(
     cpu_cap_core_share_threshold: float | None = None,
     fps_target: float | None = None,
     fps_target_source: str | None = None,
+    fps_target_confidence: str | None = None,
     duration_s: float | None = None,
     warmup_s: float | None = None,
     poll_s: float | None = None,
@@ -931,6 +1091,10 @@ def merge_run_summary(
         cpu_cap_core_share_threshold=cpu_cap_core_share_threshold,
         fps_target=fps_target,
         fps_target_source=_normalize_fps_target_source(fps_target, fps_target_source),
+        fps_target_confidence=(
+            fps_target_confidence
+            or _single_counter_key(power.fps_target_confidence_counts if power else None)
+        ),
         target_frame_ms=_target_frame_ms(fps_target),
         avg_fps_target_ratio=_ratio(fps.avg_fps, fps_target),
         fps_target_met=_fps_target_met(fps.avg_fps, fps_target),
@@ -975,6 +1139,19 @@ def merge_run_summary(
             restore_affinity.cgroup_file_values if restore_affinity else None
         ),
         actions=power.actions if power else None,
+        classification_primary=power.classification_primary if power else None,
+        classification_advisories=power.classification_advisories if power else None,
+        classification_malformed=power.classification_malformed if power else 0,
+        fps_target_source_counts=power.fps_target_source_counts if power else None,
+        fps_target_confidence_counts=(
+            power.fps_target_confidence_counts if power else None
+        ),
+        runtime_telemetry_counts=power.runtime_telemetry_counts if power else None,
+        classification_unknown_ratio=(
+            power.classification_unknown_ratio if power else None
+        ),
+        pressure_supported_ratio=power.pressure_supported_ratio if power else None,
+        pressure_unsupported_ratio=power.pressure_unsupported_ratio if power else None,
         restored=restored,
         ab_order_strategy=ab_evidence.order_strategy,
         ab_run_order=ab_evidence.run_order,
@@ -1307,7 +1484,14 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
             raise ValueError("cannot aggregate runs with different capture timing")
         if _effective_tunables(run) != first_tunables:
             raise ValueError("cannot aggregate runs with different effective tunables")
-    duration_s, warmup_s, poll_s, fps_target, fps_target_source = first_experiment
+    (
+        duration_s,
+        warmup_s,
+        poll_s,
+        fps_target,
+        fps_target_source,
+        fps_target_confidence,
+    ) = first_experiment
     epp, pcore_max_mhz, ecore_max_mhz, cpu_cap_enabled, threshold = first_tunables
     ab_run_orders = _unique_present([run.ab_run_order for run in runs])
     ab_invocation_ids = _unique_present([run.ab_invocation_id for run in runs])
@@ -1340,11 +1524,16 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
         cpu_cap_core_share_threshold=threshold,
         fps_target=fps_target,
         fps_target_source=fps_target_source,
+        fps_target_confidence=fps_target_confidence,
         target_frame_ms=_target_frame_ms(fps_target),
         avg_fps_target_ratio_median=_median(
             [_run_avg_fps_target_ratio(run) for run in runs]
         ),
         fps_target_met_count=sum(1 for run in runs if _run_fps_target_met(run) is True),
+        target_sustained_count=sum(1 for run in runs if _run_target_sustained(run)),
+        target_average_only_count=sum(
+            1 for run in runs if _run_post_classification(run) == "target-average-only"
+        ),
         avg_fps_median=_median([run.avg_fps for run in runs]),
         one_percent_low_fps_median=_median([run.one_percent_low_fps for run in runs]),
         point_one_percent_low_fps_median=_median(
@@ -1434,6 +1623,46 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
         cooldown_run_gap_s_max=max(cooldown_run_gaps) if cooldown_run_gaps else None,
         pair_run_order_valid=bool(ab_position_counts_by_id),
         ab_evidence_complete=_aggregate_ab_evidence_complete(runs),
+        classification_primary=_sum_counter_dicts(
+            [run.classification_primary for run in runs]
+        ),
+        classification_advisories=_sum_counter_dicts(
+            [run.classification_advisories for run in runs]
+        ),
+        classification_malformed=sum(run.classification_malformed for run in runs),
+        fps_target_source_counts=_sum_counter_dicts(
+            [run.fps_target_source_counts for run in runs]
+        ),
+        fps_target_confidence_counts=_sum_counter_dicts(
+            [run.fps_target_confidence_counts for run in runs]
+        ),
+        runtime_telemetry_counts=_sum_runtime_counts(
+            [run.runtime_telemetry_counts for run in runs]
+        ),
+        classification_unknown_ratio=_ratio(
+            _sum_runtime_counts(
+                [run.runtime_telemetry_counts for run in runs]
+            ).unknown_foreground_rows,
+            _sum_runtime_counts(
+                [run.runtime_telemetry_counts for run in runs]
+            ).foreground_runtime_rows,
+        ),
+        pressure_supported_ratio=_ratio(
+            _sum_runtime_counts(
+                [run.runtime_telemetry_counts for run in runs]
+            ).supported_foreground_pressure_signals,
+            _sum_runtime_counts(
+                [run.runtime_telemetry_counts for run in runs]
+            ).foreground_pressure_signals,
+        ),
+        pressure_unsupported_ratio=_ratio(
+            _sum_runtime_counts(
+                [run.runtime_telemetry_counts for run in runs]
+            ).unsupported_foreground_pressure_signals,
+            _sum_runtime_counts(
+                [run.runtime_telemetry_counts for run in runs]
+            ).foreground_pressure_signals,
+        ),
     )
 
 
@@ -1955,6 +2184,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--cpu-cap-core-share-threshold", type=float)
     summarize.add_argument("--fps-target", type=float)
     summarize.add_argument("--fps-target-source")
+    summarize.add_argument("--fps-target-confidence")
     summarize.add_argument("--duration-s", type=float)
     summarize.add_argument("--warmup-s", type=float)
     summarize.add_argument("--poll-s", type=float)
@@ -2041,6 +2271,22 @@ def build_parser() -> argparse.ArgumentParser:
     restore_background = subcommands.add_parser("restore-background-shaping")
     restore_background.add_argument("--writes-json", required=True)
     restore_background.add_argument("--output", required=True)
+
+    validate_runtime = subcommands.add_parser("validate-runtime-telemetry")
+    validate_runtime.add_argument("--game-power-jsonl", required=True)
+    validate_runtime.add_argument("--summary-json")
+    validate_runtime.add_argument("--action-replay-json")
+    validate_runtime.add_argument("--require-classification", action="store_true")
+    validate_runtime.add_argument("--require-pressure", action="store_true")
+    validate_runtime.add_argument("--require-cpu-cap-action", action="store_true")
+    validate_runtime.add_argument("--expect-fps-target", type=float)
+    validate_runtime.add_argument("--expect-fps-target-source")
+    validate_runtime.add_argument("--expect-fps-target-confidence")
+    validate_runtime.add_argument("--expect-target-frame-ms", type=float)
+    validate_runtime.add_argument("--output")
+
+    replay_actions = subcommands.add_parser("replay-action-equivalence")
+    replay_actions.add_argument("--output")
     return parser
 
 
@@ -2124,6 +2370,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
             args.fps_target,
             args.fps_target_source,
         ),
+        "fps_target_confidence": args.fps_target_confidence,
         "target_frame_ms": _target_frame_ms(args.fps_target),
         "duration_s": args.duration_s,
         "warmup_s": args.warmup_s,
@@ -2180,6 +2427,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         cpu_cap_core_share_threshold=args.cpu_cap_core_share_threshold,
         fps_target=args.fps_target,
         fps_target_source=args.fps_target_source,
+        fps_target_confidence=args.fps_target_confidence,
         duration_s=args.duration_s,
         warmup_s=args.warmup_s,
         poll_s=args.poll_s,
@@ -2716,6 +2964,311 @@ def _background_shaping_dry_run_writes(
             }
         )
     return writes
+
+
+def validate_runtime_telemetry(
+    *,
+    game_power_jsonl: str | Path,
+    summary_json: str | Path | None = None,
+    action_replay_json: str | Path | None = None,
+    require_classification: bool = False,
+    require_pressure: bool = False,
+    require_cpu_cap_action: bool = False,
+    expect_fps_target: float | None = None,
+    expect_fps_target_source: str | None = None,
+    expect_fps_target_confidence: str | None = None,
+    expect_target_frame_ms: float | None = None,
+) -> dict[str, object]:
+    rows = _read_jsonl_rows(game_power_jsonl)
+    summary = parse_game_power_jsonl(game_power_jsonl)
+    classification_samples = 0
+    pressure_samples = 0
+    cpu_cap_action_reached = False
+    target_rows = 0
+    target_mismatches: list[str] = []
+
+    for index, row in enumerate(rows, start=1):
+        primary, _advisories, malformed = _parse_runtime_classification(
+            row.get("classification")
+        )
+        if primary != "unknown" and not malformed:
+            classification_samples += 1
+        pressure_count = _foreground_pressure_counts(row.get("pressure"))
+        if pressure_count.foreground_pressure_signals > 0:
+            pressure_samples += 1
+        if row.get("action") == "gpu-priority-cpu-cap":
+            cpu_cap_action_reached = True
+        if _finite_positive_float(row.get("fps_target")) is not None:
+            target_rows += 1
+            _check_target_expectation(
+                row,
+                index,
+                target_mismatches,
+                expect_fps_target=expect_fps_target,
+                expect_fps_target_source=expect_fps_target_source,
+                expect_fps_target_confidence=expect_fps_target_confidence,
+                expect_target_frame_ms=expect_target_frame_ms,
+            )
+
+    failures = []
+    if require_classification and classification_samples == 0:
+        failures.append("runtime classification samples are missing")
+    if require_pressure and pressure_samples == 0:
+        failures.append("foreground pressure samples are missing")
+    if require_cpu_cap_action and not cpu_cap_action_reached:
+        failures.append("gpu-priority-cpu-cap action was not reached")
+    if (
+        expect_fps_target is not None
+        or expect_fps_target_source is not None
+        or expect_fps_target_confidence is not None
+        or expect_target_frame_ms is not None
+    ) and target_rows == 0:
+        failures.append("FPS target metadata rows are missing")
+    failures.extend(target_mismatches)
+
+    if summary_json is not None:
+        summary_payload = json.loads(Path(summary_json).read_text())
+        if require_classification and not summary_payload.get("classification_primary"):
+            failures.append("summary.json classification_primary is missing")
+        if require_pressure and not summary_payload.get("runtime_telemetry_counts"):
+            failures.append("summary.json runtime_telemetry_counts is missing")
+
+    action_replay_status = None
+    if action_replay_json is not None:
+        replay = json.loads(Path(action_replay_json).read_text())
+        action_replay_status = "pass"
+        if replay.get("action_delta_count") != 0 or replay.get("reason_delta_count") != 0:
+            action_replay_status = "fail"
+            failures.append("action replay equivalence failed")
+
+    if failures:
+        raise ValueError("; ".join(failures))
+
+    return {
+        "schema_version": "game-power-runtime-telemetry-contract-v1",
+        "status": "pass",
+        "game_power_jsonl": str(game_power_jsonl),
+        "samples": summary.samples,
+        "classification_samples": classification_samples,
+        "pressure_samples": pressure_samples,
+        "target_metadata_samples": target_rows,
+        "cpu_cap_action_reached": cpu_cap_action_reached,
+        "runtime_telemetry_counts": asdict(summary.runtime_telemetry_counts)
+        if summary.runtime_telemetry_counts
+        else None,
+        "classification_unknown_ratio": summary.classification_unknown_ratio,
+        "pressure_supported_ratio": summary.pressure_supported_ratio,
+        "pressure_unsupported_ratio": summary.pressure_unsupported_ratio,
+        "expect_fps_target": expect_fps_target,
+        "expect_fps_target_source": expect_fps_target_source,
+        "expect_fps_target_confidence": expect_fps_target_confidence,
+        "expect_target_frame_ms": expect_target_frame_ms,
+        "action_replay_status": action_replay_status,
+    }
+
+
+def replay_action_equivalence(output: str | Path | None = None) -> dict[str, object]:
+    from steamos_intel_handheld.game_power import (
+        GamePowerAction,
+        GamePowerConfig,
+        GamePowerController,
+        GamePowerMode,
+        GamePowerSample,
+        RaplPowerWindow,
+    )
+
+    def sample(
+        *,
+        package_w: float,
+        core_w: float,
+        uncore_w: float,
+        render_busy: float = 0.8,
+    ) -> GamePowerSample:
+        return GamePowerSample(
+            appid="1091500",
+            rapl=RaplPowerWindow(
+                duration_s=2.0,
+                package_w=package_w,
+                core_w=core_w,
+                uncore_w=uncore_w,
+            ),
+            pl1_w=20,
+            fdinfo_busy={"render": render_busy},
+        )
+
+    scenarios = [
+        {
+            "name": "off",
+            "config": GamePowerConfig(mode=GamePowerMode.OFF),
+            "samples": [sample(package_w=19.0, core_w=7.0, uncore_w=9.0)],
+            "expected_actions": [GamePowerAction.IDLE.value],
+            "expected_reasons": ["mode is off"],
+        },
+        {
+            "name": "observe",
+            "config": GamePowerConfig(mode=GamePowerMode.OBSERVE),
+            "samples": [sample(package_w=19.0, core_w=7.0, uncore_w=9.0)],
+            "expected_actions": [GamePowerAction.OBSERVE_ONLY.value],
+            "expected_reasons": ["mode is observe"],
+        },
+        {
+            "name": "activation-hysteresis",
+            "config": GamePowerConfig(
+                mode=GamePowerMode.GPU_PRIORITY,
+                activate_samples=2,
+            ),
+            "samples": [sample(package_w=19.0, core_w=7.0, uncore_w=9.0)],
+            "expected_actions": [GamePowerAction.OBSERVE_ONLY.value],
+            "expected_reasons": ["waiting for activation hysteresis"],
+        },
+        {
+            "name": "gpu-priority-epp",
+            "config": GamePowerConfig(
+                mode=GamePowerMode.GPU_PRIORITY,
+                activate_samples=1,
+            ),
+            "samples": [sample(package_w=19.0, core_w=7.0, uncore_w=9.0)],
+            "expected_actions": [GamePowerAction.GPU_PRIORITY_EPP.value],
+            "expected_reasons": ["package limited with GPU activity"],
+        },
+        {
+            "name": "gpu-priority-cpu-cap",
+            "config": GamePowerConfig(
+                mode=GamePowerMode.GPU_PRIORITY,
+                activate_samples=1,
+                cpu_cap_enabled=True,
+            ),
+            "samples": [sample(package_w=19.0, core_w=8.5, uncore_w=9.0)],
+            "expected_actions": [GamePowerAction.GPU_PRIORITY_CPU_CAP.value],
+            "expected_reasons": ["package limited with high core pressure"],
+        },
+        {
+            "name": "restore",
+            "config": GamePowerConfig(
+                mode=GamePowerMode.GPU_PRIORITY,
+                activate_samples=1,
+                restore_samples=1,
+            ),
+            "samples": [
+                sample(package_w=19.0, core_w=7.0, uncore_w=9.0),
+                sample(package_w=10.0, core_w=2.0, uncore_w=3.0),
+            ],
+            "expected_actions": [
+                GamePowerAction.GPU_PRIORITY_EPP.value,
+                GamePowerAction.RESTORE.value,
+            ],
+            "expected_reasons": [
+                "package limited with GPU activity",
+                "restore hysteresis reached",
+            ],
+        },
+    ]
+
+    results = []
+    action_delta_count = 0
+    reason_delta_count = 0
+    for scenario in scenarios:
+        controller = GamePowerController(scenario["config"])
+        decisions = [controller.evaluate(item) for item in scenario["samples"]]
+        actions = [decision.action.value for decision in decisions]
+        reasons = [decision.reason for decision in decisions]
+        expected_actions = scenario["expected_actions"]
+        expected_reasons = scenario["expected_reasons"]
+        action_delta = _sequence_delta_count(actions, expected_actions)
+        reason_delta = _sequence_delta_count(reasons, expected_reasons)
+        action_delta_count += action_delta
+        reason_delta_count += reason_delta
+        results.append(
+            {
+                "name": scenario["name"],
+                "actions": actions,
+                "expected_actions": expected_actions,
+                "action_delta_count": action_delta,
+                "reasons": reasons,
+                "expected_reasons": expected_reasons,
+                "reason_delta_count": reason_delta,
+            }
+        )
+
+    verdict = {
+        "schema_version": "game-power-action-equivalence-v1",
+        "status": (
+            "pass"
+            if action_delta_count == 0 and reason_delta_count == 0
+            else "fail"
+        ),
+        "action_delta_count": action_delta_count,
+        "reason_delta_count": reason_delta_count,
+        "scenarios": results,
+    }
+    if output is not None:
+        Path(output).write_text(json.dumps(_json_ready(verdict), indent=2, sort_keys=True) + "\n")
+    return verdict
+
+
+def _read_jsonl_rows(path: str | Path) -> list[dict[str, object]]:
+    rows = []
+    with Path(path).open() as handle:
+        for line in handle:
+            text = line.strip()
+            if not text:
+                continue
+            row = json.loads(text)
+            if isinstance(row, dict):
+                rows.append(row)
+    return rows
+
+
+def _check_target_expectation(
+    row: dict[str, object],
+    index: int,
+    mismatches: list[str],
+    *,
+    expect_fps_target: float | None,
+    expect_fps_target_source: str | None,
+    expect_fps_target_confidence: str | None,
+    expect_target_frame_ms: float | None,
+) -> None:
+    if expect_fps_target is not None and not _float_near(
+        _finite_positive_float(row.get("fps_target")),
+        expect_fps_target,
+    ):
+        mismatches.append(f"row {index} fps_target does not match expected target")
+    if (
+        expect_fps_target_source is not None
+        and row.get("fps_target_source") != expect_fps_target_source
+    ):
+        mismatches.append(f"row {index} fps_target_source does not match expected source")
+    if (
+        expect_fps_target_confidence is not None
+        and row.get("fps_target_confidence") != expect_fps_target_confidence
+    ):
+        mismatches.append(
+            f"row {index} fps_target_confidence does not match expected confidence"
+        )
+    if expect_target_frame_ms is not None and not _float_near(
+        _float(row.get("target_frame_ms")),
+        expect_target_frame_ms,
+    ):
+        mismatches.append(
+            f"row {index} target_frame_ms does not match expected frame time"
+        )
+
+
+def _float_near(left: float | None, right: float | None, *, epsilon: float = 0.001) -> bool:
+    if left is None or right is None:
+        return False
+    return abs(left - right) <= epsilon
+
+
+def _sequence_delta_count(left: list[str], right: list[str]) -> int:
+    count = abs(len(left) - len(right))
+    count += sum(
+        1
+        for left_item, right_item in zip(left, right, strict=False)
+        if left_item != right_item
+    )
+    return count
 
 
 def apply_background_shaping_writes(
@@ -3353,18 +3906,26 @@ def _profile_group_key(run: RunSummary) -> tuple[object, ...]:
 
 
 def _comparison_context_key(group_key: tuple[object, ...]) -> tuple[object, ...]:
-    return (group_key[0], group_key[1], *group_key[3:8], *group_key[13:16])
+    return (group_key[0], group_key[1], *group_key[3:9], *group_key[14:17])
 
 
 def _experiment_settings(
     run: RunSummary,
-) -> tuple[float | None, float | None, float | None, float | None, str | None]:
+) -> tuple[
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    str | None,
+    str | None,
+]:
     return (
         run.duration_s,
         run.warmup_s,
         run.poll_s,
         run.fps_target,
         run.fps_target_source,
+        run.fps_target_confidence,
     )
 
 
@@ -3396,6 +3957,138 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, list):
         return [_json_ready(item) for item in value]
     return value
+
+
+def _runtime_telemetry_counts(value: object) -> RuntimeTelemetryCounts:
+    if isinstance(value, RuntimeTelemetryCounts):
+        return value
+    if not isinstance(value, dict):
+        return RuntimeTelemetryCounts()
+    return RuntimeTelemetryCounts(
+        foreground_runtime_rows=_optional_int(value.get("foreground_runtime_rows")) or 0,
+        unknown_foreground_rows=_optional_int(value.get("unknown_foreground_rows")) or 0,
+        foreground_pressure_signals=_optional_int(value.get("foreground_pressure_signals"))
+        or 0,
+        supported_foreground_pressure_signals=_optional_int(
+            value.get("supported_foreground_pressure_signals")
+        )
+        or 0,
+        unsupported_foreground_pressure_signals=_optional_int(
+            value.get("unsupported_foreground_pressure_signals")
+        )
+        or 0,
+    )
+
+
+def _add_runtime_counts(
+    left: RuntimeTelemetryCounts,
+    right: RuntimeTelemetryCounts,
+) -> RuntimeTelemetryCounts:
+    return RuntimeTelemetryCounts(
+        foreground_runtime_rows=(
+            left.foreground_runtime_rows + right.foreground_runtime_rows
+        ),
+        unknown_foreground_rows=(
+            left.unknown_foreground_rows + right.unknown_foreground_rows
+        ),
+        foreground_pressure_signals=(
+            left.foreground_pressure_signals + right.foreground_pressure_signals
+        ),
+        supported_foreground_pressure_signals=(
+            left.supported_foreground_pressure_signals
+            + right.supported_foreground_pressure_signals
+        ),
+        unsupported_foreground_pressure_signals=(
+            left.unsupported_foreground_pressure_signals
+            + right.unsupported_foreground_pressure_signals
+        ),
+    )
+
+
+def _sum_runtime_counts(
+    values: list[RuntimeTelemetryCounts | dict[str, int] | None],
+) -> RuntimeTelemetryCounts:
+    total = RuntimeTelemetryCounts()
+    for value in values:
+        if value is None:
+            continue
+        total = _add_runtime_counts(total, _runtime_telemetry_counts(value))
+    return total
+
+
+def _parse_runtime_classification(
+    value: object,
+) -> tuple[str, list[str], bool]:
+    if value is None:
+        return ("unknown", [], False)
+    if not isinstance(value, dict):
+        return ("unknown", [], True)
+    primary = _optional_str(value.get("primary"))
+    if primary is None:
+        return ("unknown", [], True)
+    advisories = []
+    raw_advisories = value.get("advisories")
+    if isinstance(raw_advisories, list):
+        advisories = [
+            item
+            for item in (_optional_str(raw) for raw in raw_advisories)
+            if item is not None
+        ]
+    elif raw_advisories is not None:
+        return ("unknown", [], True)
+    return (primary, sorted(advisories), False)
+
+
+def _foreground_pressure_counts(value: object) -> RuntimeTelemetryCounts:
+    if not isinstance(value, dict):
+        return RuntimeTelemetryCounts()
+    total = 0
+    supported = 0
+    unsupported = 0
+    for signals in value.values():
+        if not isinstance(signals, list):
+            continue
+        for signal in signals:
+            if not isinstance(signal, dict):
+                continue
+            if _optional_str(signal.get("scope")) != "foreground_cgroup":
+                continue
+            total += 1
+            if signal.get("supported") is True:
+                supported += 1
+            else:
+                unsupported += 1
+    return RuntimeTelemetryCounts(
+        foreground_pressure_signals=total,
+        supported_foreground_pressure_signals=supported,
+        unsupported_foreground_pressure_signals=unsupported,
+    )
+
+
+def _finite_positive_float(value: object) -> float | None:
+    parsed = _float(value)
+    if parsed is None or not math.isfinite(parsed) or parsed <= 0:
+        return None
+    return parsed
+
+
+def _sum_counter_dicts(values: list[dict[str, int] | None]) -> dict[str, int]:
+    total: dict[str, int] = {}
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        for key, count in value.items():
+            parsed = _optional_int(count)
+            if parsed is None:
+                continue
+            total[str(key)] = total.get(str(key), 0) + parsed
+    return dict(sorted(total.items()))
+
+
+def _single_counter_key(value: dict[str, int] | None) -> str | None:
+    if not isinstance(value, dict) or len(value) != 1:
+        return None
+    return next(iter(value))
 
 
 def _optional_bool(value: str | None) -> bool | None:
@@ -3881,14 +4574,69 @@ def _run_avg_fps_target_ratio(run: RunSummary) -> float | None:
 
 
 def _run_target_sustained(run: RunSummary) -> bool:
-    return _run_fps_target_met(run) is True
+    return _run_post_classification(run) == "target-sustained"
 
 
 def _aggregate_target_sustained(aggregate: PolicyAggregate) -> bool:
     return (
         aggregate.fps_target is not None
         and aggregate.sample_count > 0
-        and aggregate.fps_target_met_count == aggregate.sample_count
+        and aggregate.target_sustained_count == aggregate.sample_count
+    )
+
+
+def _run_post_classification(run: RunSummary) -> str | None:
+    if run.post_run_classification:
+        return run.post_run_classification
+    return _post_run_classification_for_values(
+        fps_target_met=_run_fps_target_met(run),
+        pacing_proof=_run_pacing_proof(run),
+    )
+
+
+def _run_pacing_proof(run: RunSummary) -> bool:
+    if run.pacing_proof is not None:
+        return run.pacing_proof
+    return _pacing_proof_for_values(
+        fps_target=run.fps_target,
+        target_frame_ms=run.target_frame_ms,
+        one_percent_low_fps=run.one_percent_low_fps,
+        p99_frametime_ms=run.p99_frametime_ms,
+    )
+
+
+def _post_run_classification_for_values(
+    *,
+    fps_target_met: bool | None,
+    pacing_proof: bool | None,
+) -> str | None:
+    if fps_target_met is None:
+        return None
+    if fps_target_met and pacing_proof is True:
+        return "target-sustained"
+    if fps_target_met:
+        return "target-average-only"
+    return "below-target"
+
+
+def _pacing_proof_for_values(
+    *,
+    fps_target: float | None,
+    target_frame_ms: float | None,
+    one_percent_low_fps: float | None,
+    p99_frametime_ms: float | None,
+) -> bool:
+    if fps_target is None or fps_target <= 0:
+        return False
+    if target_frame_ms is None:
+        target_frame_ms = _target_frame_ms(fps_target)
+    if target_frame_ms is None:
+        return False
+    if one_percent_low_fps is None or p99_frametime_ms is None:
+        return False
+    return (
+        one_percent_low_fps >= fps_target * 0.8
+        and p99_frametime_ms <= target_frame_ms * 1.5
     )
 
 
@@ -3955,6 +4703,29 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "restore-background-shaping":
         report = restore_background_shaping_writes(args.writes_json, args.output)
+        print(json.dumps(_json_ready(report), sort_keys=True))
+        return
+    if args.command == "validate-runtime-telemetry":
+        report = validate_runtime_telemetry(
+            game_power_jsonl=args.game_power_jsonl,
+            summary_json=args.summary_json,
+            action_replay_json=args.action_replay_json,
+            require_classification=args.require_classification,
+            require_pressure=args.require_pressure,
+            require_cpu_cap_action=args.require_cpu_cap_action,
+            expect_fps_target=args.expect_fps_target,
+            expect_fps_target_source=args.expect_fps_target_source,
+            expect_fps_target_confidence=args.expect_fps_target_confidence,
+            expect_target_frame_ms=args.expect_target_frame_ms,
+        )
+        if args.output:
+            Path(args.output).write_text(
+                json.dumps(_json_ready(report), indent=2, sort_keys=True) + "\n"
+            )
+        print(json.dumps(_json_ready(report), sort_keys=True))
+        return
+    if args.command == "replay-action-equivalence":
+        report = replay_action_equivalence(args.output)
         print(json.dumps(_json_ready(report), sort_keys=True))
         return
     raise SystemExit(f"unsupported command: {args.command}")

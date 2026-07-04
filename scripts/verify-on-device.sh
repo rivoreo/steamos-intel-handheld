@@ -370,6 +370,7 @@ assert_equals steamosctl "$(expected_pl1_watts "$RESTORE_WATTS")" "$(steamosctl_
 assert_equals rapl-pl1 "$(expected_pl1_watts "$RESTORE_WATTS")" "$(rapl_constraint_watts long_term 0)"
 assert_equals rapl-pl2 "$(expected_pl2_watts "$RESTORE_WATTS" "$VERIFY_TDP_POLICY_MODE")" "$(rapl_constraint_watts short_term 1)"
 assert_optional_pl2_tau "$RESTORE_WATTS"
+echo "OK: RAPL PL1/PL2 restored"
 report_msi_claw_ec_tdp_bytes
 
 systemctl --failed --no-legend --no-pager | tee /tmp/steamos-intel-handheld-failed-units.txt
@@ -377,6 +378,7 @@ if [ -s /tmp/steamos-intel-handheld-failed-units.txt ]; then
   echo "There are failed systemd units" >&2
   exit 1
 fi
+echo "OK: systemd failed-unit list is empty"
 
 echo "OK: SteamOS Manager TDP remote works and restored ${RESTORE_WATTS}W"
 REMOTE

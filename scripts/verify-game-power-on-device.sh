@@ -137,6 +137,7 @@ echo "== game-power gpu-priority =="
 
 restore_cpu_policy
 assert_cpu_policy_restored
+echo "game-power verifier: CPU policy restored"
 trap - EXIT
 rm -rf "$tmpdir"
 REMOTE
