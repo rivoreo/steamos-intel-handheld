@@ -192,6 +192,66 @@ def test_game_power_backend_status_combines_service_and_runtime_control(monkeypa
     ]
 
 
+def test_game_power_backend_sample_once_returns_public_subset(monkeypatch):
+    backend = load_game_power_backend()
+    private_row = {
+        "appid": "1091500",
+        "action": "observe-only",
+        "reason": "sample",
+        "package_w": 22.0,
+        "core_w": 7.0,
+        "uncore_w": 9.0,
+        "pl1_w": 22.0,
+        "render_busy": 0.86,
+        "classification": {"value": "foreground-game", "evidence": {"pid": 123}},
+        "pressure": {"cpu": {"some": {"source_path": "/proc/pressure/cpu"}}},
+        "ab_pair_id": "pair-1",
+        "thermal_start_c": 61.0,
+        "cooldown_rule": "fixed-60s",
+        "unknown_extra": "internal",
+    }
+
+    async def fake_run_command(*cmd, **kwargs):
+        return json.dumps(private_row) + "\n"
+
+    monkeypatch.setattr(backend, "_run_command", fake_run_command)
+
+    result = asyncio.run(backend.Plugin().sample_once())
+
+    assert result == {
+        "appid": "1091500",
+        "action": "observe-only",
+        "reason": "sample",
+        "package_w": 22.0,
+        "core_w": 7.0,
+        "uncore_w": 9.0,
+        "pl1_w": 22.0,
+        "render_busy": 0.86,
+    }
+
+
+def test_game_power_backend_sample_once_fallback_uses_public_subset(monkeypatch):
+    backend = load_game_power_backend()
+
+    async def fake_run_command(*cmd, **kwargs):
+        return "\n"
+
+    monkeypatch.setattr(backend, "_run_command", fake_run_command)
+
+    result = asyncio.run(backend.Plugin().sample_once())
+
+    assert result == {
+        "appid": None,
+        "action": "observe-only",
+        "reason": "no foreground game sample",
+        "package_w": None,
+        "core_w": None,
+        "uncore_w": None,
+        "pl1_w": None,
+        "render_busy": None,
+    }
+
+
 def test_game_power_backend_no_longer_exposes_dropin_constants():
     backend = load_game_power_backend()
 

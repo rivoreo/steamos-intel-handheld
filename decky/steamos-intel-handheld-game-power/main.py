@@ -95,6 +95,19 @@ async def _runtime_status() -> dict:
     return json.loads(output)
 
 
+def _public_sample(row: dict) -> dict:
+    return {
+        "appid": row.get("appid"),
+        "action": row.get("action"),
+        "reason": row.get("reason"),
+        "package_w": row.get("package_w"),
+        "core_w": row.get("core_w"),
+        "uncore_w": row.get("uncore_w"),
+        "pl1_w": row.get("pl1_w"),
+        "render_busy": row.get("render_busy"),
+    }
+
+
 async def _sample_once() -> dict:
     output = await _run_command(
         GAME_POWER,
@@ -111,8 +124,8 @@ async def _sample_once() -> dict:
         line = line.strip()
         if not line:
             continue
-        return json.loads(line)
-    return {
+        return _public_sample(json.loads(line))
+    return _public_sample({
         "appid": None,
         "action": "observe-only",
         "reason": "no foreground game sample",
@@ -121,7 +134,7 @@ async def _sample_once() -> dict:
         "uncore_w": None,
         "pl1_w": None,
         "render_busy": None,
-    }
+    })
 
 
 class Plugin:

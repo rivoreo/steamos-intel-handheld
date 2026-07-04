@@ -21,6 +21,9 @@ pcore_max_mhz="${PROFILE_GAME_POWER_PCORE_MAX_MHZ:-3000}"
 ecore_max_mhz="${PROFILE_GAME_POWER_ECORE_MAX_MHZ:-2400}"
 cpu_cap_core_share_threshold="${PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD:-0.30}"
 cpu_cap_variants="${PROFILE_GAME_POWER_CPU_CAP_VARIANTS:-}"
+ab_order_strategy="${PROFILE_GAME_POWER_AB_ORDER_STRATEGY:-paired-baseline}"
+scene_evidence="${PROFILE_GAME_POWER_SCENE_EVIDENCE:-}"
+cooldown_rule="${PROFILE_GAME_POWER_COOLDOWN_RULE:-fixed-60s}"
 local_root="${PROFILE_GAME_POWER_OUTPUT_ROOT:-.cache/game-power/profiles}"
 mkdir -p "$local_root"
 
@@ -34,6 +37,9 @@ CAPTURE_MODE='$capture_mode' FPS_TARGET='$fps_target' EPP='$epp' PCORE_MAX_MHZ='
 ECORE_MAX_MHZ='$ecore_max_mhz' \
 CPU_CAP_CORE_SHARE_THRESHOLD='$cpu_cap_core_share_threshold' \
 CPU_CAP_VARIANTS='$cpu_cap_variants' \
+AB_ORDER_STRATEGY='$ab_order_strategy' \
+SCENE_EVIDENCE='$scene_evidence' \
+COOLDOWN_RULE='$cooldown_rule' \
 FAILURE_MARKER='$failure_marker' \
 REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
 set -euo pipefail
@@ -321,6 +327,152 @@ output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 if payload["fps_target"] is not None:
     print(payload["fps_target"])
 PY
+}
+
+unsupported_paired_baseline_shape() {
+  echo "paired-baseline supports exactly one non-off candidate, one effective CPU-cap variant, and fixed-60s cooldown in the first V3 implementation" >&2
+}
+
+count_words() {
+  local count=0
+  local item
+  for item in "$@"; do
+    [ -n "$item" ] || continue
+    count=$((count + 1))
+  done
+  printf '%s\n' "$count"
+}
+
+validate_ab_profile_shape() {
+  AB_CANDIDATE_POLICY=""
+  if [ "$CAPTURE_MODE" != "controlled" ]; then
+    POLICY_SEQUENCE="$POLICIES"
+    return 0
+  fi
+  if [ "$AB_ORDER_STRATEGY" != "paired-baseline" ]; then
+    unsupported_paired_baseline_shape
+    exit 2
+  fi
+  if [ "$COOLDOWN_RULE" != "fixed-60s" ]; then
+    unsupported_paired_baseline_shape
+    exit 2
+  fi
+
+  local policy off_count non_off_count candidate_policy
+  off_count=0
+  non_off_count=0
+  candidate_policy=""
+  for policy in $POLICIES; do
+    if [ "$policy" = "off" ]; then
+      off_count=$((off_count + 1))
+    else
+      non_off_count=$((non_off_count + 1))
+      candidate_policy="$policy"
+    fi
+  done
+  if [ "$non_off_count" -ne 1 ] || [ "$off_count" -lt 1 ]; then
+    unsupported_paired_baseline_shape
+    exit 2
+  fi
+  if [ "$candidate_policy" = "gpu-priority-cpu-cap" ] \
+    && [ "$(count_words $CPU_CAP_VARIANTS_EFFECTIVE)" -ne 1 ]; then
+    unsupported_paired_baseline_shape
+    exit 2
+  fi
+  AB_CANDIDATE_POLICY="$candidate_policy"
+  POLICY_SEQUENCE="off $AB_CANDIDATE_POLICY off"
+}
+
+monotonic_now() {
+  python3 - <<'PY'
+import time
+
+print(f"{time.monotonic():.6f}")
+PY
+}
+
+monotonic_delta() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+
+started = float(sys.argv[1])
+ended = float(sys.argv[2])
+print(f"{ended - started:.3f}")
+PY
+}
+
+read_power_source_state() {
+  python3 - <<'PY'
+from pathlib import Path
+
+root = Path("/sys/class/power_supply")
+if not root.exists():
+    print("unknown")
+    raise SystemExit
+
+has_battery = False
+for supply in sorted(root.iterdir()):
+    type_text = (supply / "type").read_text(errors="ignore").strip().lower() \
+        if (supply / "type").exists() else ""
+    online_text = (supply / "online").read_text(errors="ignore").strip() \
+        if (supply / "online").exists() else ""
+    if type_text in {"mains", "usb", "usb_c", "usb-c"} and online_text == "1":
+        print("ac")
+        raise SystemExit
+    if type_text == "battery":
+        has_battery = True
+
+if has_battery:
+    print("battery")
+else:
+    print("unknown")
+PY
+}
+
+select_thermal_source() {
+  python3 - <<'PY'
+from pathlib import Path
+
+candidates = []
+for hwmon in sorted(Path("/sys/class/hwmon").glob("hwmon*")):
+    name = ""
+    try:
+        name = (hwmon / "name").read_text().strip()
+    except OSError:
+        pass
+    for temp_input in sorted(hwmon.glob("temp*_input")):
+        label_path = temp_input.with_name(temp_input.name.replace("_input", "_label"))
+        try:
+            label = label_path.read_text().strip()
+        except OSError:
+            label = temp_input.stem
+        lowered = f"{name} {label}".lower()
+        if "package" in lowered or "x86_pkg" in lowered or name == "coretemp":
+            kind = "cpu-package"
+            rank = 0
+        elif "platform" in lowered or "pch" in lowered:
+            kind = "platform"
+            rank = 1
+        else:
+            kind = "other"
+            rank = 2
+        source_id = f"hwmon:{name or hwmon.name}:{label}"
+        candidates.append((rank, source_id, kind, label, str(temp_input)))
+
+if not candidates:
+    print("unknown\t\t\t")
+else:
+    _rank, source_id, kind, label, path = sorted(candidates)[0]
+    print(f"{kind}\t{source_id}\t{label}\t{path}")
+PY
+}
+
+read_thermal_c() {
+  local path="$1"
+  if [ -z "$path" ] || [ ! -r "$path" ]; then
+    return 0
+  fi
+  awk '{ printf "%.3f\n", $1 / 1000.0 }' "$path"
 }
 
 latest_mangohud_csv() {
@@ -982,6 +1134,8 @@ if [ "$CAPTURE_MODE" != "imported" ] && [ "$CAPTURE_MODE" != "controlled" ]; the
   exit 2
 fi
 
+validate_ab_profile_shape
+AB_INVOCATION_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 wait_for_power_service
 wait_for_power_provider
 snapshot_cpu_policy >"$REMOTE_ROOT/cpu-policy.initial"
@@ -1005,7 +1159,30 @@ for repeat in $(seq 1 "$REPEATS"); do
   for tdp in $TDP_LEVELS; do
     set_provider_tdp "$tdp"
     sleep "$WARMUP_S"
-    for policy in $POLICIES; do
+    ab_pair_variant_suffix=""
+    if [ "$CAPTURE_MODE" = "controlled" ] && [ "$AB_CANDIDATE_POLICY" = "gpu-priority-cpu-cap" ]; then
+      IFS=: read -r ab_variant_label _ab_pcore _ab_ecore _ab_threshold _ab_extra <<<"$CPU_CAP_VARIANTS_EFFECTIVE"
+      ab_pair_variant_suffix="-variant-${ab_variant_label}"
+    fi
+    ab_pair_id="${AB_INVOCATION_ID}-r${repeat}-tdp${tdp}-candidate-${AB_CANDIDATE_POLICY}${ab_pair_variant_suffix}"
+    ab_run_order="off,$AB_CANDIDATE_POLICY,off"
+    ab_position_index=0
+    for policy in $POLICY_SEQUENCE; do
+      ab_pair_position=""
+      ab_order_valid=false
+      if [ "$CAPTURE_MODE" = "controlled" ]; then
+        ab_order_valid=true
+        ab_position_index=$((ab_position_index + 1))
+        case "$ab_position_index" in
+          1) ab_pair_position="baseline-before" ;;
+          2) ab_pair_position="candidate" ;;
+          3) ab_pair_position="baseline-after" ;;
+          *)
+            unsupported_paired_baseline_shape
+            exit 2
+          ;;
+        esac
+      fi
       policy_variants="-"
       if [ "$policy" = "gpu-priority-cpu-cap" ]; then
         policy_variants="$CPU_CAP_VARIANTS_EFFECTIVE"
@@ -1022,6 +1199,9 @@ for repeat in $(seq 1 "$REPEATS"); do
         run_policy_label="$policy"
         if [ -n "$variant_label" ]; then
           run_policy_label="${policy}-${variant_label}"
+        fi
+        if [ -n "$ab_pair_position" ]; then
+          run_policy_label="${run_policy_label}-${ab_pair_position}"
         fi
         run_dir="$REMOTE_ROOT/$(date +%Y%m%dT%H%M%S)-app${APPID}-${tdp}w-${run_policy_label}-r${repeat}"
         mkdir -p "$run_dir"
@@ -1074,6 +1254,42 @@ for repeat in $(seq 1 "$REPEATS"); do
 
         restored=true
         apply_background_shaping_variant "$run_dir" "$background_shaping_variant"
+        ab_summary_args=()
+        thermal_source_kind="unknown"
+        thermal_source_id=""
+        thermal_source_label=""
+        thermal_source_path=""
+        thermal_start_c=""
+        thermal_end_c=""
+        thermal_unavailable=true
+        power_source_start_state="unknown"
+        power_source_pre_run_state="unknown"
+        power_source_end_state="unknown"
+        power_source_samples="unknown,unknown,unknown"
+        power_source_stable=false
+        cooldown_enforced=false
+        cooldown_sleep_s=0
+        cooldown_started_at_s=""
+        cooldown_ended_at_s=""
+        cooldown_elapsed_s=""
+        run_started_at_s=""
+        run_ended_at_s=""
+        if [ "$CAPTURE_MODE" = "controlled" ]; then
+          cooldown_enforced=true
+          cooldown_sleep_s=60
+          power_source_start_state="$(read_power_source_state)"
+          IFS=$'\t' read -r thermal_source_kind thermal_source_id thermal_source_label thermal_source_path \
+            <<<"$(select_thermal_source)"
+          cooldown_started_at_s="$(monotonic_now)"
+          sleep "$cooldown_sleep_s"
+          cooldown_ended_at_s="$(monotonic_now)"
+          cooldown_elapsed_s="$(monotonic_delta "$cooldown_started_at_s" "$cooldown_ended_at_s")"
+          power_source_pre_run_state="$(read_power_source_state)"
+          thermal_start_c="$(read_thermal_c "$thermal_source_path" || true)"
+          if [ -n "$thermal_start_c" ] && [ "$thermal_source_kind" != "unknown" ]; then
+            thermal_unavailable=false
+          fi
+        fi
         start_mangohud_capture "$run_dir"
         sample_cgroup_pressure "$run_dir/cgroup-pressure.jsonl" "$DURATION_S" &
         pressure_pid="$!"
@@ -1083,6 +1299,7 @@ for repeat in $(seq 1 "$REPEATS"); do
         thread_schedstat_pid="$!"
         sample_process_cgroups "$run_dir/process-cgroups.jsonl" "$DURATION_S" &
         process_cgroups_pid="$!"
+        run_started_at_s="$(monotonic_now)"
         if ! /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power \
           --mode "$mode" \
           --duration-s "$DURATION_S" \
@@ -1098,12 +1315,66 @@ for repeat in $(seq 1 "$REPEATS"); do
           restore_background_shaping_variant "$run_dir" || true
           exit 1
         fi
+        run_ended_at_s="$(monotonic_now)"
         stop_mangohud_capture
         wait "$pressure_pid" || true
         wait "$thread_affinity_pid" || true
         wait "$thread_schedstat_pid" || true
         wait "$process_cgroups_pid" || true
         restore_background_shaping_variant "$run_dir" || restored=false
+        if [ "$CAPTURE_MODE" = "controlled" ]; then
+          power_source_end_state="$(read_power_source_state)"
+          thermal_end_c="$(read_thermal_c "$thermal_source_path" || true)"
+          if [ -n "$thermal_end_c" ] && [ "$thermal_source_kind" != "unknown" ]; then
+            thermal_unavailable=false
+          fi
+          power_source_samples="${power_source_start_state},${power_source_pre_run_state},${power_source_end_state}"
+          if [ "$power_source_start_state" = "$power_source_pre_run_state" ] \
+            && [ "$power_source_pre_run_state" = "$power_source_end_state" ] \
+            && [ "$power_source_start_state" != "unknown" ]; then
+            power_source_stable=true
+            power_source_state="$power_source_start_state"
+          elif [ "$power_source_start_state" = "unknown" ] \
+            || [ "$power_source_pre_run_state" = "unknown" ] \
+            || [ "$power_source_end_state" = "unknown" ]; then
+            power_source_state="unknown"
+          else
+            power_source_state="mixed"
+          fi
+          ab_summary_args=(
+            --ab-order-strategy "$AB_ORDER_STRATEGY"
+            --ab-run-order "$ab_run_order"
+            --ab-order-valid "$ab_order_valid"
+            --ab-candidate-policy "$AB_CANDIDATE_POLICY"
+            --ab-invocation-id "$AB_INVOCATION_ID"
+            --ab-pair-id "$ab_pair_id"
+            --ab-pair-position "$ab_pair_position"
+            --scene-evidence "$SCENE_EVIDENCE"
+            --power-source-state "$power_source_state"
+            --power-source-start-state "$power_source_start_state"
+            --power-source-pre-run-state "$power_source_pre_run_state"
+            --power-source-end-state "$power_source_end_state"
+            --power-source-samples "$power_source_samples"
+            --power-source-stable "$power_source_stable"
+            --thermal-unavailable "$thermal_unavailable"
+            --thermal-source-kind "$thermal_source_kind"
+            --thermal-source-id "$thermal_source_id"
+            --thermal-source-label "$thermal_source_label"
+            --run-started-at-s "$run_started_at_s"
+            --run-ended-at-s "$run_ended_at_s"
+            --cooldown-rule "$COOLDOWN_RULE"
+            --cooldown-enforced "$cooldown_enforced"
+            --cooldown-started-at-s "$cooldown_started_at_s"
+            --cooldown-ended-at-s "$cooldown_ended_at_s"
+            --cooldown-elapsed-s "$cooldown_elapsed_s"
+          )
+          if [ -n "$thermal_start_c" ]; then
+            ab_summary_args+=(--thermal-start-c "$thermal_start_c")
+          fi
+          if [ -n "$thermal_end_c" ]; then
+            ab_summary_args+=(--thermal-end-c "$thermal_end_c")
+          fi
+        fi
 
         collect_mangohud_csv "$run_dir"
 
@@ -1147,6 +1418,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           --duration-s "$DURATION_S" \
           --warmup-s "$WARMUP_S" \
           --poll-s "$POLL_S" \
+          "${ab_summary_args[@]}" \
           --restored "$restored" \
           --output "$run_dir"
         if [ ! -f "$run_dir/affinity-advice.json" ]; then
@@ -1164,6 +1436,11 @@ for repeat in $(seq 1 "$REPEATS"); do
           profile_failed=true
           break 4
         fi
+        echo "profile artifact manifest.json: $run_dir/manifest.json"
+        echo "profile artifact summary.json: $run_dir/summary.json"
+        echo "profile artifact mangohud.csv: $run_dir/mangohud.csv"
+        echo "profile artifact game-power.jsonl: $run_dir/game-power.jsonl"
+        echo "profile artifact restore snapshot: $run_dir/restore-affinity.json"
       done
     done
   done

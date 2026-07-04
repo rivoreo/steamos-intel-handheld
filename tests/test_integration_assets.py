@@ -558,6 +558,87 @@ def test_game_power_profile_wrapper_records_affinity_restore_snapshot():
     assert 'snapshot_affinity_restore_state "$run_dir/restore-affinity.json"' in script
     assert "--restore-affinity-json" in script
     assert '"$run_dir/restore-affinity.json"' in script
+
+
+def test_profile_wrapper_uses_paired_baseline_order_for_controlled_ab():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert 'ab_order_strategy="${PROFILE_GAME_POWER_AB_ORDER_STRATEGY:-paired-baseline}"' in script
+    assert 'scene_evidence="${PROFILE_GAME_POWER_SCENE_EVIDENCE:-}"' in script
+    assert 'cooldown_rule="${PROFILE_GAME_POWER_COOLDOWN_RULE:-fixed-60s}"' in script
+    assert "validate_ab_profile_shape()" in script
+    assert 'POLICY_SEQUENCE="off $AB_CANDIDATE_POLICY off"' in script
+    assert 'ab_run_order="off,$AB_CANDIDATE_POLICY,off"' in script
+    assert 'ab_pair_position="baseline-before"' in script
+    assert 'ab_pair_position="candidate"' in script
+    assert 'ab_pair_position="baseline-after"' in script
+
+
+def test_profile_wrapper_passes_full_ab_identity_tuple_to_summarize():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert 'AB_INVOCATION_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"' in script
+    assert (
+        'ab_pair_id="${AB_INVOCATION_ID}-r${repeat}-tdp${tdp}-candidate-'
+        '${AB_CANDIDATE_POLICY}${ab_pair_variant_suffix}"'
+    ) in script
+    assert '--ab-order-strategy "$AB_ORDER_STRATEGY"' in script
+    assert '--ab-run-order "$ab_run_order"' in script
+    assert '--ab-order-valid "$ab_order_valid"' in script
+    assert '--ab-candidate-policy "$AB_CANDIDATE_POLICY"' in script
+    assert '--ab-invocation-id "$AB_INVOCATION_ID"' in script
+    assert '--ab-pair-id "$ab_pair_id"' in script
+    assert '--ab-pair-position "$ab_pair_position"' in script
+    assert '--scene-evidence "$SCENE_EVIDENCE"' in script
+
+
+def test_profile_wrapper_records_cooldown_power_run_and_thermal_evidence():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert "monotonic_now()" in script
+    assert 'sleep "$cooldown_sleep_s"' in script
+    assert (
+        'cooldown_elapsed_s="$(monotonic_delta "$cooldown_started_at_s" '
+        '"$cooldown_ended_at_s")"'
+    ) in script
+    assert "read_power_source_state()" in script
+    assert (
+        'power_source_samples="${power_source_start_state},'
+        '${power_source_pre_run_state},${power_source_end_state}"'
+    ) in script
+    assert "select_thermal_source()" in script
+    assert "read_thermal_c()" in script
+    assert '--power-source-start-state "$power_source_start_state"' in script
+    assert '--power-source-pre-run-state "$power_source_pre_run_state"' in script
+    assert '--power-source-end-state "$power_source_end_state"' in script
+    assert '--power-source-samples "$power_source_samples"' in script
+    assert '--power-source-stable "$power_source_stable"' in script
+    assert '--thermal-start-c "$thermal_start_c"' in script
+    assert '--thermal-end-c "$thermal_end_c"' in script
+    assert '--thermal-unavailable "$thermal_unavailable"' in script
+    assert '--thermal-source-kind "$thermal_source_kind"' in script
+    assert '--thermal-source-id "$thermal_source_id"' in script
+    assert '--thermal-source-label "$thermal_source_label"' in script
+    assert '--run-started-at-s "$run_started_at_s"' in script
+    assert '--run-ended-at-s "$run_ended_at_s"' in script
+    assert '--cooldown-rule "$COOLDOWN_RULE"' in script
+    assert '--cooldown-enforced "$cooldown_enforced"' in script
+    assert '--cooldown-started-at-s "$cooldown_started_at_s"' in script
+    assert '--cooldown-ended-at-s "$cooldown_ended_at_s"' in script
+    assert '--cooldown-elapsed-s "$cooldown_elapsed_s"' in script
+
+
+def test_profile_wrapper_rejects_unsupported_ab_shapes_until_pair_grouping_supported():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert 'if [ "$AB_ORDER_STRATEGY" != "paired-baseline" ]; then' in script
+    assert 'if [ "$COOLDOWN_RULE" != "fixed-60s" ]; then' in script
+    assert 'if [ "$non_off_count" -ne 1 ] || [ "$off_count" -lt 1 ]; then' in script
+    assert 'if [ "$candidate_policy" = "gpu-priority-cpu-cap" ]' in script
+    assert (
+        "paired-baseline supports exactly one non-off candidate, one effective "
+        "CPU-cap variant, and fixed-60s cooldown in the first V3 implementation"
+    ) in script
     assert "Cpus_allowed_list" in script
     assert "app-steam-client" in script
     assert "gamescope" in script
@@ -735,15 +816,36 @@ def test_docs_describe_game_power_governor_default_on_and_reversible():
     assert "--game-power-ecore-max-mhz 2400" in readme
     assert "--game-power-cpu-cap-core-share-threshold 0.30" in readme
     assert "scripts/verify-game-power-on-device.sh root@10.100.0.19" in readme
-    assert 'PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap"' in readme
     assert "PROFILE_GAME_POWER_CAPTURE_MODE=controlled" in readme
     assert "PROFILE_GAME_POWER_REPEATS=3" in readme
-    assert "PROFILE_GAME_POWER_CPU_CAP_VARIANTS=" in readme
+    assert 'PROFILE_GAME_POWER_SCENE_EVIDENCE="save:<stable-scene>"' in readme
+    assert 'PROFILE_GAME_POWER_POLICIES="off gpu-priority"' in readme
+    assert 'PROFILE_GAME_POWER_POLICIES="off gpu-priority-cpu-cap"' in readme
+    assert (
+        'PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap"'
+        not in readme
+    )
+    assert (
+        'PROFILE_GAME_POWER_CPU_CAP_VARIANTS="balanced:3000:2400:0.30"'
+        in readme
+    )
+    assert "conservative:2600:2200:0.30" not in readme
     assert "PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000" in readme
     assert "PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD=0.30" in readme
     assert "steamos-intel-handheld-game-power-profile aggregate" in readme
+    assert "--candidate-policy gpu-priority \\" in readme
+    assert "--candidate-policy gpu-priority-cpu-cap \\" in readme
     assert "--duration-s 60" in readme
     assert "--min-runs 3" in readme
+    assert "claim_scope" in readme
+    assert (
+        "BETTER (scene/profile-specific controlled result; not a general performance claim)"
+        in readme
+    )
+    assert (
+        "guarded foreground-game artifacts are required for this captured profile only"
+        in readme
+    )
     assert "Game power governor" in design
     assert "enabled by default" in design
     assert "does not raise PL1 automatically" in design

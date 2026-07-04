@@ -258,15 +258,34 @@ By default the guarded wrapper runs an imported-log capture at 22W for:
 - `off`
 - `gpu-priority`
 
-To include the stronger CPU max-frequency cap candidate, opt into it in the
-profile matrix instead of changing the installed default:
+For controlled A/B claims, run one candidate per invocation and keep the scene
+stable. The wrapper records a paired-baseline order, power-source samples,
+thermal source/readings, cooldown intervals, and run intervals for each
+measured run. A missing `PROFILE_GAME_POWER_SCENE_EVIDENCE` is allowed for
+exploration, but it cannot support a positive A/B claim.
+
+For the default GPU-priority candidate:
 
 ```bash
 PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
 PROFILE_GAME_POWER_REPEATS=3 \
 PROFILE_GAME_POWER_FPS_TARGET=40 \
-PROFILE_GAME_POWER_POLICIES="off gpu-priority gpu-priority-cpu-cap" \
-PROFILE_GAME_POWER_CPU_CAP_VARIANTS="balanced:3000:2400:0.30 conservative:2600:2200:0.30" \
+PROFILE_GAME_POWER_SCENE_EVIDENCE="save:<stable-scene>" \
+PROFILE_GAME_POWER_POLICIES="off gpu-priority" \
+scripts/profile-game-power-on-device.sh root@10.100.0.19
+```
+
+To include the stronger CPU max-frequency cap candidate, use a separate
+controlled invocation with exactly one effective CPU-cap variant instead of
+mixing candidates in one profile matrix:
+
+```bash
+PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
+PROFILE_GAME_POWER_REPEATS=3 \
+PROFILE_GAME_POWER_FPS_TARGET=40 \
+PROFILE_GAME_POWER_SCENE_EVIDENCE="save:<stable-scene>" \
+PROFILE_GAME_POWER_POLICIES="off gpu-priority-cpu-cap" \
+PROFILE_GAME_POWER_CPU_CAP_VARIANTS="balanced:3000:2400:0.30" \
 PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000 \
 PROFILE_GAME_POWER_ECORE_MAX_MHZ=2400 \
 PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD=0.30 \
@@ -330,6 +349,22 @@ steamos-intel-handheld-game-power-profile aggregate \
   --root .cache/game-power/profiles \
   --baseline-policy off \
   --candidate-policy gpu-priority \
+  --appid 1091500 \
+  --tdp-w 22 \
+  --duration-s 60 \
+  --warmup-s 10 \
+  --poll-s 2 \
+  --fps-target 40 \
+  --fps-target-source manual \
+  --min-runs 3
+```
+
+For the CPU-cap candidate, run a separate aggregate command:
+
+```bash
+steamos-intel-handheld-game-power-profile aggregate \
+  --root .cache/game-power/profiles \
+  --baseline-policy off \
   --candidate-policy gpu-priority-cpu-cap \
   --appid 1091500 \
   --tdp-w 22 \
@@ -374,6 +409,14 @@ systemd-managed user `.service` cgroups, `cpu.weight` is applied through
 `systemctl --user set-property --runtime CPUWeight=...` instead of by directly
 writing the transient cgroup file, so restore follows systemd's own controller
 lifecycle.
+
+A positive aggregate verdict is intentionally scoped. Reports render it as
+`BETTER (scene/profile-specific controlled result; not a general performance claim)`
+and include `claim_scope` fields for AppID, scene evidence, candidate policy,
+TDP, timing, FPS target, pair count, run order, power source, thermal source,
+pair thermal deltas, and cooldown evidence. guarded foreground-game artifacts are required for this captured profile only and are not sufficient for hardware-wide,
+game-wide, release-note, or default-policy performance claims without a
+separate claim plan.
 AppID is an experiment grouping key; production game-power policy should remain
 a generic telemetry-driven governor rather than a per-game table.
 

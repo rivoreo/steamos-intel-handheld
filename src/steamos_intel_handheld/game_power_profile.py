@@ -38,6 +38,17 @@ BACKGROUND_SHAPING_WRITE_VARIANTS = {
     "cpu-weight-80": ("cpu.weight", "80"),
     "uclamp-max-85": ("cpu.uclamp.max", "85.00"),
 }
+AB_EVIDENCE_INCOMPLETE_PREFIX = "A/B evidence incomplete:"
+AB_EXPLORATORY_SUFFIX = "exploratory only; cannot support a BETTER claim"
+BETTER_CLAIM_BOUNDARY = (
+    "scene/profile-specific controlled result; not a general performance claim"
+)
+GUARDED_ARTIFACT_CAVEAT = (
+    "guarded foreground-game artifacts are required for this captured profile only"
+)
+AB_THERMAL_DELTA_MAX_C = 5.0
+FIXED_COOLDOWN_MIN_S = 60.0
+FIXED_COOLDOWN_RUN_GAP_MAX_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -114,6 +125,37 @@ class FpsTargetDiscovery:
 
 
 @dataclass(frozen=True)
+class AbEvidence:
+    order_strategy: str | None = None
+    run_order: str | None = None
+    order_valid: bool = False
+    candidate_policy: str | None = None
+    invocation_id: str | None = None
+    pair_id: str | None = None
+    pair_position: str | None = None
+    scene_evidence: str | None = None
+    power_source_state: str | None = None
+    power_source_start_state: str | None = None
+    power_source_pre_run_state: str | None = None
+    power_source_end_state: str | None = None
+    power_source_samples: list[str] | None = None
+    power_source_stable: bool = False
+    thermal_start_c: float | None = None
+    thermal_end_c: float | None = None
+    thermal_unavailable: bool = False
+    thermal_source_kind: str | None = None
+    thermal_source_id: str | None = None
+    thermal_source_label: str | None = None
+    run_started_at_s: float | None = None
+    run_ended_at_s: float | None = None
+    cooldown_rule: str | None = None
+    cooldown_enforced: bool = False
+    cooldown_started_at_s: float | None = None
+    cooldown_ended_at_s: float | None = None
+    cooldown_elapsed_s: float | None = None
+
+
+@dataclass(frozen=True)
 class RunSummary:
     appid: str
     tdp_w: int
@@ -160,6 +202,33 @@ class RunSummary:
     restore_affinity_cgroup_file_values: dict[str, dict[str, str]] | None = None
     actions: dict[str, int] | None = None
     restored: bool = False
+    ab_order_strategy: str | None = None
+    ab_run_order: str | None = None
+    ab_order_valid: bool = False
+    ab_candidate_policy: str | None = None
+    ab_invocation_id: str | None = None
+    ab_pair_id: str | None = None
+    ab_pair_position: str | None = None
+    scene_evidence: str | None = None
+    power_source_state: str | None = None
+    power_source_start_state: str | None = None
+    power_source_pre_run_state: str | None = None
+    power_source_end_state: str | None = None
+    power_source_samples: list[str] | None = None
+    power_source_stable: bool = False
+    thermal_start_c: float | None = None
+    thermal_end_c: float | None = None
+    thermal_unavailable: bool = False
+    thermal_source_kind: str | None = None
+    thermal_source_id: str | None = None
+    thermal_source_label: str | None = None
+    run_started_at_s: float | None = None
+    run_ended_at_s: float | None = None
+    cooldown_rule: str | None = None
+    cooldown_enforced: bool = False
+    cooldown_started_at_s: float | None = None
+    cooldown_ended_at_s: float | None = None
+    cooldown_elapsed_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -204,6 +273,40 @@ class PolicyAggregate:
     restore_affinity_files: list[str] | None = None
     restore_affinity_cgroup_files: dict[str, list[str]] | None = None
     restore_affinity_cgroup_file_values: dict[str, dict[str, list[str]]] | None = None
+    ab_order_strategy: str | None = None
+    ab_run_orders: list[str] | None = None
+    ab_order_valid_count: int = 0
+    ab_candidate_policy: str | None = None
+    ab_invocation_ids: list[str] | None = None
+    ab_pair_ids: list[str] | None = None
+    ab_pair_position_counts: dict[str, int] | None = None
+    ab_pair_position_counts_by_id: dict[str, dict[str, int]] | None = None
+    scene_evidence: str | None = None
+    power_source_state: str | None = None
+    power_source_start_state: str | None = None
+    power_source_pre_run_state: str | None = None
+    power_source_end_state: str | None = None
+    power_source_sample_signatures: list[str] | None = None
+    power_source_stable_count: int = 0
+    thermal_start_c_median: float | None = None
+    thermal_end_c_median: float | None = None
+    thermal_unavailable_count: int = 0
+    thermal_source_kind: str | None = None
+    thermal_source_id: str | None = None
+    thermal_source_label: str | None = None
+    thermal_pair_readings_by_id: dict[str, dict[str, dict[str, float | None]]] | None = None
+    thermal_pair_evidence_complete: bool = False
+    run_interval_by_pair_id: dict[str, dict[str, dict[str, float | None]]] | None = None
+    cooldown_interval_by_pair_id: dict[str, dict[str, dict[str, float | None]]] | None = None
+    cooldown_interval_evidence_complete: bool = False
+    cooldown_rule: str | None = None
+    cooldown_enforced_count: int = 0
+    cooldown_started_at_s_min: float | None = None
+    cooldown_ended_at_s_max: float | None = None
+    cooldown_elapsed_s_median: float | None = None
+    cooldown_run_gap_s_max: float | None = None
+    pair_run_order_valid: bool = False
+    ab_evidence_complete: bool = False
 
 
 class PolicyVerdict(str, Enum):
@@ -219,6 +322,13 @@ class PolicyComparison:
     candidate_policy: str
     verdict: PolicyVerdict
     reason: str
+    thermal_pair_start_delta_max_c: float | None = None
+    thermal_pair_end_delta_max_c: float | None = None
+    thermal_pair_mismatch_count: int = 0
+    cooldown_run_gap_s_max: float | None = None
+    cooldown_interval_reuse_count: int = 0
+    claim_scope: dict[str, object] | None = None
+    human_summary: str | None = None
 
 
 def parse_mangohud_summary_csv(
@@ -801,9 +911,11 @@ def merge_run_summary(
     duration_s: float | None = None,
     warmup_s: float | None = None,
     poll_s: float | None = None,
+    ab_evidence: AbEvidence | None = None,
     restored: bool,
 ) -> RunSummary:
     pressure = pressure or {}
+    ab_evidence = ab_evidence or AbEvidence()
     return RunSummary(
         appid=appid,
         tdp_w=tdp_w,
@@ -864,6 +976,33 @@ def merge_run_summary(
         ),
         actions=power.actions if power else None,
         restored=restored,
+        ab_order_strategy=ab_evidence.order_strategy,
+        ab_run_order=ab_evidence.run_order,
+        ab_order_valid=ab_evidence.order_valid,
+        ab_candidate_policy=ab_evidence.candidate_policy,
+        ab_invocation_id=ab_evidence.invocation_id,
+        ab_pair_id=ab_evidence.pair_id,
+        ab_pair_position=ab_evidence.pair_position,
+        scene_evidence=ab_evidence.scene_evidence,
+        power_source_state=ab_evidence.power_source_state,
+        power_source_start_state=ab_evidence.power_source_start_state,
+        power_source_pre_run_state=ab_evidence.power_source_pre_run_state,
+        power_source_end_state=ab_evidence.power_source_end_state,
+        power_source_samples=ab_evidence.power_source_samples,
+        power_source_stable=ab_evidence.power_source_stable,
+        thermal_start_c=ab_evidence.thermal_start_c,
+        thermal_end_c=ab_evidence.thermal_end_c,
+        thermal_unavailable=ab_evidence.thermal_unavailable,
+        thermal_source_kind=ab_evidence.thermal_source_kind,
+        thermal_source_id=ab_evidence.thermal_source_id,
+        thermal_source_label=ab_evidence.thermal_source_label,
+        run_started_at_s=ab_evidence.run_started_at_s,
+        run_ended_at_s=ab_evidence.run_ended_at_s,
+        cooldown_rule=ab_evidence.cooldown_rule,
+        cooldown_enforced=ab_evidence.cooldown_enforced,
+        cooldown_started_at_s=ab_evidence.cooldown_started_at_s,
+        cooldown_ended_at_s=ab_evidence.cooldown_ended_at_s,
+        cooldown_elapsed_s=ab_evidence.cooldown_elapsed_s,
     )
 
 
@@ -906,23 +1045,9 @@ def compare_run_summaries(baseline: RunSummary, candidate: RunSummary) -> Policy
     )
 
     if low_gain is not None and low_gain >= 5.0 and (avg_gain is None or avg_gain >= -2.0):
-        return PolicyComparison(
-            baseline.policy,
-            candidate.policy,
-            PolicyVerdict.BETTER,
-            f"1% low improved by {low_gain:.1f}% with average FPS change {avg_gain or 0:.1f}%",
-        )
+        return _single_run_exploratory_comparison(baseline.policy, candidate.policy)
     if p99_gain is not None and p99_gain >= 5.0 and (avg_gain is None or avg_gain >= -2.0):
-        reason = (
-            f"p99 frametime improved by {p99_gain:.1f}% "
-            f"with average FPS change {avg_gain or 0:.1f}%"
-        )
-        return PolicyComparison(
-            baseline.policy,
-            candidate.policy,
-            PolicyVerdict.BETTER,
-            reason,
-        )
+        return _single_run_exploratory_comparison(baseline.policy, candidate.policy)
     if (
         _run_target_sustained(baseline)
         and _run_target_sustained(candidate)
@@ -931,22 +1056,9 @@ def compare_run_summaries(baseline: RunSummary, candidate: RunSummary) -> Policy
         and (low_gain is None or low_gain >= PACING_REGRESSION_REJECT_PCT)
         and (p99_gain is None or p99_gain >= PACING_REGRESSION_REJECT_PCT)
     ):
-        return PolicyComparison(
-            baseline.policy,
-            candidate.policy,
-            PolicyVerdict.BETTER,
-            (
-                f"target sustained while package power reduced by "
-                f"{package_saving:.1f}%"
-            ),
-        )
+        return _single_run_exploratory_comparison(baseline.policy, candidate.policy)
     if avg_gain is not None and avg_gain >= 5.0 and (low_gain is None or low_gain >= -2.0):
-        return PolicyComparison(
-            baseline.policy,
-            candidate.policy,
-            PolicyVerdict.BETTER,
-            f"average FPS improved by {avg_gain:.1f}% without low-percentile regression",
-        )
+        return _single_run_exploratory_comparison(baseline.policy, candidate.policy)
     if low_gain is not None and low_gain < -3.0:
         return PolicyComparison(
             baseline.policy,
@@ -967,6 +1079,213 @@ def compare_run_summaries(baseline: RunSummary, candidate: RunSummary) -> Policy
         PolicyVerdict.INCONCLUSIVE,
         "candidate did not meet improvement or rejection thresholds",
     )
+
+
+def _single_run_exploratory_comparison(
+    baseline_policy: str,
+    candidate_policy: str,
+) -> PolicyComparison:
+    return PolicyComparison(
+        baseline_policy,
+        candidate_policy,
+        PolicyVerdict.INCONCLUSIVE,
+        (
+            f"{AB_EVIDENCE_INCOMPLETE_PREFIX} single-run compare is exploratory "
+            "only; cannot support a BETTER claim"
+        ),
+    )
+
+
+def _incomplete_reason(reason: str) -> str:
+    return f"{AB_EVIDENCE_INCOMPLETE_PREFIX} {reason}; {AB_EXPLORATORY_SUFFIX}"
+
+
+def _unique_present(values: list[str | None]) -> list[str]:
+    return sorted({value for value in values if value})
+
+
+def _single_present(values: list[str | None]) -> str | None:
+    unique = _unique_present(values)
+    return unique[0] if len(unique) == 1 else None
+
+
+def _position_counts(runs: list[RunSummary]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for run in runs:
+        if not run.ab_pair_position:
+            continue
+        counts[run.ab_pair_position] = counts.get(run.ab_pair_position, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _position_counts_by_pair_id(runs: list[RunSummary]) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for run in runs:
+        if not run.ab_pair_id or not run.ab_pair_position:
+            continue
+        pair_counts = counts.setdefault(run.ab_pair_id, {})
+        pair_counts[run.ab_pair_position] = pair_counts.get(run.ab_pair_position, 0) + 1
+    return {
+        pair_id: dict(sorted(pair_counts.items()))
+        for pair_id, pair_counts in sorted(counts.items())
+    }
+
+
+def _sample_signature(samples: list[str] | None) -> str | None:
+    if samples is None:
+        return None
+    return ",".join(samples)
+
+
+def _thermal_pair_readings(
+    runs: list[RunSummary],
+) -> dict[str, dict[str, dict[str, float | None]]]:
+    readings: dict[str, dict[str, dict[str, float | None]]] = {}
+    for run in runs:
+        if not run.ab_pair_id or not run.ab_pair_position:
+            continue
+        readings.setdefault(run.ab_pair_id, {})[run.ab_pair_position] = {
+            "thermal_start_c": run.thermal_start_c,
+            "thermal_end_c": run.thermal_end_c,
+        }
+    return {
+        pair_id: dict(sorted(positions.items()))
+        for pair_id, positions in sorted(readings.items())
+    }
+
+
+def _run_intervals(
+    runs: list[RunSummary],
+) -> dict[str, dict[str, dict[str, float | None]]]:
+    intervals: dict[str, dict[str, dict[str, float | None]]] = {}
+    for run in runs:
+        if not run.ab_pair_id or not run.ab_pair_position:
+            continue
+        intervals.setdefault(run.ab_pair_id, {})[run.ab_pair_position] = {
+            "run_started_at_s": run.run_started_at_s,
+            "run_ended_at_s": run.run_ended_at_s,
+        }
+    return {
+        pair_id: dict(sorted(positions.items()))
+        for pair_id, positions in sorted(intervals.items())
+    }
+
+
+def _cooldown_intervals(
+    runs: list[RunSummary],
+) -> dict[str, dict[str, dict[str, float | None]]]:
+    intervals: dict[str, dict[str, dict[str, float | None]]] = {}
+    for run in runs:
+        if not run.ab_pair_id or not run.ab_pair_position:
+            continue
+        gap = None
+        if run.run_started_at_s is not None and run.cooldown_ended_at_s is not None:
+            gap = round(run.run_started_at_s - run.cooldown_ended_at_s, 3)
+        intervals.setdefault(run.ab_pair_id, {})[run.ab_pair_position] = {
+            "cooldown_started_at_s": run.cooldown_started_at_s,
+            "cooldown_ended_at_s": run.cooldown_ended_at_s,
+            "cooldown_elapsed_s": run.cooldown_elapsed_s,
+            "cooldown_run_gap_s": gap,
+        }
+    return {
+        pair_id: dict(sorted(positions.items()))
+        for pair_id, positions in sorted(intervals.items())
+    }
+
+
+def _aggregate_ab_evidence_complete(runs: list[RunSummary]) -> bool:
+    if not runs:
+        return False
+    strategies = [run.ab_order_strategy for run in runs]
+    if not all(strategies) or _single_present(strategies) != "paired-baseline":
+        return False
+    if any(not run.ab_run_order or not run.ab_order_valid for run in runs):
+        return False
+    if len(_unique_present([run.ab_run_order for run in runs])) != 1:
+        return False
+    if any(
+        not run.ab_candidate_policy
+        or not run.ab_invocation_id
+        or not run.ab_pair_id
+        or not run.ab_pair_position
+        for run in runs
+    ):
+        return False
+    candidate_policy = _single_present([run.ab_candidate_policy for run in runs])
+    if candidate_policy is None:
+        return False
+    valid_positions = {"baseline-before", "candidate", "baseline-after"}
+    if any(run.ab_pair_position not in valid_positions for run in runs):
+        return False
+    policies = {run.policy for run in runs}
+    positions = {run.ab_pair_position for run in runs}
+    if policies == {"off"}:
+        if not positions.issubset({"baseline-before", "baseline-after"}):
+            return False
+    elif len(policies) == 1 and next(iter(policies)) == candidate_policy:
+        if positions != {"candidate"}:
+            return False
+    else:
+        return False
+    if not _single_present([run.scene_evidence for run in runs]):
+        return False
+    for attr in (
+        "power_source_state",
+        "power_source_start_state",
+        "power_source_pre_run_state",
+        "power_source_end_state",
+    ):
+        value = _single_present([getattr(run, attr) for run in runs])
+        if value is None or value in {"mixed", "unknown"}:
+            return False
+    for run in runs:
+        samples = run.power_source_samples
+        if (
+            not samples
+            or len(samples) != 3
+            or "mixed" in samples
+            or "unknown" in samples
+            or len(set(samples)) != 1
+            or samples[0] != run.power_source_start_state
+            or samples[1] != run.power_source_pre_run_state
+            or samples[2] != run.power_source_end_state
+            or not run.power_source_stable
+        ):
+            return False
+    if any(run.thermal_unavailable for run in runs):
+        return False
+    if any(run.thermal_start_c is None or run.thermal_end_c is None for run in runs):
+        return False
+    for attr in ("thermal_source_kind", "thermal_source_id", "thermal_source_label"):
+        if _single_present([getattr(run, attr) for run in runs]) is None:
+            return False
+    pair_positions = _position_counts_by_pair_id(runs)
+    if not pair_positions:
+        return False
+    for run in runs:
+        if run.run_started_at_s is None or run.run_ended_at_s is None:
+            return False
+        if run.run_ended_at_s <= run.run_started_at_s:
+            return False
+        if run.cooldown_rule != "fixed-60s" or not run.cooldown_enforced:
+            return False
+        if (
+            run.cooldown_started_at_s is None
+            or run.cooldown_ended_at_s is None
+            or run.cooldown_elapsed_s is None
+        ):
+            return False
+        if run.cooldown_ended_at_s < run.cooldown_started_at_s:
+            return False
+        elapsed = run.cooldown_ended_at_s - run.cooldown_started_at_s
+        if abs(elapsed - run.cooldown_elapsed_s) > 1.0:
+            return False
+        if run.cooldown_elapsed_s < FIXED_COOLDOWN_MIN_S:
+            return False
+        gap = run.run_started_at_s - run.cooldown_ended_at_s
+        if gap < 0.0 or gap > FIXED_COOLDOWN_RUN_GAP_MAX_S:
+            return False
+    return True
 
 
 def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
@@ -990,6 +1309,20 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
             raise ValueError("cannot aggregate runs with different effective tunables")
     duration_s, warmup_s, poll_s, fps_target, fps_target_source = first_experiment
     epp, pcore_max_mhz, ecore_max_mhz, cpu_cap_enabled, threshold = first_tunables
+    ab_run_orders = _unique_present([run.ab_run_order for run in runs])
+    ab_invocation_ids = _unique_present([run.ab_invocation_id for run in runs])
+    ab_pair_ids = _unique_present([run.ab_pair_id for run in runs])
+    ab_position_counts = _position_counts(runs)
+    ab_position_counts_by_id = _position_counts_by_pair_id(runs)
+    thermal_pair_readings = _thermal_pair_readings(runs)
+    run_intervals = _run_intervals(runs)
+    cooldown_intervals = _cooldown_intervals(runs)
+    cooldown_run_gaps = [
+        item["cooldown_run_gap_s"]
+        for positions in cooldown_intervals.values()
+        for item in positions.values()
+        if item.get("cooldown_run_gap_s") is not None
+    ]
     return PolicyAggregate(
         appid=first.appid,
         tdp_w=first.tdp_w,
@@ -1047,7 +1380,260 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
         restore_affinity_cgroup_file_values=_aggregate_restore_affinity_cgroup_file_values(
             runs
         ),
+        ab_order_strategy=_single_present([run.ab_order_strategy for run in runs]),
+        ab_run_orders=ab_run_orders,
+        ab_order_valid_count=sum(1 for run in runs if run.ab_order_valid),
+        ab_candidate_policy=_single_present([run.ab_candidate_policy for run in runs]),
+        ab_invocation_ids=ab_invocation_ids,
+        ab_pair_ids=ab_pair_ids,
+        ab_pair_position_counts=ab_position_counts,
+        ab_pair_position_counts_by_id=ab_position_counts_by_id,
+        scene_evidence=_single_present([run.scene_evidence for run in runs]),
+        power_source_state=_single_present([run.power_source_state for run in runs]),
+        power_source_start_state=_single_present(
+            [run.power_source_start_state for run in runs]
+        ),
+        power_source_pre_run_state=_single_present(
+            [run.power_source_pre_run_state for run in runs]
+        ),
+        power_source_end_state=_single_present([run.power_source_end_state for run in runs]),
+        power_source_sample_signatures=_unique_present(
+            [_sample_signature(run.power_source_samples) for run in runs]
+        ),
+        power_source_stable_count=sum(1 for run in runs if run.power_source_stable),
+        thermal_start_c_median=_median([run.thermal_start_c for run in runs]),
+        thermal_end_c_median=_median([run.thermal_end_c for run in runs]),
+        thermal_unavailable_count=sum(1 for run in runs if run.thermal_unavailable),
+        thermal_source_kind=_single_present([run.thermal_source_kind for run in runs]),
+        thermal_source_id=_single_present([run.thermal_source_id for run in runs]),
+        thermal_source_label=_single_present([run.thermal_source_label for run in runs]),
+        thermal_pair_readings_by_id=thermal_pair_readings,
+        thermal_pair_evidence_complete=all(
+            reading.get("thermal_start_c") is not None
+            and reading.get("thermal_end_c") is not None
+            for positions in thermal_pair_readings.values()
+            for reading in positions.values()
+        )
+        and bool(thermal_pair_readings),
+        run_interval_by_pair_id=run_intervals,
+        cooldown_interval_by_pair_id=cooldown_intervals,
+        cooldown_interval_evidence_complete=all(
+            item.get("cooldown_started_at_s") is not None
+            and item.get("cooldown_ended_at_s") is not None
+            and item.get("cooldown_elapsed_s") is not None
+            and item.get("cooldown_run_gap_s") is not None
+            for positions in cooldown_intervals.values()
+            for item in positions.values()
+        )
+        and bool(cooldown_intervals),
+        cooldown_rule=_single_present([run.cooldown_rule for run in runs]),
+        cooldown_enforced_count=sum(1 for run in runs if run.cooldown_enforced),
+        cooldown_started_at_s_min=_value_min([run.cooldown_started_at_s for run in runs]),
+        cooldown_ended_at_s_max=_value_max([run.cooldown_ended_at_s for run in runs]),
+        cooldown_elapsed_s_median=_median([run.cooldown_elapsed_s for run in runs]),
+        cooldown_run_gap_s_max=max(cooldown_run_gaps) if cooldown_run_gaps else None,
+        pair_run_order_valid=bool(ab_position_counts_by_id),
+        ab_evidence_complete=_aggregate_ab_evidence_complete(runs),
     )
+
+
+def _ab_pairwise_gate(
+    baseline: PolicyAggregate,
+    candidate: PolicyAggregate,
+) -> tuple[str | None, dict[str, object]]:
+    diagnostics: dict[str, object] = {
+        "thermal_pair_start_delta_max_c": None,
+        "thermal_pair_end_delta_max_c": None,
+        "thermal_pair_mismatch_count": 0,
+        "cooldown_run_gap_s_max": None,
+        "cooldown_interval_reuse_count": 0,
+    }
+    if not baseline.ab_evidence_complete or not candidate.ab_evidence_complete:
+        return "aggregate-local evidence is incomplete", diagnostics
+    if baseline.policy != "off":
+        return "baseline policy must be off", diagnostics
+    baseline_orders = baseline.ab_run_orders or []
+    candidate_orders = candidate.ab_run_orders or []
+    if len(baseline_orders) != 1 or len(candidate_orders) != 1:
+        return "each aggregate must have exactly one A/B run order", diagnostics
+    if baseline_orders[0] != candidate_orders[0]:
+        return "baseline and candidate A/B run orders differ", diagnostics
+    expected_order = f"off,{candidate.policy},off"
+    if baseline_orders[0] != expected_order:
+        return "paired-baseline run order does not match candidate policy", diagnostics
+    if (
+        baseline.ab_candidate_policy != candidate.policy
+        or candidate.ab_candidate_policy != candidate.policy
+    ):
+        return "A/B candidate policy identity does not match candidate aggregate", diagnostics
+    baseline_pair_ids = set(baseline.ab_pair_ids or [])
+    candidate_pair_ids = set(candidate.ab_pair_ids or [])
+    if baseline_pair_ids != candidate_pair_ids:
+        return "baseline and candidate pair id sets differ", diagnostics
+    if baseline.sample_count != candidate.sample_count * 2:
+        return "baseline sample count must be exactly twice candidate sample count", diagnostics
+    baseline_counts = baseline.ab_pair_position_counts_by_id or {}
+    candidate_counts = candidate.ab_pair_position_counts_by_id or {}
+    for pair_id in sorted(candidate_pair_ids):
+        if baseline_counts.get(pair_id, {}).get("baseline-before") != 1:
+            return "paired-baseline is missing baseline-before", diagnostics
+        if baseline_counts.get(pair_id, {}).get("baseline-after") != 1:
+            return "paired-baseline is missing baseline-after", diagnostics
+        if candidate_counts.get(pair_id, {}).get("candidate") != 1:
+            return "paired-baseline is missing candidate", diagnostics
+        if any(count != 1 for count in baseline_counts.get(pair_id, {}).values()):
+            return "paired-baseline has duplicate baseline pair positions", diagnostics
+        if any(count != 1 for count in candidate_counts.get(pair_id, {}).values()):
+            return "paired-baseline has duplicate candidate pair positions", diagnostics
+    if (
+        baseline.thermal_source_kind,
+        baseline.thermal_source_id,
+        baseline.thermal_source_label,
+    ) != (
+        candidate.thermal_source_kind,
+        candidate.thermal_source_id,
+        candidate.thermal_source_label,
+    ):
+        return "thermal source identity differs between baseline and candidate", diagnostics
+    if baseline.ab_order_strategy != candidate.ab_order_strategy:
+        return "A/B order strategy differs between baseline and candidate", diagnostics
+    if baseline.scene_evidence != candidate.scene_evidence:
+        return "scene evidence differs between baseline and candidate", diagnostics
+    if baseline.power_source_state != candidate.power_source_state:
+        return "power source state differs between baseline and candidate", diagnostics
+    start_delta = _abs_delta(baseline.thermal_start_c_median, candidate.thermal_start_c_median)
+    end_delta = _abs_delta(baseline.thermal_end_c_median, candidate.thermal_end_c_median)
+    if start_delta is None or end_delta is None:
+        return "aggregate thermal medians are missing", diagnostics
+    if start_delta > AB_THERMAL_DELTA_MAX_C or end_delta > AB_THERMAL_DELTA_MAX_C:
+        return "aggregate thermal medians differ too much", diagnostics
+
+    baseline_thermal = baseline.thermal_pair_readings_by_id or {}
+    candidate_thermal = candidate.thermal_pair_readings_by_id or {}
+    baseline_runs = baseline.run_interval_by_pair_id or {}
+    candidate_runs = candidate.run_interval_by_pair_id or {}
+    baseline_cooldowns = baseline.cooldown_interval_by_pair_id or {}
+    candidate_cooldowns = candidate.cooldown_interval_by_pair_id or {}
+    start_deltas: list[float] = []
+    end_deltas: list[float] = []
+    cooldown_gaps: list[float] = []
+    reused_cooldowns = 0
+    thermal_mismatches = 0
+    for pair_id in sorted(candidate_pair_ids):
+        before_thermal = (baseline_thermal.get(pair_id) or {}).get("baseline-before")
+        candidate_thermal_item = (candidate_thermal.get(pair_id) or {}).get("candidate")
+        after_thermal = (baseline_thermal.get(pair_id) or {}).get("baseline-after")
+        if not before_thermal or not candidate_thermal_item or not after_thermal:
+            return "pair-scoped thermal readings are incomplete", diagnostics
+        for key, delta_list in (
+            ("thermal_start_c", start_deltas),
+            ("thermal_end_c", end_deltas),
+        ):
+            candidate_value = candidate_thermal_item.get(key)
+            before_delta = _abs_delta(before_thermal.get(key), candidate_value)
+            after_delta = _abs_delta(after_thermal.get(key), candidate_value)
+            if before_delta is None or after_delta is None:
+                return "pair-scoped thermal readings are incomplete", diagnostics
+            delta_list.extend([before_delta, after_delta])
+            if before_delta > AB_THERMAL_DELTA_MAX_C or after_delta > AB_THERMAL_DELTA_MAX_C:
+                thermal_mismatches += 1
+
+        before_run = (baseline_runs.get(pair_id) or {}).get("baseline-before")
+        candidate_run = (candidate_runs.get(pair_id) or {}).get("candidate")
+        after_run = (baseline_runs.get(pair_id) or {}).get("baseline-after")
+        if not before_run or not candidate_run or not after_run:
+            return "pair-scoped run intervals are incomplete", diagnostics
+        if not _run_interval_is_real(before_run) or not _run_interval_is_real(
+            candidate_run
+        ) or not _run_interval_is_real(after_run):
+            return "pair-scoped run intervals are incomplete", diagnostics
+        if not (
+            before_run["run_ended_at_s"]
+            <= candidate_run["run_started_at_s"]
+            <= candidate_run["run_ended_at_s"]
+            <= after_run["run_started_at_s"]
+        ):
+            return "paired-baseline run intervals are not monotonic", diagnostics
+
+        before_cooldown = (baseline_cooldowns.get(pair_id) or {}).get("baseline-before")
+        candidate_cooldown = (candidate_cooldowns.get(pair_id) or {}).get("candidate")
+        after_cooldown = (baseline_cooldowns.get(pair_id) or {}).get("baseline-after")
+        if not before_cooldown or not candidate_cooldown or not after_cooldown:
+            return "pair-scoped cooldown intervals are incomplete", diagnostics
+        cooldowns = [before_cooldown, candidate_cooldown, after_cooldown]
+        cooldown_keys = {
+            (
+                item.get("cooldown_started_at_s"),
+                item.get("cooldown_ended_at_s"),
+            )
+            for item in cooldowns
+        }
+        reused_cooldowns += len(cooldowns) - len(cooldown_keys)
+        for cooldown, run in (
+            (before_cooldown, before_run),
+            (candidate_cooldown, candidate_run),
+            (after_cooldown, after_run),
+        ):
+            if not _cooldown_interval_is_real(cooldown):
+                return "pair-scoped cooldown intervals are incomplete", diagnostics
+            gap = cooldown.get("cooldown_run_gap_s")
+            if isinstance(gap, float | int):
+                cooldown_gaps.append(float(gap))
+            if cooldown["cooldown_ended_at_s"] > run["run_started_at_s"]:
+                return "cooldown interval overlaps measured run", diagnostics
+            if (
+                gap is None
+                or gap < 0.0
+                or gap > FIXED_COOLDOWN_RUN_GAP_MAX_S
+            ):
+                return "measured run is not adjacent to cooldown", diagnostics
+        if candidate_cooldown["cooldown_started_at_s"] < before_run["run_ended_at_s"]:
+            return "candidate cooldown starts before baseline-before run ends", diagnostics
+        if after_cooldown["cooldown_started_at_s"] < candidate_run["run_ended_at_s"]:
+            return "baseline-after cooldown starts before candidate run ends", diagnostics
+    diagnostics["thermal_pair_start_delta_max_c"] = (
+        round(max(start_deltas), 3) if start_deltas else None
+    )
+    diagnostics["thermal_pair_end_delta_max_c"] = (
+        round(max(end_deltas), 3) if end_deltas else None
+    )
+    diagnostics["thermal_pair_mismatch_count"] = thermal_mismatches
+    diagnostics["cooldown_run_gap_s_max"] = (
+        round(max(cooldown_gaps), 3) if cooldown_gaps else None
+    )
+    diagnostics["cooldown_interval_reuse_count"] = reused_cooldowns
+    if thermal_mismatches:
+        return "pair-scoped thermal readings differ too much", diagnostics
+    if reused_cooldowns:
+        return "pair-scoped cooldown interval was reused", diagnostics
+    return None, diagnostics
+
+
+def _run_interval_is_real(item: dict[str, float | None]) -> bool:
+    start = item.get("run_started_at_s")
+    end = item.get("run_ended_at_s")
+    return start is not None and end is not None and end > start
+
+
+def _cooldown_interval_is_real(item: dict[str, float | None]) -> bool:
+    started = item.get("cooldown_started_at_s")
+    ended = item.get("cooldown_ended_at_s")
+    elapsed = item.get("cooldown_elapsed_s")
+    gap = item.get("cooldown_run_gap_s")
+    return (
+        started is not None
+        and ended is not None
+        and elapsed is not None
+        and gap is not None
+        and ended >= started
+        and elapsed >= FIXED_COOLDOWN_MIN_S
+    )
+
+
+def _abs_delta(left: float | None, right: float | None) -> float | None:
+    if left is None or right is None:
+        return None
+    return abs(left - right)
 
 
 def compare_policy_aggregates(
@@ -1107,6 +1693,16 @@ def compare_policy_aggregates(
             "restore verification did not pass for every aggregated run",
         )
 
+    ab_reason, ab_diagnostics = _ab_pairwise_gate(baseline, candidate)
+    if ab_reason is not None:
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.INCONCLUSIVE,
+            _incomplete_reason(ab_reason),
+            **ab_diagnostics,
+        )
+
     low_gain = _percent_change(
         baseline.one_percent_low_fps_median,
         candidate.one_percent_low_fps_median,
@@ -1122,24 +1718,30 @@ def compare_policy_aggregates(
     )
 
     if low_gain is not None and low_gain >= 5.0 and (avg_gain is None or avg_gain >= -2.0):
-        return PolicyComparison(
+        reason = (
+            f"median 1% low improved by {low_gain:.1f}% "
+            f"with median average FPS change {avg_gain or 0:.1f}%"
+        )
+        return _better_policy_comparison(
             baseline.policy,
             candidate.policy,
-            PolicyVerdict.BETTER,
-            (
-                f"median 1% low improved by {low_gain:.1f}% "
-                f"with median average FPS change {avg_gain or 0:.1f}%"
-            ),
+            reason,
+            baseline=baseline,
+            candidate=candidate,
+            diagnostics=ab_diagnostics,
         )
     if p99_gain is not None and p99_gain >= 5.0 and (avg_gain is None or avg_gain >= -2.0):
-        return PolicyComparison(
+        reason = (
+            f"median p99 frametime improved by {p99_gain:.1f}% "
+            f"with median average FPS change {avg_gain or 0:.1f}%"
+        )
+        return _better_policy_comparison(
             baseline.policy,
             candidate.policy,
-            PolicyVerdict.BETTER,
-            (
-                f"median p99 frametime improved by {p99_gain:.1f}% "
-                f"with median average FPS change {avg_gain or 0:.1f}%"
-            ),
+            reason,
+            baseline=baseline,
+            candidate=candidate,
+            diagnostics=ab_diagnostics,
         )
     if (
         _aggregate_target_sustained(baseline)
@@ -1149,21 +1751,30 @@ def compare_policy_aggregates(
         and (low_gain is None or low_gain >= PACING_REGRESSION_REJECT_PCT)
         and (p99_gain is None or p99_gain >= PACING_REGRESSION_REJECT_PCT)
     ):
-        return PolicyComparison(
+        reason = (
+            f"target sustained while median package power reduced by "
+            f"{package_saving:.1f}%"
+        )
+        return _better_policy_comparison(
             baseline.policy,
             candidate.policy,
-            PolicyVerdict.BETTER,
-            (
-                f"target sustained while median package power reduced by "
-                f"{package_saving:.1f}%"
-            ),
+            reason,
+            baseline=baseline,
+            candidate=candidate,
+            diagnostics=ab_diagnostics,
         )
     if avg_gain is not None and avg_gain >= 5.0 and (low_gain is None or low_gain >= -2.0):
-        return PolicyComparison(
+        reason = (
+            f"median average FPS improved by {avg_gain:.1f}% "
+            f"without low-percentile regression"
+        )
+        return _better_policy_comparison(
             baseline.policy,
             candidate.policy,
-            PolicyVerdict.BETTER,
-            f"median average FPS improved by {avg_gain:.1f}% without low-percentile regression",
+            reason,
+            baseline=baseline,
+            candidate=candidate,
+            diagnostics=ab_diagnostics,
         )
     if low_gain is not None and low_gain < -3.0:
         return PolicyComparison(
@@ -1171,6 +1782,7 @@ def compare_policy_aggregates(
             candidate.policy,
             PolicyVerdict.REJECTED,
             f"median 1% low worsened by {abs(low_gain):.1f}%",
+            **ab_diagnostics,
         )
     if p99_gain is not None and p99_gain < -3.0:
         return PolicyComparison(
@@ -1178,13 +1790,75 @@ def compare_policy_aggregates(
             candidate.policy,
             PolicyVerdict.REJECTED,
             f"median p99 frametime worsened by {abs(p99_gain):.1f}%",
+            **ab_diagnostics,
         )
     return PolicyComparison(
         baseline.policy,
         candidate.policy,
         PolicyVerdict.INCONCLUSIVE,
         "candidate medians did not meet improvement or rejection thresholds",
+        **ab_diagnostics,
     )
+
+
+def _better_policy_comparison(
+    baseline_policy: str,
+    candidate_policy: str,
+    reason: str,
+    *,
+    baseline: PolicyAggregate,
+    candidate: PolicyAggregate,
+    diagnostics: dict[str, object],
+) -> PolicyComparison:
+    return PolicyComparison(
+        baseline_policy,
+        candidate_policy,
+        PolicyVerdict.BETTER,
+        reason,
+        **diagnostics,
+        claim_scope=_claim_scope(baseline, candidate, diagnostics),
+        human_summary=(
+            f"BETTER ({BETTER_CLAIM_BOUNDARY}): {reason}; "
+            f"{GUARDED_ARTIFACT_CAVEAT}"
+        ),
+    )
+
+
+def _claim_scope(
+    baseline: PolicyAggregate,
+    candidate: PolicyAggregate,
+    diagnostics: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "appid": baseline.appid,
+        "scene_evidence": baseline.scene_evidence,
+        "baseline_policy": baseline.policy,
+        "candidate_policy": candidate.policy,
+        "tdp_w": baseline.tdp_w,
+        "duration_s": baseline.duration_s,
+        "warmup_s": baseline.warmup_s,
+        "poll_s": baseline.poll_s,
+        "fps_target": baseline.fps_target,
+        "fps_target_source": baseline.fps_target_source,
+        "pair_count": len(candidate.ab_pair_ids or []),
+        "ab_order_strategy": baseline.ab_order_strategy,
+        "ab_run_order": (baseline.ab_run_orders or [None])[0],
+        "power_source_state": baseline.power_source_state,
+        "thermal_source_kind": baseline.thermal_source_kind,
+        "thermal_source_id": baseline.thermal_source_id,
+        "thermal_pair_start_delta_max_c": diagnostics.get(
+            "thermal_pair_start_delta_max_c"
+        ),
+        "thermal_pair_end_delta_max_c": diagnostics.get("thermal_pair_end_delta_max_c"),
+        "cooldown_rule": baseline.cooldown_rule,
+        "cooldown_elapsed_s_median": candidate.cooldown_elapsed_s_median,
+        "evidence_boundary": BETTER_CLAIM_BOUNDARY,
+        "hardware_claim_requires": (
+            f"{GUARDED_ARTIFACT_CAVEAT}; not sufficient for hardware-wide, "
+            "game-wide, release-note, or default-policy performance claims "
+            "without a separate claim plan"
+        ),
+    }
 
 
 def _run_has_restore_affinity_snapshot(run: RunSummary) -> bool:
@@ -1284,6 +1958,51 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--duration-s", type=float)
     summarize.add_argument("--warmup-s", type=float)
     summarize.add_argument("--poll-s", type=float)
+    summarize.add_argument("--ab-order-strategy")
+    summarize.add_argument("--ab-run-order")
+    summarize.add_argument("--ab-order-valid", choices=["true", "false"])
+    summarize.add_argument("--ab-candidate-policy")
+    summarize.add_argument("--ab-invocation-id")
+    summarize.add_argument("--ab-pair-id")
+    summarize.add_argument(
+        "--ab-pair-position",
+        choices=["baseline-before", "candidate", "baseline-after"],
+    )
+    summarize.add_argument("--scene-evidence")
+    summarize.add_argument(
+        "--power-source-state",
+        choices=["ac", "battery", "mixed", "unknown"],
+    )
+    summarize.add_argument(
+        "--power-source-start-state",
+        choices=["ac", "battery", "unknown"],
+    )
+    summarize.add_argument(
+        "--power-source-pre-run-state",
+        choices=["ac", "battery", "unknown"],
+    )
+    summarize.add_argument(
+        "--power-source-end-state",
+        choices=["ac", "battery", "unknown"],
+    )
+    summarize.add_argument("--power-source-samples")
+    summarize.add_argument("--power-source-stable", choices=["true", "false"])
+    summarize.add_argument("--thermal-start-c", type=float)
+    summarize.add_argument("--thermal-end-c", type=float)
+    summarize.add_argument("--thermal-unavailable", choices=["true", "false"])
+    summarize.add_argument(
+        "--thermal-source-kind",
+        choices=["cpu-package", "platform", "other", "unknown"],
+    )
+    summarize.add_argument("--thermal-source-id")
+    summarize.add_argument("--thermal-source-label")
+    summarize.add_argument("--run-started-at-s", type=float)
+    summarize.add_argument("--run-ended-at-s", type=float)
+    summarize.add_argument("--cooldown-rule")
+    summarize.add_argument("--cooldown-enforced", choices=["true", "false"])
+    summarize.add_argument("--cooldown-started-at-s", type=float)
+    summarize.add_argument("--cooldown-ended-at-s", type=float)
+    summarize.add_argument("--cooldown-elapsed-s", type=float)
     summarize.add_argument("--output", required=True)
     summarize.add_argument("--restored", choices=["true", "false"], default="true")
 
@@ -1359,6 +2078,35 @@ def run_summarize(args: argparse.Namespace) -> Path:
         if args.restore_affinity_json
         else None
     )
+    ab_evidence = AbEvidence(
+        order_strategy=args.ab_order_strategy,
+        run_order=args.ab_run_order,
+        order_valid=_optional_bool(args.ab_order_valid) is True,
+        candidate_policy=args.ab_candidate_policy,
+        invocation_id=args.ab_invocation_id,
+        pair_id=args.ab_pair_id,
+        pair_position=args.ab_pair_position,
+        scene_evidence=args.scene_evidence,
+        power_source_state=args.power_source_state,
+        power_source_start_state=args.power_source_start_state,
+        power_source_pre_run_state=args.power_source_pre_run_state,
+        power_source_end_state=args.power_source_end_state,
+        power_source_samples=_csv_values(args.power_source_samples),
+        power_source_stable=_optional_bool(args.power_source_stable) is True,
+        thermal_start_c=args.thermal_start_c,
+        thermal_end_c=args.thermal_end_c,
+        thermal_unavailable=_optional_bool(args.thermal_unavailable) is True,
+        thermal_source_kind=args.thermal_source_kind,
+        thermal_source_id=args.thermal_source_id,
+        thermal_source_label=args.thermal_source_label,
+        run_started_at_s=args.run_started_at_s,
+        run_ended_at_s=args.run_ended_at_s,
+        cooldown_rule=args.cooldown_rule,
+        cooldown_enforced=_optional_bool(args.cooldown_enforced) is True,
+        cooldown_started_at_s=args.cooldown_started_at_s,
+        cooldown_ended_at_s=args.cooldown_ended_at_s,
+        cooldown_elapsed_s=args.cooldown_elapsed_s,
+    )
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -1387,6 +2135,33 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "process_cgroups_jsonl": bool(args.process_cgroups_jsonl),
         "background_shaping_json": bool(process_cgroups),
         "restore_affinity_json": bool(args.restore_affinity_json),
+        "ab_order_strategy": ab_evidence.order_strategy,
+        "ab_run_order": ab_evidence.run_order,
+        "ab_order_valid": ab_evidence.order_valid,
+        "ab_candidate_policy": ab_evidence.candidate_policy,
+        "ab_invocation_id": ab_evidence.invocation_id,
+        "ab_pair_id": ab_evidence.pair_id,
+        "ab_pair_position": ab_evidence.pair_position,
+        "scene_evidence": ab_evidence.scene_evidence,
+        "power_source_state": ab_evidence.power_source_state,
+        "power_source_start_state": ab_evidence.power_source_start_state,
+        "power_source_pre_run_state": ab_evidence.power_source_pre_run_state,
+        "power_source_end_state": ab_evidence.power_source_end_state,
+        "power_source_samples": ab_evidence.power_source_samples,
+        "power_source_stable": ab_evidence.power_source_stable,
+        "thermal_start_c": ab_evidence.thermal_start_c,
+        "thermal_end_c": ab_evidence.thermal_end_c,
+        "thermal_unavailable": ab_evidence.thermal_unavailable,
+        "thermal_source_kind": ab_evidence.thermal_source_kind,
+        "thermal_source_id": ab_evidence.thermal_source_id,
+        "thermal_source_label": ab_evidence.thermal_source_label,
+        "run_started_at_s": ab_evidence.run_started_at_s,
+        "run_ended_at_s": ab_evidence.run_ended_at_s,
+        "cooldown_rule": ab_evidence.cooldown_rule,
+        "cooldown_enforced": ab_evidence.cooldown_enforced,
+        "cooldown_started_at_s": ab_evidence.cooldown_started_at_s,
+        "cooldown_ended_at_s": ab_evidence.cooldown_ended_at_s,
+        "cooldown_elapsed_s": ab_evidence.cooldown_elapsed_s,
     }
     summary = merge_run_summary(
         appid=args.appid,
@@ -1408,6 +2183,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         duration_s=args.duration_s,
         warmup_s=args.warmup_s,
         poll_s=args.poll_s,
+        ab_evidence=ab_evidence,
         restored=args.restored == "true",
     )
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -1450,6 +2226,7 @@ def run_compare(args: argparse.Namespace) -> PolicyComparison:
 
 def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
     capture_mode = CaptureMode(args.capture_mode)
+    requested_candidates = set(args.candidate_policy)
     records: list[tuple[Path, RunSummary]] = []
     for path in _discover_summary_paths(args.root):
         summary = _load_run_summary(path)
@@ -1474,6 +2251,12 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
             continue
         if summary.policy != args.baseline_policy and summary.policy not in args.candidate_policy:
             continue
+        if (
+            summary.policy == args.baseline_policy
+            and summary.ab_candidate_policy
+            and summary.ab_candidate_policy not in requested_candidates
+        ):
+            continue
         records.append((path, summary))
 
     groups: dict[tuple[object, ...], list[RunSummary]] = defaultdict(list)
@@ -1491,6 +2274,8 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
             baseline_keys_by_context[_comparison_context_key(key)].append(key)
 
     comparisons = []
+    incomplete_groups = []
+    matched_baseline_keys: set[tuple[object, ...]] = set()
     candidate_keys = sorted(
         (key for key in groups if key[2] in args.candidate_policy),
         key=_sortable_group_key,
@@ -1498,7 +2283,19 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
     for candidate_key in candidate_keys:
         appid, tdp_w, _candidate_policy = candidate_key[:3]
         baseline_keys = baseline_keys_by_context.get(_comparison_context_key(candidate_key), [])
+        if not baseline_keys:
+            candidate = aggregate_run_summaries(groups[candidate_key])
+            incomplete_groups.append(
+                _incomplete_group(
+                    baseline_policy=args.baseline_policy,
+                    candidate_policy=str(_candidate_policy),
+                    aggregate=candidate,
+                    missing_side="baseline",
+                )
+            )
+            continue
         for baseline_key in sorted(baseline_keys, key=_sortable_group_key):
+            matched_baseline_keys.add(baseline_key)
             baseline_runs = groups[baseline_key]
             candidate_runs = groups[candidate_key]
             baseline = aggregate_run_summaries(baseline_runs)
@@ -1548,12 +2345,48 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
                 }
             )
 
+    candidate_contexts = {_comparison_context_key(key) for key in candidate_keys}
+    for baseline_keys in baseline_keys_by_context.values():
+        for baseline_key in sorted(baseline_keys, key=_sortable_group_key):
+            if baseline_key in matched_baseline_keys:
+                continue
+            if _comparison_context_key(baseline_key) in candidate_contexts:
+                continue
+            baseline = aggregate_run_summaries(groups[baseline_key])
+            incomplete_groups.append(
+                _incomplete_group(
+                    baseline_policy=args.baseline_policy,
+                    candidate_policy=baseline.ab_candidate_policy or "",
+                    aggregate=baseline,
+                    missing_side="candidate",
+                )
+            )
+
     return {
         "baseline_policy": args.baseline_policy,
         "candidate_policies": args.candidate_policy,
         "capture_mode": capture_mode,
         "min_runs": args.min_runs,
         "comparisons": comparisons,
+        "incomplete_groups": incomplete_groups,
+    }
+
+
+def _incomplete_group(
+    *,
+    baseline_policy: str,
+    candidate_policy: str,
+    aggregate: PolicyAggregate,
+    missing_side: str,
+) -> dict[str, object]:
+    return {
+        "baseline_policy": baseline_policy,
+        "candidate_policy": candidate_policy,
+        "ab_candidate_policy": aggregate.ab_candidate_policy,
+        "ab_run_order": (aggregate.ab_run_orders or [None])[0],
+        "missing_side": missing_side,
+        "verdict": PolicyVerdict.INCONCLUSIVE.value,
+        "reason": _incomplete_reason(f"missing matching {missing_side} group"),
     }
 
 
@@ -2513,11 +3346,14 @@ def _profile_group_key(run: RunSummary) -> tuple[object, ...]:
         run.policy,
         *_experiment_settings(run),
         *_effective_tunables(run),
+        run.ab_order_strategy,
+        run.ab_candidate_policy,
+        run.ab_run_order,
     )
 
 
 def _comparison_context_key(group_key: tuple[object, ...]) -> tuple[object, ...]:
-    return (group_key[0], group_key[1], *group_key[3:8])
+    return (group_key[0], group_key[1], *group_key[3:8], *group_key[13:16])
 
 
 def _experiment_settings(
@@ -2566,6 +3402,12 @@ def _optional_bool(value: str | None) -> bool | None:
     if value is None:
         return None
     return value == "true"
+
+
+def _csv_values(value: str | None) -> list[str] | None:
+    if value is None:
+        return None
+    return [item.strip() for item in value.split(",")]
 
 
 def _optional_int(value: object) -> int | None:
@@ -3158,6 +4000,16 @@ def _avg(values: list[float]) -> float | None:
 def _median(values: list[float | None]) -> float | None:
     parsed = [value for value in values if value is not None]
     return round(median(parsed), 3) if parsed else None
+
+
+def _value_min(values: list[float | None]) -> float | None:
+    parsed = [value for value in values if value is not None]
+    return min(parsed) if parsed else None
+
+
+def _value_max(values: list[float | None]) -> float | None:
+    parsed = [value for value in values if value is not None]
+    return max(parsed) if parsed else None
 
 
 def _ratio(part: float | None, total: float | None) -> float | None:

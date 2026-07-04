@@ -2,6 +2,7 @@ import csv
 import json
 import subprocess
 import sys
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from steamos_intel_handheld.game_power_profile import (
@@ -42,6 +43,90 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, object]]) 
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def controlled_ab_run(
+    *,
+    policy: str,
+    position: str,
+    pair_id: str = "pair-1",
+    candidate_policy: str = "gpu-priority",
+    invocation_id: str = "invocation-1",
+    base_s: float = 0.0,
+    avg_fps: float = 42.0,
+    one_percent_low_fps: float = 30.0,
+    avg_package_w: float | None = None,
+    thermal_start_c: float = 61.0,
+    thermal_end_c: float = 63.0,
+) -> RunSummary:
+    position_offsets = {
+        "baseline-before": 0.0,
+        "candidate": 121.0,
+        "baseline-after": 242.0,
+    }
+    offset = position_offsets[position]
+    cooldown_started_at_s = base_s + offset
+    cooldown_ended_at_s = cooldown_started_at_s + 60.0
+    run_started_at_s = cooldown_ended_at_s + 0.3
+    run_ended_at_s = run_started_at_s + 60.0
+    return RunSummary(
+        appid="1091500",
+        tdp_w=22,
+        policy=policy,
+        capture_mode=CaptureMode.CONTROLLED,
+        duration_s=60.0,
+        warmup_s=10.0,
+        poll_s=2.0,
+        fps_target=40.0,
+        fps_target_source="manual",
+        avg_fps=avg_fps,
+        one_percent_low_fps=one_percent_low_fps,
+        avg_package_w=avg_package_w,
+        restored=True,
+        ab_order_strategy="paired-baseline",
+        ab_run_order=f"off,{candidate_policy},off",
+        ab_order_valid=True,
+        ab_candidate_policy=candidate_policy,
+        ab_invocation_id=invocation_id,
+        ab_pair_id=pair_id,
+        ab_pair_position=position,
+        scene_evidence="save:dogtown-market-static",
+        power_source_state="ac",
+        power_source_start_state="ac",
+        power_source_pre_run_state="ac",
+        power_source_end_state="ac",
+        power_source_samples=["ac", "ac", "ac"],
+        power_source_stable=True,
+        thermal_start_c=thermal_start_c,
+        thermal_end_c=thermal_end_c,
+        thermal_unavailable=False,
+        thermal_source_kind="cpu-package",
+        thermal_source_id="hwmon:coretemp:Package id 0",
+        thermal_source_label="Package id 0",
+        run_started_at_s=run_started_at_s,
+        run_ended_at_s=run_ended_at_s,
+        cooldown_rule="fixed-60s",
+        cooldown_enforced=True,
+        cooldown_started_at_s=cooldown_started_at_s,
+        cooldown_ended_at_s=cooldown_ended_at_s,
+        cooldown_elapsed_s=60.0,
+    )
+
+
+def controlled_ab_payload(**kwargs) -> dict[str, object]:
+    run = controlled_ab_run(**kwargs)
+    payload = asdict(run)
+    payload["capture_mode"] = run.capture_mode.value
+    return payload
+
+
+def assert_ab_incomplete(verdict, expected_detail: str | None = None) -> None:
+    assert verdict.verdict == PolicyVerdict.INCONCLUSIVE
+    assert verdict.reason.startswith("A/B evidence incomplete:")
+    if expected_detail:
+        assert expected_detail in verdict.reason
+    assert "exploratory only; cannot support a BETTER claim" in verdict.reason
+    assert verdict.claim_scope is None
 
 
 def test_parse_mangohud_summary_csv_reads_low_percentile_metrics(tmp_path):
@@ -1224,8 +1309,10 @@ def test_compare_run_summaries_accepts_better_one_percent_low_without_avg_regres
 
     verdict = compare_run_summaries(baseline, candidate)
 
-    assert verdict.verdict == PolicyVerdict.BETTER
-    assert "1% low improved" in verdict.reason
+    assert verdict.verdict == PolicyVerdict.INCONCLUSIVE
+    assert verdict.reason.startswith("A/B evidence incomplete:")
+    assert "single-run compare is exploratory only" in verdict.reason
+    assert "cannot support a BETTER claim" in verdict.reason
 
 
 def test_compare_run_summaries_accepts_power_saving_when_target_is_sustained():
@@ -1256,9 +1343,10 @@ def test_compare_run_summaries_accepts_power_saving_when_target_is_sustained():
 
     verdict = compare_run_summaries(baseline, candidate)
 
-    assert verdict.verdict == PolicyVerdict.BETTER
-    assert "target sustained" in verdict.reason
-    assert "package power reduced" in verdict.reason
+    assert verdict.verdict == PolicyVerdict.INCONCLUSIVE
+    assert verdict.reason.startswith("A/B evidence incomplete:")
+    assert "single-run compare is exploratory only" in verdict.reason
+    assert "cannot support a BETTER claim" in verdict.reason
 
 
 def test_compare_run_summaries_rejects_imported_candidate_as_non_automated_ab():
@@ -1357,50 +1445,204 @@ def test_aggregate_run_summaries_uses_medians_and_counts_restore_state():
     assert aggregate.avg_core_share_median == 0.31
 
 
-def test_compare_policy_aggregates_requires_repeated_controlled_runs():
-    baseline = aggregate_run_summaries(
+def test_aggregate_carries_ab_run_order_evidence():
+    aggregate = aggregate_run_summaries(
         [
-            RunSummary(
-                appid="1091500",
-                tdp_w=22,
-                policy="off",
-                capture_mode=CaptureMode.CONTROLLED,
-                avg_fps=54.0,
-                one_percent_low_fps=40.0,
-                restored=True,
+            controlled_ab_run(
+                policy="gpu-priority",
+                position="candidate",
+                one_percent_low_fps=43.0,
+                thermal_start_c=62.0,
+                thermal_end_c=64.0,
             )
         ]
     )
-    candidate = aggregate_run_summaries(
-        [
-            RunSummary(
-                appid="1091500",
-                tdp_w=22,
-                policy="gpu-priority",
-                capture_mode=CaptureMode.CONTROLLED,
-                avg_fps=57.0,
-                one_percent_low_fps=44.0,
-                restored=True,
-            ),
-            RunSummary(
-                appid="1091500",
-                tdp_w=22,
-                policy="gpu-priority",
-                capture_mode=CaptureMode.CONTROLLED,
-                avg_fps=58.0,
-                one_percent_low_fps=45.0,
-                restored=True,
-            ),
-        ]
+
+    assert aggregate.ab_order_strategy == "paired-baseline"
+    assert aggregate.ab_run_orders == ["off,gpu-priority,off"]
+    assert aggregate.ab_candidate_policy == "gpu-priority"
+    assert aggregate.ab_pair_ids == ["pair-1"]
+    assert aggregate.ab_pair_position_counts == {"candidate": 1}
+    assert aggregate.ab_pair_position_counts_by_id == {"pair-1": {"candidate": 1}}
+    assert aggregate.scene_evidence == "save:dogtown-market-static"
+    assert aggregate.power_source_sample_signatures == ["ac,ac,ac"]
+    assert aggregate.thermal_pair_readings_by_id["pair-1"]["candidate"] == {
+        "thermal_start_c": 62.0,
+        "thermal_end_c": 64.0,
+    }
+    assert aggregate.run_interval_by_pair_id["pair-1"]["candidate"] == {
+        "run_started_at_s": 181.3,
+        "run_ended_at_s": 241.3,
+    }
+    assert aggregate.cooldown_interval_by_pair_id["pair-1"]["candidate"] == {
+        "cooldown_started_at_s": 121.0,
+        "cooldown_ended_at_s": 181.0,
+        "cooldown_elapsed_s": 60.0,
+        "cooldown_run_gap_s": 0.3,
+    }
+    assert aggregate.ab_evidence_complete is True
+
+
+def test_aggregate_marks_power_source_evidence_gaps_incomplete():
+    valid = controlled_ab_run(policy="gpu-priority", position="candidate")
+    variants = [
+        replace(valid, power_source_state="unknown"),
+        replace(valid, power_source_state="mixed", power_source_stable=False),
+        replace(valid, power_source_samples=["ac", "ac"]),
+        replace(valid, power_source_samples=["ac", "battery", "ac"]),
+        replace(valid, power_source_pre_run_state="battery"),
+        replace(valid, power_source_stable=False),
+    ]
+
+    for run in variants:
+        aggregate = aggregate_run_summaries([run])
+        assert aggregate.ab_evidence_complete is False
+
+
+def test_aggregate_marks_thermal_cooldown_order_and_legacy_gaps_incomplete():
+    valid = controlled_ab_run(policy="gpu-priority", position="candidate")
+    late_run_start = valid.cooldown_ended_at_s + 5.5
+    variants = [
+        replace(valid, thermal_unavailable=True),
+        replace(valid, thermal_start_c=None),
+        replace(valid, thermal_source_id=None),
+        replace(valid, cooldown_enforced=False),
+        replace(valid, cooldown_elapsed_s=59.0),
+        replace(valid, cooldown_elapsed_s=61.5),
+        replace(valid, cooldown_rule="return-to-60C"),
+        replace(
+            valid,
+            run_started_at_s=late_run_start,
+            run_ended_at_s=late_run_start + 60.0,
+        ),
+        replace(valid, ab_order_strategy="randomized"),
+        RunSummary(
+            appid="1091500",
+            tdp_w=22,
+            policy="gpu-priority",
+            capture_mode=CaptureMode.CONTROLLED,
+            restored=True,
+        ),
+    ]
+
+    for run in variants:
+        aggregate = aggregate_run_summaries([run])
+        assert aggregate.ab_evidence_complete is False
+
+
+def test_compare_policy_aggregates_marks_pairwise_evidence_gaps_incomplete():
+    def aggregate_pair(*, before=None, candidate=None, after=None):
+        before = before or controlled_ab_run(policy="off", position="baseline-before")
+        candidate = candidate or controlled_ab_run(
+            policy="gpu-priority",
+            position="candidate",
+            avg_fps=42.0,
+            one_percent_low_fps=33.0,
+            thermal_start_c=62.0,
+            thermal_end_c=64.0,
+        )
+        after = after or controlled_ab_run(
+            policy="off",
+            position="baseline-after",
+            thermal_start_c=61.5,
+            thermal_end_c=63.5,
+        )
+        return aggregate_run_summaries([before, after]), aggregate_run_summaries(
+            [candidate]
+        )
+
+    baseline, candidate = aggregate_pair(
+        candidate=replace(
+            controlled_ab_run(policy="gpu-priority", position="candidate"),
+            thermal_source_id="hwmon:other:Package id 0",
+        )
+    )
+    assert_ab_incomplete(
+        compare_policy_aggregates(baseline, candidate, min_runs=1),
+        "thermal source identity differs",
     )
 
-    verdict = compare_policy_aggregates(baseline, candidate, min_runs=2)
+    baseline, candidate = aggregate_pair(
+        candidate=controlled_ab_run(
+            policy="gpu-priority",
+            position="candidate",
+            thermal_start_c=80.0,
+            thermal_end_c=83.0,
+        )
+    )
+    assert_ab_incomplete(
+        compare_policy_aggregates(baseline, candidate, min_runs=1),
+        "aggregate thermal medians differ too much",
+    )
 
-    assert verdict.verdict == PolicyVerdict.INCONCLUSIVE
-    assert "baseline has 1 run" in verdict.reason
+    wrong_order = "off,gpu-priority-cpu-cap,off"
+    baseline, candidate = aggregate_pair(
+        before=replace(
+            controlled_ab_run(policy="off", position="baseline-before"),
+            ab_run_order=wrong_order,
+        ),
+        candidate=replace(
+            controlled_ab_run(policy="gpu-priority", position="candidate"),
+            ab_run_order=wrong_order,
+        ),
+        after=replace(
+            controlled_ab_run(policy="off", position="baseline-after"),
+            ab_run_order=wrong_order,
+        ),
+    )
+    assert_ab_incomplete(
+        compare_policy_aggregates(baseline, candidate, min_runs=1),
+        "paired-baseline run order does not match candidate policy",
+    )
+
+    baseline, candidate = aggregate_pair(
+        candidate=replace(
+            controlled_ab_run(policy="gpu-priority", position="candidate"),
+            scene_evidence="save:other-static-scene",
+        )
+    )
+    assert_ab_incomplete(
+        compare_policy_aggregates(baseline, candidate, min_runs=1),
+        "scene evidence differs",
+    )
 
 
-def test_compare_policy_aggregates_accepts_median_low_improvement():
+def test_compare_policy_aggregates_marks_pair_shape_gaps_incomplete():
+    baseline = aggregate_run_summaries(
+        [controlled_ab_run(policy="off", position="baseline-before")]
+    )
+    candidate = aggregate_run_summaries(
+        [controlled_ab_run(policy="gpu-priority", position="candidate")]
+    )
+    assert_ab_incomplete(
+        compare_policy_aggregates(baseline, candidate, min_runs=1),
+        "baseline sample count must be exactly twice candidate sample count",
+    )
+
+    baseline = aggregate_run_summaries(
+        [
+            controlled_ab_run(policy="off", position="baseline-before"),
+            controlled_ab_run(policy="off", position="baseline-after", base_s=-100.0),
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [controlled_ab_run(policy="gpu-priority", position="candidate")]
+    )
+    assert_ab_incomplete(
+        compare_policy_aggregates(baseline, candidate, min_runs=1),
+        "paired-baseline run intervals are not monotonic",
+    )
+
+    non_off_baseline = aggregate_run_summaries(
+        [controlled_ab_run(policy="gpu-priority", position="candidate")]
+    )
+    assert_ab_incomplete(
+        compare_policy_aggregates(non_off_baseline, candidate, min_runs=1),
+        "baseline policy must be off",
+    )
+
+
+def test_compare_policy_aggregates_never_returns_better_without_complete_ab_evidence():
     baseline = aggregate_run_summaries(
         [
             RunSummary(
@@ -1448,11 +1690,101 @@ def test_compare_policy_aggregates_accepts_median_low_improvement():
 
     verdict = compare_policy_aggregates(baseline, candidate, min_runs=2)
 
-    assert verdict.verdict == PolicyVerdict.BETTER
-    assert "median 1% low improved" in verdict.reason
+    assert verdict.verdict == PolicyVerdict.INCONCLUSIVE
+    assert verdict.reason.startswith("A/B evidence incomplete:")
+    assert "exploratory only; cannot support a BETTER claim" in verdict.reason
+    assert verdict.claim_scope is None
 
 
-def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
+def test_compare_policy_aggregates_better_includes_claim_scope_at_comparison_json_path():
+    baseline = aggregate_run_summaries(
+        [
+            controlled_ab_run(policy="off", position="baseline-before"),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-after",
+                thermal_start_c=61.5,
+                thermal_end_c=63.5,
+            ),
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="gpu-priority",
+                position="candidate",
+                avg_fps=42.0,
+                one_percent_low_fps=33.0,
+                thermal_start_c=62.0,
+                thermal_end_c=64.0,
+            )
+        ]
+    )
+
+    verdict = compare_policy_aggregates(baseline, candidate, min_runs=1)
+    payload = {"comparisons": [{"comparison": asdict(verdict)}]}
+    comparison = payload["comparisons"][0]["comparison"]
+
+    assert comparison["verdict"] == PolicyVerdict.BETTER
+    assert comparison["thermal_pair_start_delta_max_c"] == 1.0
+    assert comparison["thermal_pair_end_delta_max_c"] == 1.0
+    assert comparison["cooldown_run_gap_s_max"] == 0.3
+    assert comparison["cooldown_interval_reuse_count"] == 0
+    assert comparison["claim_scope"]["appid"] == "1091500"
+    assert comparison["claim_scope"]["candidate_policy"] == "gpu-priority"
+    assert comparison["claim_scope"]["pair_count"] == 1
+    assert (
+        comparison["claim_scope"]["evidence_boundary"]
+        == "scene/profile-specific controlled result; not a general performance claim"
+    )
+    assert (
+        "BETTER (scene/profile-specific controlled result; not a general performance claim)"
+        in comparison["human_summary"]
+    )
+    assert (
+        "guarded foreground-game artifacts are required for this captured profile only"
+        in comparison["human_summary"]
+    )
+
+
+def test_compare_policy_aggregates_non_better_has_null_claim_scope():
+    baseline = aggregate_run_summaries(
+        [
+            controlled_ab_run(policy="off", position="baseline-before"),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-after",
+                thermal_start_c=61.5,
+                thermal_end_c=63.5,
+            ),
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="gpu-priority",
+                position="candidate",
+                avg_fps=42.0,
+                one_percent_low_fps=30.1,
+                thermal_start_c=62.0,
+                thermal_end_c=64.0,
+            )
+        ]
+    )
+
+    verdict = compare_policy_aggregates(baseline, candidate, min_runs=1)
+    payload = {"comparisons": [{"comparison": asdict(verdict)}]}
+    comparison = payload["comparisons"][0]["comparison"]
+
+    assert comparison["verdict"] == PolicyVerdict.INCONCLUSIVE
+    assert comparison["claim_scope"] is None
+    assert comparison["human_summary"] is None
+    assert comparison["thermal_pair_start_delta_max_c"] == 1.0
+    assert comparison["thermal_pair_end_delta_max_c"] == 1.0
+    assert comparison["cooldown_run_gap_s_max"] == 0.3
+
+
+def test_compare_policy_aggregates_requires_repeated_controlled_runs():
     baseline = aggregate_run_summaries(
         [
             RunSummary(
@@ -1460,25 +1792,10 @@ def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
                 tdp_w=22,
                 policy="off",
                 capture_mode=CaptureMode.CONTROLLED,
-                fps_target=40.0,
-                avg_fps=42.0,
-                one_percent_low_fps=31.0,
-                p99_frametime_ms=35.0,
-                avg_package_w=22.0,
+                avg_fps=54.0,
+                one_percent_low_fps=40.0,
                 restored=True,
-            ),
-            RunSummary(
-                appid="1091500",
-                tdp_w=22,
-                policy="off",
-                capture_mode=CaptureMode.CONTROLLED,
-                fps_target=40.0,
-                avg_fps=41.5,
-                one_percent_low_fps=30.6,
-                p99_frametime_ms=35.4,
-                avg_package_w=21.8,
-                restored=True,
-            ),
+            )
         ]
     )
     candidate = aggregate_run_summaries(
@@ -1488,11 +1805,8 @@ def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
                 tdp_w=22,
                 policy="gpu-priority",
                 capture_mode=CaptureMode.CONTROLLED,
-                fps_target=40.0,
-                avg_fps=40.9,
-                one_percent_low_fps=30.4,
-                p99_frametime_ms=35.8,
-                avg_package_w=20.2,
+                avg_fps=57.0,
+                one_percent_low_fps=44.0,
                 restored=True,
             ),
             RunSummary(
@@ -1500,12 +1814,131 @@ def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
                 tdp_w=22,
                 policy="gpu-priority",
                 capture_mode=CaptureMode.CONTROLLED,
-                fps_target=40.0,
+                avg_fps=58.0,
+                one_percent_low_fps=45.0,
+                restored=True,
+            ),
+        ]
+    )
+
+    verdict = compare_policy_aggregates(baseline, candidate, min_runs=2)
+
+    assert verdict.verdict == PolicyVerdict.INCONCLUSIVE
+    assert "baseline has 1 run" in verdict.reason
+
+
+def test_compare_policy_aggregates_accepts_median_low_improvement():
+    baseline = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="off",
+                position="baseline-before",
+                avg_fps=54.0,
+                one_percent_low_fps=40.0,
+            ),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-after",
+                avg_fps=55.0,
+                one_percent_low_fps=40.5,
+            ),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-before",
+                pair_id="pair-2",
+                base_s=500.0,
+                avg_fps=54.2,
+                one_percent_low_fps=40.2,
+            ),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-after",
+                pair_id="pair-2",
+                base_s=500.0,
+                avg_fps=55.2,
+                one_percent_low_fps=40.7,
+            ),
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="gpu-priority",
+                position="candidate",
+                avg_fps=55.0,
+                one_percent_low_fps=43.0,
+            ),
+            controlled_ab_run(
+                policy="gpu-priority",
+                position="candidate",
+                pair_id="pair-2",
+                base_s=500.0,
+                avg_fps=56.0,
+                one_percent_low_fps=44.0,
+            ),
+        ]
+    )
+
+    verdict = compare_policy_aggregates(baseline, candidate, min_runs=2)
+
+    assert verdict.verdict == PolicyVerdict.BETTER
+    assert "median 1% low improved" in verdict.reason
+
+
+def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
+    baseline = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="off",
+                position="baseline-before",
+                avg_fps=42.0,
+                one_percent_low_fps=31.0,
+                avg_package_w=22.0,
+            ),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-after",
+                avg_fps=41.5,
+                one_percent_low_fps=30.6,
+                avg_package_w=21.8,
+            ),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-before",
+                pair_id="pair-2",
+                base_s=500.0,
+                avg_fps=42.1,
+                one_percent_low_fps=31.1,
+                avg_package_w=22.1,
+            ),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-after",
+                pair_id="pair-2",
+                base_s=500.0,
+                avg_fps=41.9,
+                one_percent_low_fps=30.8,
+                avg_package_w=21.9,
+            ),
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="gpu-priority",
+                position="candidate",
+                avg_fps=40.9,
+                one_percent_low_fps=30.4,
+                avg_package_w=20.2,
+            ),
+            controlled_ab_run(
+                policy="gpu-priority",
+                position="candidate",
+                pair_id="pair-2",
+                base_s=500.0,
                 avg_fps=40.6,
                 one_percent_low_fps=30.3,
-                p99_frametime_ms=35.7,
                 avg_package_w=20.0,
-                restored=True,
             ),
         ]
     )
@@ -1934,6 +2367,104 @@ def test_profile_cli_summarize_records_capture_timing(tmp_path):
     assert summary["poll_s"] == 2.0
 
 
+def test_summary_records_ab_evidence_fields(tmp_path):
+    mangohud = tmp_path / "mangohud.csv"
+    output = tmp_path / "profile"
+    write_csv(
+        mangohud,
+        ["Average FPS", "1% Min FPS", "Average Frame Time"],
+        [{"Average FPS": "42.0", "1% Min FPS": "31.0", "Average Frame Time": "23.8"}],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "summarize",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--policy",
+            "gpu-priority",
+            "--capture-mode",
+            "controlled",
+            "--mangohud-csv",
+            str(mangohud),
+            "--ab-order-strategy",
+            "paired-baseline",
+            "--ab-run-order",
+            "off,gpu-priority,off",
+            "--ab-order-valid",
+            "true",
+            "--ab-candidate-policy",
+            "gpu-priority",
+            "--ab-invocation-id",
+            "invocation-1",
+            "--ab-pair-id",
+            "pair-1",
+            "--ab-pair-position",
+            "candidate",
+            "--scene-evidence",
+            "save:dogtown-market-static",
+            "--power-source-state",
+            "ac",
+            "--power-source-start-state",
+            "ac",
+            "--power-source-pre-run-state",
+            "ac",
+            "--power-source-end-state",
+            "ac",
+            "--power-source-samples",
+            "ac,ac,ac",
+            "--power-source-stable",
+            "true",
+            "--thermal-start-c",
+            "61.0",
+            "--thermal-end-c",
+            "63.5",
+            "--thermal-unavailable",
+            "false",
+            "--thermal-source-kind",
+            "cpu-package",
+            "--thermal-source-id",
+            "hwmon:coretemp:Package id 0",
+            "--thermal-source-label",
+            "Package id 0",
+            "--run-started-at-s",
+            "12405.3",
+            "--run-ended-at-s",
+            "12465.3",
+            "--cooldown-rule",
+            "fixed-60s",
+            "--cooldown-enforced",
+            "true",
+            "--cooldown-started-at-s",
+            "12345.0",
+            "--cooldown-ended-at-s",
+            "12405.0",
+            "--cooldown-elapsed-s",
+            "60.0",
+            "--output",
+            str(output),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    summary = json.loads((output / "summary.json").read_text())
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert summary["ab_order_strategy"] == "paired-baseline"
+    assert summary["ab_pair_position"] == "candidate"
+    assert summary["power_source_samples"] == ["ac", "ac", "ac"]
+    assert summary["thermal_source_id"] == "hwmon:coretemp:Package id 0"
+    assert summary["cooldown_elapsed_s"] == 60.0
+    assert manifest["ab_invocation_id"] == "invocation-1"
+    assert manifest["run_started_at_s"] == 12405.3
+
+
 def test_profile_cli_compare_reads_two_summary_files(tmp_path):
     baseline = tmp_path / "off-summary.json"
     candidate = tmp_path / "gpu-summary.json"
@@ -1983,31 +2514,34 @@ def test_profile_cli_compare_reads_two_summary_files(tmp_path):
     )
 
     payload = json.loads(result.stdout)
-    assert payload["verdict"] == "better"
+    assert payload["verdict"] == "inconclusive"
     assert payload["candidate_policy"] == "gpu-priority"
+    assert payload["reason"].startswith("A/B evidence incomplete:")
+    assert "single-run compare is exploratory only" in payload["reason"]
 
 
 def test_profile_cli_aggregate_scans_profile_root_and_compares_repeated_runs(tmp_path):
     runs = [
-        ("001-off", "off", 54.0, 40.0),
-        ("002-gpu", "gpu-priority", 55.0, 43.0),
-        ("003-off", "off", 55.0, 40.5),
-        ("004-gpu", "gpu-priority", 56.0, 44.0),
+        ("001-off-before", "off", "baseline-before", "pair-1", 0.0, 54.0, 40.0),
+        ("002-gpu", "gpu-priority", "candidate", "pair-1", 0.0, 55.0, 43.0),
+        ("003-off-after", "off", "baseline-after", "pair-1", 0.0, 55.0, 40.5),
+        ("004-off-before", "off", "baseline-before", "pair-2", 500.0, 54.2, 40.2),
+        ("005-gpu", "gpu-priority", "candidate", "pair-2", 500.0, 56.0, 44.0),
+        ("006-off-after", "off", "baseline-after", "pair-2", 500.0, 55.2, 40.7),
     ]
-    for dirname, policy, avg_fps, low_fps in runs:
+    for dirname, policy, position, pair_id, base_s, avg_fps, low_fps in runs:
         run_dir = tmp_path / dirname
         run_dir.mkdir()
         (run_dir / "summary.json").write_text(
             json.dumps(
-                {
-                    "appid": "1091500",
-                    "tdp_w": 22,
-                    "policy": policy,
-                    "capture_mode": "controlled",
-                    "avg_fps": avg_fps,
-                    "one_percent_low_fps": low_fps,
-                    "restored": True,
-                }
+                controlled_ab_payload(
+                    policy=policy,
+                    position=position,
+                    pair_id=pair_id,
+                    base_s=base_s,
+                    avg_fps=avg_fps,
+                    one_percent_low_fps=low_fps,
+                )
             )
         )
 
@@ -2038,9 +2572,264 @@ def test_profile_cli_aggregate_scans_profile_root_and_compares_repeated_runs(tmp
     payload = json.loads(result.stdout)
     assert payload["min_runs"] == 2
     assert payload["comparisons"][0]["comparison"]["verdict"] == "better"
-    assert payload["comparisons"][0]["baseline"]["sample_count"] == 2
+    assert payload["comparisons"][0]["baseline"]["sample_count"] == 4
     assert payload["comparisons"][0]["candidate"]["sample_count"] == 2
     assert payload["comparisons"][0]["candidate"]["one_percent_low_fps_median"] == 43.5
+
+
+def test_aggregate_groups_split_profile_root_by_ab_candidate_policy(tmp_path):
+    runs = [
+        (
+            "001-gpu-off-before",
+            "off",
+            "baseline-before",
+            "gpu-priority",
+            "pair-gpu",
+            0.0,
+            54.0,
+            40.0,
+        ),
+        (
+            "002-gpu",
+            "gpu-priority",
+            "candidate",
+            "gpu-priority",
+            "pair-gpu",
+            0.0,
+            56.0,
+            43.0,
+        ),
+        (
+            "003-gpu-off-after",
+            "off",
+            "baseline-after",
+            "gpu-priority",
+            "pair-gpu",
+            0.0,
+            55.0,
+            40.5,
+        ),
+        (
+            "004-cap-off-before",
+            "off",
+            "baseline-before",
+            "gpu-priority-cpu-cap",
+            "pair-cap",
+            500.0,
+            50.0,
+            36.0,
+        ),
+        (
+            "005-cap",
+            "gpu-priority-cpu-cap",
+            "candidate",
+            "gpu-priority-cpu-cap",
+            "pair-cap",
+            500.0,
+            52.0,
+            39.0,
+        ),
+        (
+            "006-cap-off-after",
+            "off",
+            "baseline-after",
+            "gpu-priority-cpu-cap",
+            "pair-cap",
+            500.0,
+            51.0,
+            36.5,
+        ),
+    ]
+    for dirname, policy, position, candidate_policy, pair_id, base_s, avg_fps, low_fps in runs:
+        run_dir = tmp_path / dirname
+        run_dir.mkdir()
+        (run_dir / "summary.json").write_text(
+            json.dumps(
+                controlled_ab_payload(
+                    policy=policy,
+                    position=position,
+                    candidate_policy=candidate_policy,
+                    pair_id=pair_id,
+                    base_s=base_s,
+                    avg_fps=avg_fps,
+                    one_percent_low_fps=low_fps,
+                )
+            )
+        )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "aggregate",
+            "--root",
+            str(tmp_path),
+            "--baseline-policy",
+            "off",
+            "--candidate-policy",
+            "gpu-priority",
+            "--candidate-policy",
+            "gpu-priority-cpu-cap",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--min-runs",
+            "1",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    payload = json.loads(result.stdout)
+    comparisons = {
+        item["candidate"]["policy"]: item
+        for item in payload["comparisons"]
+    }
+    assert set(comparisons) == {"gpu-priority", "gpu-priority-cpu-cap"}
+    assert comparisons["gpu-priority"]["baseline"]["sample_count"] == 2
+    assert comparisons["gpu-priority-cpu-cap"]["baseline"]["sample_count"] == 2
+    assert comparisons["gpu-priority"]["baseline"]["ab_candidate_policy"] == "gpu-priority"
+    assert (
+        comparisons["gpu-priority-cpu-cap"]["baseline"]["ab_candidate_policy"]
+        == "gpu-priority-cpu-cap"
+    )
+    assert payload["incomplete_groups"] == []
+
+
+def test_aggregate_filters_v3_baselines_to_requested_candidate_policy(tmp_path):
+    runs = [
+        ("001-gpu-off-before", "off", "baseline-before", "gpu-priority", "pair-gpu"),
+        ("002-gpu", "gpu-priority", "candidate", "gpu-priority", "pair-gpu"),
+        ("003-gpu-off-after", "off", "baseline-after", "gpu-priority", "pair-gpu"),
+        (
+            "004-cap-off-before",
+            "off",
+            "baseline-before",
+            "gpu-priority-cpu-cap",
+            "pair-cap",
+        ),
+        (
+            "005-cap",
+            "gpu-priority-cpu-cap",
+            "candidate",
+            "gpu-priority-cpu-cap",
+            "pair-cap",
+        ),
+        (
+            "006-cap-off-after",
+            "off",
+            "baseline-after",
+            "gpu-priority-cpu-cap",
+            "pair-cap",
+        ),
+    ]
+    for dirname, policy, position, candidate_policy, pair_id in runs:
+        run_dir = tmp_path / dirname
+        run_dir.mkdir()
+        (run_dir / "summary.json").write_text(
+            json.dumps(
+                controlled_ab_payload(
+                    policy=policy,
+                    position=position,
+                    candidate_policy=candidate_policy,
+                    pair_id=pair_id,
+                    avg_fps=55.0,
+                    one_percent_low_fps=40.0,
+                )
+            )
+        )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "aggregate",
+            "--root",
+            str(tmp_path),
+            "--baseline-policy",
+            "off",
+            "--candidate-policy",
+            "gpu-priority",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--min-runs",
+            "1",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert [item["candidate"]["policy"] for item in payload["comparisons"]] == [
+        "gpu-priority"
+    ]
+    assert payload["comparisons"][0]["baseline"]["ab_candidate_policy"] == "gpu-priority"
+    assert payload["incomplete_groups"] == []
+
+
+def test_aggregate_reports_candidate_without_matching_baseline_as_incomplete_group(
+    tmp_path,
+):
+    run_dir = tmp_path / "candidate-only"
+    run_dir.mkdir()
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            controlled_ab_payload(
+                policy="gpu-priority",
+                position="candidate",
+                avg_fps=56.0,
+                one_percent_low_fps=43.0,
+            )
+        )
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "steamos_intel_handheld.game_power_profile",
+            "aggregate",
+            "--root",
+            str(tmp_path),
+            "--baseline-policy",
+            "off",
+            "--candidate-policy",
+            "gpu-priority",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "22",
+            "--min-runs",
+            "1",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["comparisons"] == []
+    assert payload["incomplete_groups"] == [
+        {
+            "baseline_policy": "off",
+            "candidate_policy": "gpu-priority",
+            "ab_candidate_policy": "gpu-priority",
+            "ab_run_order": "off,gpu-priority,off",
+            "missing_side": "baseline",
+            "verdict": "inconclusive",
+            "reason": (
+                "A/B evidence incomplete: missing matching baseline group; "
+                "exploratory only; cannot support a BETTER claim"
+            ),
+        }
+    ]
 
 
 def test_profile_cli_aggregate_includes_affinity_role_stability(tmp_path):
@@ -2142,33 +2931,91 @@ def test_profile_cli_aggregate_includes_affinity_role_stability(tmp_path):
 
 def test_profile_cli_aggregate_builds_guarded_affinity_experiment_plan(tmp_path):
     runs = [
-        ("001-off", "off", 54.0, 40.0, None),
-        ("002-gpu", "gpu-priority", 55.0, 43.0, (2.0, 90.0, 12.0)),
-        ("003-off", "off", 55.0, 40.5, None),
-        ("004-gpu", "gpu-priority", 56.0, 44.0, (2.4, 110.0, 14.0)),
+        (
+            "001-off-before",
+            "off",
+            "baseline-before",
+            "pair-1",
+            0.0,
+            54.0,
+            40.0,
+            None,
+        ),
+        (
+            "002-gpu",
+            "gpu-priority",
+            "candidate",
+            "pair-1",
+            0.0,
+            55.0,
+            43.0,
+            (2.0, 90.0, 12.0),
+        ),
+        (
+            "003-off-after",
+            "off",
+            "baseline-after",
+            "pair-1",
+            0.0,
+            55.0,
+            40.5,
+            None,
+        ),
+        (
+            "004-off-before",
+            "off",
+            "baseline-before",
+            "pair-2",
+            500.0,
+            54.2,
+            40.2,
+            None,
+        ),
+        (
+            "005-gpu",
+            "gpu-priority",
+            "candidate",
+            "pair-2",
+            500.0,
+            56.0,
+            44.0,
+            (2.4, 110.0, 14.0),
+        ),
+        (
+            "006-off-after",
+            "off",
+            "baseline-after",
+            "pair-2",
+            500.0,
+            55.2,
+            40.7,
+            None,
+        ),
     ]
-    for dirname, policy, avg_fps, low_fps, role_values in runs:
+    for dirname, policy, position, pair_id, base_s, avg_fps, low_fps, role_values in runs:
         run_dir = tmp_path / dirname
         run_dir.mkdir()
+        payload = controlled_ab_payload(
+            policy=policy,
+            position=position,
+            pair_id=pair_id,
+            base_s=base_s,
+            avg_fps=avg_fps,
+            one_percent_low_fps=low_fps,
+        )
+        payload.update(
+            {
+                "restore_affinity_thread_count": 3,
+                "restore_affinity_cgroup_count": 1,
+                "restore_affinity_files": [
+                    "cpu.uclamp.max",
+                    "cpu.uclamp.min",
+                    "cpuset.cpus.effective",
+                ],
+            }
+        )
         (run_dir / "summary.json").write_text(
-            json.dumps(
-                {
-                    "appid": "1091500",
-                    "tdp_w": 22,
-                    "policy": policy,
-                    "capture_mode": "controlled",
-                    "avg_fps": avg_fps,
-                    "one_percent_low_fps": low_fps,
-                    "restore_affinity_thread_count": 3,
-                    "restore_affinity_cgroup_count": 1,
-                    "restore_affinity_files": [
-                        "cpu.uclamp.max",
-                        "cpu.uclamp.min",
-                        "cpuset.cpus.effective",
-                    ],
-                    "restored": True,
-                }
-            )
+            json.dumps(payload)
         )
         if role_values is None:
             continue
@@ -2254,62 +3101,111 @@ def test_profile_cli_aggregate_builds_guarded_affinity_experiment_plan(tmp_path)
 
 def test_profile_cli_aggregate_builds_background_shaping_experiment_plan(tmp_path):
     runs = [
-        ("001-off", "off", 54.0, 40.0, None),
-        ("002-gpu", "gpu-priority", 55.0, 43.0, 2.0),
-        ("003-off", "off", 55.0, 40.5, None),
-        ("004-gpu", "gpu-priority", 56.0, 44.0, 2.4),
+        (
+            "001-off-before",
+            "off",
+            "baseline-before",
+            "pair-1",
+            0.0,
+            54.0,
+            40.0,
+            None,
+        ),
+        ("002-gpu", "gpu-priority", "candidate", "pair-1", 0.0, 55.0, 43.0, 2.0),
+        (
+            "003-off-after",
+            "off",
+            "baseline-after",
+            "pair-1",
+            0.0,
+            55.0,
+            40.5,
+            None,
+        ),
+        (
+            "004-off-before",
+            "off",
+            "baseline-before",
+            "pair-2",
+            500.0,
+            54.2,
+            40.2,
+            None,
+        ),
+        (
+            "005-gpu",
+            "gpu-priority",
+            "candidate",
+            "pair-2",
+            500.0,
+            56.0,
+            44.0,
+            2.4,
+        ),
+        (
+            "006-off-after",
+            "off",
+            "baseline-after",
+            "pair-2",
+            500.0,
+            55.2,
+            40.7,
+            None,
+        ),
     ]
-    for dirname, policy, avg_fps, low_fps, helper_cpu_s in runs:
+    for dirname, policy, position, pair_id, base_s, avg_fps, low_fps, helper_cpu_s in runs:
         run_dir = tmp_path / dirname
         run_dir.mkdir()
-        (run_dir / "summary.json").write_text(
-            json.dumps(
-                {
-                    "appid": "1091500",
-                    "tdp_w": 22,
-                    "policy": policy,
-                    "capture_mode": "controlled",
-                    "avg_fps": avg_fps,
-                    "one_percent_low_fps": low_fps,
-                    "restore_affinity_thread_count": 3,
-                    "restore_affinity_cgroup_count": 2,
-                    "restore_affinity_files": [
+        payload = controlled_ab_payload(
+            policy=policy,
+            position=position,
+            pair_id=pair_id,
+            base_s=base_s,
+            avg_fps=avg_fps,
+            one_percent_low_fps=low_fps,
+        )
+        payload.update(
+            {
+                "restore_affinity_thread_count": 3,
+                "restore_affinity_cgroup_count": 2,
+                "restore_affinity_files": [
+                    "cpu.uclamp.max",
+                    "cpu.uclamp.min",
+                    "cpu.weight",
+                    "cpuset.cpus.effective",
+                ],
+                "restore_affinity_cgroups": [
+                    "0::/user.slice/app-steam-app1091500.scope",
+                    "0::/user.slice/app-steam-client.scope",
+                ],
+                "restore_affinity_cgroup_files": {
+                    "0::/user.slice/app-steam-app1091500.scope": [
                         "cpu.uclamp.max",
                         "cpu.uclamp.min",
                         "cpu.weight",
                         "cpuset.cpus.effective",
                     ],
-                    "restore_affinity_cgroups": [
-                        "0::/user.slice/app-steam-app1091500.scope",
-                        "0::/user.slice/app-steam-client.scope",
+                    "0::/user.slice/app-steam-client.scope": [
+                        "cpu.uclamp.max",
+                        "cpu.weight",
                     ],
-                    "restore_affinity_cgroup_files": {
-                        "0::/user.slice/app-steam-app1091500.scope": [
-                            "cpu.uclamp.max",
-                            "cpu.uclamp.min",
-                            "cpu.weight",
-                            "cpuset.cpus.effective",
-                        ],
-                        "0::/user.slice/app-steam-client.scope": [
-                            "cpu.uclamp.max",
-                            "cpu.weight",
-                        ],
+                },
+                "restore_affinity_cgroup_file_values": {
+                    "0::/user.slice/app-steam-app1091500.scope": {
+                        "cpu.uclamp.max": "max",
+                        "cpu.uclamp.min": "0.00",
+                        "cpu.weight": "100",
+                        "cpuset.cpus.effective": "0-7",
                     },
-                    "restore_affinity_cgroup_file_values": {
-                        "0::/user.slice/app-steam-app1091500.scope": {
-                            "cpu.uclamp.max": "max",
-                            "cpu.uclamp.min": "0.00",
-                            "cpu.weight": "100",
-                            "cpuset.cpus.effective": "0-7",
-                        },
-                        "0::/user.slice/app-steam-client.scope": {
-                            "cpu.uclamp.max": "max",
-                            "cpu.weight": "100",
-                        },
+                    "0::/user.slice/app-steam-client.scope": {
+                        "cpu.uclamp.max": "max",
+                        "cpu.weight": "100",
                     },
-                    "restored": True,
-                }
-            )
+                },
+            }
+        )
+        (run_dir / "summary.json").write_text(
+            json.dumps(payload)
         )
         if helper_cpu_s is None:
             continue
