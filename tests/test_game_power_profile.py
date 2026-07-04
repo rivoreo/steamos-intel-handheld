@@ -3702,8 +3702,12 @@ def test_parse_game_power_jsonl_counts_runtime_classification_and_target_metadat
             "fps_target": 40.0,
             "fps_target_source": "manual",
             "fps_target_confidence": "high",
+            "frame_avg_fps": 56.0,
+            "frame_p95_ms": 22.0,
+            "frame_performance_sample_count": 20,
+            "frame_performance_confidence": "high",
             "classification": {
-                "primary": "gpu-package-bound-cpu-contention",
+                "primary": "fps-target-satisfied",
                 "advisories": ["foreground-cpu-pressure"],
                 "confidence": "high",
                 "evidence": {},
@@ -3728,7 +3732,7 @@ def test_parse_game_power_jsonl_counts_runtime_classification_and_target_metadat
     summary = parse_game_power_jsonl(path)
 
     assert summary.classification_primary == {
-        "gpu-package-bound-cpu-contention": 1,
+        "fps-target-satisfied": 1,
         "unknown": 2,
     }
     assert summary.classification_advisories == {"foreground-cpu-pressure": 1}
@@ -3741,6 +3745,8 @@ def test_parse_game_power_jsonl_counts_runtime_classification_and_target_metadat
         foreground_pressure_signals=1,
         supported_foreground_pressure_signals=1,
         unsupported_foreground_pressure_signals=0,
+        frame_performance_rows=1,
+        fps_target_satisfied_rows=1,
     )
     assert summary.classification_unknown_ratio == 0.5
     assert summary.pressure_supported_ratio == 1.0
@@ -3882,6 +3888,95 @@ def test_validate_runtime_telemetry_requires_classification_pressure_and_target(
     assert verdict["classification_samples"] == 1
     assert verdict["pressure_samples"] == 1
     assert verdict["cpu_cap_action_reached"] is True
+
+
+def test_validate_runtime_telemetry_can_require_frame_performance_and_target_satisfied(
+    tmp_path,
+):
+    path = tmp_path / "game-power.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "action": "observe-only",
+                "fps_target": 40.0,
+                "frame_avg_fps": 56.0,
+                "frame_p95_ms": 22.0,
+                "frame_performance_sample_count": 20,
+                "frame_performance_confidence": "high",
+                "classification": {"primary": "fps-target-satisfied", "advisories": []},
+            }
+        )
+        + "\n"
+    )
+
+    verdict = validate_runtime_telemetry(
+        game_power_jsonl=path,
+        require_frame_performance=True,
+        require_fps_target_satisfied=True,
+    )
+
+    assert verdict["status"] == "pass"
+    assert verdict["frame_performance_samples"] == 1
+    assert verdict["fps_target_satisfied_samples"] == 1
+
+
+def test_validate_runtime_telemetry_fails_when_v5_contract_is_missing(tmp_path):
+    path = tmp_path / "game-power.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "action": "gpu-priority-epp",
+                "fps_target": 40.0,
+                "classification": {"primary": "gpu-package-bound", "advisories": []},
+            }
+        )
+        + "\n"
+    )
+
+    try:
+        validate_runtime_telemetry(
+            game_power_jsonl=path,
+            require_frame_performance=True,
+            require_fps_target_satisfied=True,
+        )
+    except ValueError as exc:
+        assert "frame-performance telemetry rows are missing" in str(exc)
+        assert "fps-target-satisfied classification was not reached" in str(exc)
+    else:
+        raise AssertionError("expected V5 runtime contract to fail")
+
+
+def test_validate_runtime_telemetry_requires_high_confidence_frame_performance(
+    tmp_path,
+):
+    path = tmp_path / "game-power.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "action": "observe-only",
+                "fps_target": 40.0,
+                "frame_avg_fps": 56.0,
+                "frame_p95_ms": 22.0,
+                "frame_performance_sample_count": 2,
+                "frame_performance_confidence": "low",
+                "classification": {"primary": "fps-target-satisfied", "advisories": []},
+            }
+        )
+        + "\n"
+    )
+
+    try:
+        validate_runtime_telemetry(
+            game_power_jsonl=path,
+            require_frame_performance=True,
+        )
+    except ValueError as exc:
+        assert "frame-performance telemetry rows are missing" in str(exc)
+    else:
+        raise AssertionError("expected low-confidence frame telemetry to fail")
 
 
 def test_replay_action_equivalence_outputs_zero_delta_artifact(tmp_path):

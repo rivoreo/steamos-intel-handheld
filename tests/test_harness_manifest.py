@@ -611,6 +611,10 @@ def test_guarded_verifier_scripts_emit_machine_readable_artifact_markers():
     assert "profile artifact mangohud.csv:" in profile_game_power
     assert "profile artifact game-power.jsonl:" in profile_game_power
     assert "profile artifact restore snapshot:" in profile_game_power
+    assert "wait_for_live_mangohud_csv" in profile_game_power
+    assert "--frame-performance-csv" in profile_game_power
+    assert "--require-frame-performance" in profile_game_power
+    assert "--require-fps-target-satisfied" in profile_game_power
     assert "mangoapp artifact path:" in qemu_build
     assert "rootfs build log: meson compile mangoapp completed" in qemu_build
 

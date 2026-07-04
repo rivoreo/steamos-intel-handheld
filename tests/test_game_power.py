@@ -7,6 +7,7 @@ from steamos_intel_handheld.game_power import (
     CpuPolicyClass,
     CpuPolicySnapshot,
     EnergyReading,
+    FramePerformanceTelemetry,
     FrameTargetTelemetry,
     GamePowerAction,
     GamePowerClassification,
@@ -209,6 +210,8 @@ def make_sample(
     uncore_w: float = 7.4,
     pl1_w: int = 22,
     render_busy: float | None = 0.75,
+    frame_target: FrameTargetTelemetry | None = None,
+    frame_performance: FramePerformanceTelemetry | None = None,
 ):
     return GamePowerSample(
         appid=appid,
@@ -222,6 +225,28 @@ def make_sample(
         ),
         pl1_w=pl1_w,
         fdinfo_busy={"render": render_busy} if render_busy is not None else {},
+        frame_target=frame_target,
+        frame_performance=frame_performance,
+    )
+
+
+def frame_target_40():
+    return FrameTargetTelemetry(fps_target=40.0, source="manual", confidence="high")
+
+
+def frame_performance(
+    *,
+    avg_fps: float,
+    p95_frame_ms: float,
+    sample_count: int = 20,
+):
+    return FramePerformanceTelemetry(
+        avg_fps=avg_fps,
+        p95_frame_ms=p95_frame_ms,
+        sample_count=sample_count,
+        window_s=2.0,
+        source="mangohud-csv",
+        confidence="high",
     )
 
 
@@ -233,6 +258,101 @@ def test_controller_waits_for_hysteresis_before_applying_gpu_priority():
 
     assert first.action == GamePowerAction.OBSERVE_ONLY
     assert second.action == GamePowerAction.GPU_PRIORITY_EPP
+
+
+def test_controller_suppresses_gpu_priority_when_fps_target_is_satisfied():
+    config = GamePowerConfig(
+        mode=GamePowerMode.GPU_PRIORITY,
+        activate_samples=1,
+        rolling_window_samples=1,
+    )
+    controller = GamePowerController(config)
+
+    decision = controller.evaluate(
+        make_sample(
+            frame_target=frame_target_40(),
+            frame_performance=frame_performance(avg_fps=56.0, p95_frame_ms=22.0),
+        )
+    )
+
+    assert decision.action == GamePowerAction.OBSERVE_ONLY
+    assert decision.reason == "fps target satisfied"
+    assert decision.classification is not None
+    assert decision.classification.primary == "fps-target-satisfied"
+    assert decision.classification.evidence["fps_target_ratio"] == 1.4
+    assert controller.last_positive is False
+
+
+def test_controller_keeps_gpu_priority_when_fps_target_is_not_satisfied():
+    config = GamePowerConfig(
+        mode=GamePowerMode.GPU_PRIORITY,
+        activate_samples=1,
+        rolling_window_samples=1,
+    )
+    controller = GamePowerController(config)
+
+    decision = controller.evaluate(
+        make_sample(
+            package_w=12.0,
+            core_w=4.3,
+            uncore_w=3.8,
+            pl1_w=12,
+            frame_target=frame_target_40(),
+            frame_performance=frame_performance(avg_fps=34.0, p95_frame_ms=35.0),
+        )
+    )
+
+    assert decision.action == GamePowerAction.GPU_PRIORITY_EPP
+    assert decision.classification is not None
+    assert decision.classification.primary == "gpu-package-bound"
+
+
+def test_controller_preserves_gpu_priority_without_frame_performance_telemetry():
+    config = GamePowerConfig(
+        mode=GamePowerMode.GPU_PRIORITY,
+        activate_samples=1,
+        rolling_window_samples=1,
+    )
+    controller = GamePowerController(config)
+
+    decision = controller.evaluate(make_sample(frame_target=frame_target_40()))
+
+    assert decision.action == GamePowerAction.GPU_PRIORITY_EPP
+    assert decision.reason == "package limited with GPU activity"
+
+
+def test_active_controller_restores_after_target_satisfied_hysteresis():
+    config = GamePowerConfig(
+        mode=GamePowerMode.GPU_PRIORITY,
+        activate_samples=1,
+        restore_samples=2,
+        rolling_window_samples=1,
+    )
+    controller = GamePowerController(config)
+
+    active = controller.evaluate(
+        make_sample(
+            frame_target=frame_target_40(),
+            frame_performance=frame_performance(avg_fps=34.0, p95_frame_ms=35.0),
+        )
+    )
+    first_satisfied = controller.evaluate(
+        make_sample(
+            frame_target=frame_target_40(),
+            frame_performance=frame_performance(avg_fps=56.0, p95_frame_ms=22.0),
+        )
+    )
+    restored = controller.evaluate(
+        make_sample(
+            frame_target=frame_target_40(),
+            frame_performance=frame_performance(avg_fps=57.0, p95_frame_ms=21.0),
+        )
+    )
+
+    assert active.action == GamePowerAction.GPU_PRIORITY_EPP
+    assert first_satisfied.action == GamePowerAction.OBSERVE_ONLY
+    assert restored.action == GamePowerAction.RESTORE
+    assert restored.reason == "restore hysteresis reached"
 
 
 def test_controller_rolling_majority_blocks_activation_after_two_recent_positives():
@@ -893,6 +1013,39 @@ def test_format_decision_jsonl_emits_classification_pressure_and_target_schema()
     assert row["pressure"]["io"] == []
 
 
+def test_format_decision_jsonl_emits_frame_performance_schema():
+    sample = make_sample(
+        frame_target=frame_target_40(),
+        frame_performance=frame_performance(avg_fps=56.0, p95_frame_ms=22.0),
+    )
+
+    row = json.loads(
+        game_power.format_decision_jsonl(
+            sample,
+            game_power.GamePowerDecision(
+                GamePowerAction.OBSERVE_ONLY,
+                "fps target satisfied",
+                classification=GamePowerClassification(
+                    primary="fps-target-satisfied",
+                    confidence="high",
+                    evidence={
+                        "frame_avg_fps": 56.0,
+                        "frame_p95_ms": 22.0,
+                    },
+                ),
+            ),
+            elapsed_s=2.0,
+        )
+    )
+
+    assert row["frame_avg_fps"] == 56.0
+    assert row["frame_p95_ms"] == 22.0
+    assert row["frame_performance_sample_count"] == 20
+    assert row["frame_performance_window_s"] == 2.0
+    assert row["frame_performance_source"] == "mangohud-csv"
+    assert row["frame_performance_confidence"] == "high"
+
+
 def test_low_core_share_still_allows_low_risk_epp_gpu_priority():
     config = GamePowerConfig(
         mode=GamePowerMode.GPU_PRIORITY,
@@ -970,11 +1123,86 @@ def test_fps_target_rejects_non_positive_nan_and_infinite_values():
     else:
         raise AssertionError("expected source without target to fail")
 
+    try:
+        game_power.config_from_args(
+            parser.parse_args(
+                [
+                    "--frame-performance-window-samples",
+                    "2",
+                    "--frame-performance-min-samples",
+                    "3",
+                ]
+            )
+        )
+    except ValueError as exc:
+        assert "--frame-performance-min-samples cannot exceed" in str(exc)
+    else:
+        raise AssertionError("expected min samples greater than window to fail")
+
 
 def test_build_parser_accepts_jsonl_output_format():
     args = game_power.build_parser().parse_args(["--output-format", "jsonl"])
 
     assert args.output_format == "jsonl"
+
+
+def test_mangohud_csv_frame_performance_reader_uses_last_valid_window(tmp_path):
+    csv_path = tmp_path / "mangohud.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "os,cpu,gpu",
+                "SteamOS,Intel,",
+                "fps,frametime,elapsed",
+                "10.0,100.0,1",
+                "bad,row,ignored",
+                "40.0,25.0,2",
+                "50.0,20.0,3",
+                "60.0,16.0,4",
+            ]
+        )
+        + "\n"
+    )
+    reader = game_power.MangoHudCsvFramePerformanceReader(
+        csv_path,
+        window_samples=3,
+        min_samples=3,
+    )
+
+    telemetry = reader.read()
+
+    assert telemetry is not None
+    assert telemetry.avg_fps == 50.0
+    assert telemetry.p95_frame_ms == 25.0
+    assert telemetry.sample_count == 3
+    assert telemetry.source == "mangohud-csv"
+    assert telemetry.confidence == "high"
+
+
+def test_mangohud_csv_frame_performance_reader_reports_low_confidence_until_ready(tmp_path):
+    csv_path = tmp_path / "mangohud.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "os,cpu,gpu",
+                "SteamOS,Intel,",
+                "fps,frametime,elapsed",
+                "40.0,25.0,2",
+            ]
+        )
+        + "\n"
+    )
+    reader = game_power.MangoHudCsvFramePerformanceReader(
+        csv_path,
+        window_samples=3,
+        min_samples=3,
+    )
+
+    telemetry = reader.read()
+
+    assert telemetry is not None
+    assert telemetry.sample_count == 1
+    assert telemetry.confidence == "low"
 
 
 def test_governor_applies_epp_and_restores_when_controller_requests_restore():

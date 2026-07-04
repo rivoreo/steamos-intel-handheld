@@ -24,6 +24,10 @@ cpu_cap_variants="${PROFILE_GAME_POWER_CPU_CAP_VARIANTS:-}"
 ab_order_strategy="${PROFILE_GAME_POWER_AB_ORDER_STRATEGY:-paired-baseline}"
 scene_evidence="${PROFILE_GAME_POWER_SCENE_EVIDENCE:-}"
 cooldown_rule="${PROFILE_GAME_POWER_COOLDOWN_RULE:-fixed-60s}"
+frame_performance_window_samples="${PROFILE_GAME_POWER_FRAME_PERFORMANCE_WINDOW_SAMPLES:-20}"
+frame_performance_min_samples="${PROFILE_GAME_POWER_FRAME_PERFORMANCE_MIN_SAMPLES:-12}"
+frame_performance_live_timeout_s="${PROFILE_GAME_POWER_FRAME_PERFORMANCE_LIVE_TIMEOUT_S:-15}"
+target_satisfied_tdps="${PROFILE_GAME_POWER_TARGET_SATISFIED_TDPS:-22}"
 local_root="${PROFILE_GAME_POWER_OUTPUT_ROOT:-.cache/game-power/profiles}"
 mkdir -p "$local_root"
 
@@ -40,6 +44,10 @@ CPU_CAP_VARIANTS='$cpu_cap_variants' \
 AB_ORDER_STRATEGY='$ab_order_strategy' \
 SCENE_EVIDENCE='$scene_evidence' \
 COOLDOWN_RULE='$cooldown_rule' \
+FRAME_PERFORMANCE_WINDOW_SAMPLES='$frame_performance_window_samples' \
+FRAME_PERFORMANCE_MIN_SAMPLES='$frame_performance_min_samples' \
+FRAME_PERFORMANCE_LIVE_TIMEOUT_S='$frame_performance_live_timeout_s' \
+TARGET_SATISFIED_TDPS='$target_satisfied_tdps' \
 FAILURE_MARKER='$failure_marker' \
 REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
 set -euo pipefail
@@ -480,12 +488,84 @@ latest_mangohud_csv() {
     2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-
 }
 
+count_valid_mangohud_frame_rows() {
+  local csv="$1"
+  python3 - "$csv" <<'PY'
+import csv
+import math
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+count = 0
+try:
+    with path.open(newline="") as handle:
+        reader = csv.reader(handle)
+        header = None
+        fps_index = None
+        frametime_index = None
+        for row in reader:
+            if not row:
+                continue
+            normalized = [item.strip().lower() for item in row]
+            if header is None:
+                if "fps" not in normalized or "frametime" not in normalized:
+                    continue
+                header = normalized
+                fps_index = header.index("fps")
+                frametime_index = header.index("frametime")
+                continue
+            try:
+                fps = float(row[fps_index])
+                frametime = float(row[frametime_index])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if math.isfinite(fps) and fps > 0 and math.isfinite(frametime) and frametime > 0:
+                count += 1
+except OSError:
+    pass
+print(count)
+PY
+}
+
+latest_live_mangohud_csv() {
+  local run_dir="$1"
+  find "$MANGOHUD_OUTPUT_DIR" -maxdepth 1 -name 'mangoapp_*.csv' \
+    ! -name '*_summary.csv' -newer "$run_dir/mangohud.start" \
+    -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-
+}
+
+wait_for_live_mangohud_csv() {
+  local run_dir="$1"
+  local min_rows="$2"
+  local timeout_s="$3"
+  local deadline csv rows
+  deadline=$((SECONDS + timeout_s))
+  while [ "$SECONDS" -le "$deadline" ]; do
+    csv="$(latest_live_mangohud_csv "$run_dir")"
+    if [ -n "$csv" ] && [ -f "$csv" ]; then
+      rows="$(count_valid_mangohud_frame_rows "$csv")"
+      if [ "$rows" -ge "$min_rows" ]; then
+        printf '%s\n' "$csv"
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  {
+    echo "reason=live-mangohud-csv-timeout"
+    echo "min_rows=$min_rows"
+    echo "timeout_s=$timeout_s"
+  } >"$run_dir/frame-performance.fallback"
+  return 1
+}
+
 start_mangohud_capture() {
   local run_dir="$1"
   if [ "$CAPTURE_MODE" = "controlled" ]; then
-    touch "$run_dir/mangohud.start"
     run_as_deck sh -c 'cd /home/deck && mangohudctl set log_session false' \
       >/dev/null 2>&1 || true
+    touch "$run_dir/mangohud.start"
     run_as_deck sh -c 'cd /home/deck && mangohudctl set log_session true'
   fi
 }
@@ -541,6 +621,27 @@ collect_mangohud_csv() {
   else
     collect_imported_mangohud_csv "$run_dir"
   fi
+}
+
+list_contains_word() {
+  local needle="$1"
+  shift
+  local item
+  for item in "$@"; do
+    if [ "$item" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+should_require_fps_target_satisfied() {
+  local tdp="$1"
+  local policy="$2"
+  [ -n "$FPS_TARGET" ] || return 1
+  [ "$policy" = "gpu-priority" ] || return 1
+  # shellcheck disable=SC2086
+  list_contains_word "$tdp" $TARGET_SATISFIED_TDPS
 }
 
 sample_cgroup_pressure() {
@@ -1299,12 +1400,34 @@ for repeat in $(seq 1 "$REPEATS"); do
           fi
         fi
         start_mangohud_capture "$run_dir"
+        live_frame_performance_csv=""
+        if [ "$CAPTURE_MODE" = "controlled" ]; then
+          if live_frame_performance_csv="$(
+            wait_for_live_mangohud_csv \
+              "$run_dir" \
+              "$FRAME_PERFORMANCE_MIN_SAMPLES" \
+              "$FRAME_PERFORMANCE_LIVE_TIMEOUT_S"
+          )"; then
+            printf '%s\n' "$live_frame_performance_csv" \
+              >"$run_dir/frame-performance-source.txt"
+          else
+            live_frame_performance_csv=""
+          fi
+        fi
         fps_target_runtime_args=()
         if [ -n "$FPS_TARGET" ]; then
           fps_target_runtime_args=(
             --fps-target "$FPS_TARGET"
             --fps-target-source "$FPS_TARGET_SOURCE"
             --fps-target-confidence "$FPS_TARGET_CONFIDENCE"
+          )
+        fi
+        frame_performance_runtime_args=()
+        if [ -n "$live_frame_performance_csv" ]; then
+          frame_performance_runtime_args=(
+            --frame-performance-csv "$live_frame_performance_csv"
+            --frame-performance-window-samples "$FRAME_PERFORMANCE_WINDOW_SAMPLES"
+            --frame-performance-min-samples "$FRAME_PERFORMANCE_MIN_SAMPLES"
           )
         fi
         sample_cgroup_pressure "$run_dir/cgroup-pressure.jsonl" "$DURATION_S" &
@@ -1323,6 +1446,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           --target-appid "$APPID" \
           --output-format jsonl \
           "${fps_target_runtime_args[@]}" \
+          "${frame_performance_runtime_args[@]}" \
           "${policy_args[@]}" >"$run_dir/game-power.jsonl"; then
           stop_mangohud_capture || true
           wait "$pressure_pid" || true
@@ -1463,6 +1587,12 @@ PY
         fi
         if [ "$policy" = "gpu-priority-cpu-cap" ]; then
           runtime_contract_args+=(--require-cpu-cap-action)
+        fi
+        if [ -n "${live_frame_performance_csv:-}" ]; then
+          runtime_contract_args+=(--require-frame-performance)
+        fi
+        if should_require_fps_target_satisfied "$tdp" "$policy"; then
+          runtime_contract_args+=(--require-fps-target-satisfied)
         fi
         /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile \
           validate-runtime-telemetry \

@@ -91,6 +91,8 @@ class RuntimeTelemetryCounts:
     foreground_pressure_signals: int = 0
     supported_foreground_pressure_signals: int = 0
     unsupported_foreground_pressure_signals: int = 0
+    frame_performance_rows: int = 0
+    fps_target_satisfied_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -545,6 +547,12 @@ def parse_game_power_jsonl(path: str | Path) -> GamePowerLogSummary:
                     RuntimeTelemetryCounts(
                         foreground_runtime_rows=1,
                         unknown_foreground_rows=1 if primary == "unknown" else 0,
+                        frame_performance_rows=(
+                            1 if _row_has_frame_performance(row) else 0
+                        ),
+                        fps_target_satisfied_rows=(
+                            1 if primary == "fps-target-satisfied" else 0
+                        ),
                     ),
                 )
                 runtime_counts = _add_runtime_counts(
@@ -2279,6 +2287,8 @@ def build_parser() -> argparse.ArgumentParser:
     validate_runtime.add_argument("--require-classification", action="store_true")
     validate_runtime.add_argument("--require-pressure", action="store_true")
     validate_runtime.add_argument("--require-cpu-cap-action", action="store_true")
+    validate_runtime.add_argument("--require-frame-performance", action="store_true")
+    validate_runtime.add_argument("--require-fps-target-satisfied", action="store_true")
     validate_runtime.add_argument("--expect-fps-target", type=float)
     validate_runtime.add_argument("--expect-fps-target-source")
     validate_runtime.add_argument("--expect-fps-target-confidence")
@@ -2974,6 +2984,8 @@ def validate_runtime_telemetry(
     require_classification: bool = False,
     require_pressure: bool = False,
     require_cpu_cap_action: bool = False,
+    require_frame_performance: bool = False,
+    require_fps_target_satisfied: bool = False,
     expect_fps_target: float | None = None,
     expect_fps_target_source: str | None = None,
     expect_fps_target_confidence: str | None = None,
@@ -2984,6 +2996,8 @@ def validate_runtime_telemetry(
     classification_samples = 0
     pressure_samples = 0
     cpu_cap_action_reached = False
+    frame_performance_samples = 0
+    fps_target_satisfied_samples = 0
     target_rows = 0
     target_mismatches: list[str] = []
 
@@ -2998,6 +3012,10 @@ def validate_runtime_telemetry(
             pressure_samples += 1
         if row.get("action") == "gpu-priority-cpu-cap":
             cpu_cap_action_reached = True
+        if _row_has_frame_performance(row):
+            frame_performance_samples += 1
+        if primary == "fps-target-satisfied" and not malformed:
+            fps_target_satisfied_samples += 1
         if _finite_positive_float(row.get("fps_target")) is not None:
             target_rows += 1
             _check_target_expectation(
@@ -3017,6 +3035,10 @@ def validate_runtime_telemetry(
         failures.append("foreground pressure samples are missing")
     if require_cpu_cap_action and not cpu_cap_action_reached:
         failures.append("gpu-priority-cpu-cap action was not reached")
+    if require_frame_performance and frame_performance_samples == 0:
+        failures.append("frame-performance telemetry rows are missing")
+    if require_fps_target_satisfied and fps_target_satisfied_samples == 0:
+        failures.append("fps-target-satisfied classification was not reached")
     if (
         expect_fps_target is not None
         or expect_fps_target_source is not None
@@ -3053,6 +3075,8 @@ def validate_runtime_telemetry(
         "pressure_samples": pressure_samples,
         "target_metadata_samples": target_rows,
         "cpu_cap_action_reached": cpu_cap_action_reached,
+        "frame_performance_samples": frame_performance_samples,
+        "fps_target_satisfied_samples": fps_target_satisfied_samples,
         "runtime_telemetry_counts": asdict(summary.runtime_telemetry_counts)
         if summary.runtime_telemetry_counts
         else None,
@@ -3977,6 +4001,9 @@ def _runtime_telemetry_counts(value: object) -> RuntimeTelemetryCounts:
             value.get("unsupported_foreground_pressure_signals")
         )
         or 0,
+        frame_performance_rows=_optional_int(value.get("frame_performance_rows")) or 0,
+        fps_target_satisfied_rows=_optional_int(value.get("fps_target_satisfied_rows"))
+        or 0,
     )
 
 
@@ -4001,6 +4028,12 @@ def _add_runtime_counts(
         unsupported_foreground_pressure_signals=(
             left.unsupported_foreground_pressure_signals
             + right.unsupported_foreground_pressure_signals
+        ),
+        frame_performance_rows=(
+            left.frame_performance_rows + right.frame_performance_rows
+        ),
+        fps_target_satisfied_rows=(
+            left.fps_target_satisfied_rows + right.fps_target_satisfied_rows
         ),
     )
 
@@ -4037,6 +4070,15 @@ def _parse_runtime_classification(
     elif raw_advisories is not None:
         return ("unknown", [], True)
     return (primary, sorted(advisories), False)
+
+
+def _row_has_frame_performance(row: dict[str, object]) -> bool:
+    return (
+        _finite_positive_float(row.get("frame_avg_fps")) is not None
+        and _finite_positive_float(row.get("frame_p95_ms")) is not None
+        and _optional_int(row.get("frame_performance_sample_count")) is not None
+        and _optional_str(row.get("frame_performance_confidence")) == "high"
+    )
 
 
 def _foreground_pressure_counts(value: object) -> RuntimeTelemetryCounts:
@@ -4713,6 +4755,8 @@ def main(argv: list[str] | None = None) -> None:
             require_classification=args.require_classification,
             require_pressure=args.require_pressure,
             require_cpu_cap_action=args.require_cpu_cap_action,
+            require_frame_performance=args.require_frame_performance,
+            require_fps_target_satisfied=args.require_fps_target_satisfied,
             expect_fps_target=args.expect_fps_target,
             expect_fps_target_source=args.expect_fps_target_source,
             expect_fps_target_confidence=args.expect_fps_target_confidence,

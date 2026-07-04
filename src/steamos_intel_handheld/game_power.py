@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import fcntl
 import hashlib
 import json
@@ -78,6 +79,132 @@ class FrameTargetTelemetry:
         if self.fps_target <= 0:
             return None
         return round(1000.0 / self.fps_target, 3)
+
+
+@dataclass(frozen=True)
+class FramePerformanceTelemetry:
+    avg_fps: float | None = None
+    p95_frame_ms: float | None = None
+    sample_count: int = 0
+    window_s: float | None = None
+    source: str | None = None
+    confidence: str | None = None
+
+
+class MangoHudCsvFramePerformanceReader:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        window_samples: int = 20,
+        min_samples: int = 12,
+    ) -> None:
+        if window_samples <= 0:
+            raise ValueError("window_samples must be positive")
+        if min_samples <= 0:
+            raise ValueError("min_samples must be positive")
+        if min_samples > window_samples:
+            raise ValueError("min_samples cannot exceed window_samples")
+        self.path = Path(path)
+        self.window_samples = int(window_samples)
+        self.min_samples = int(min_samples)
+
+    def read(self) -> FramePerformanceTelemetry | None:
+        try:
+            rows = self._read_recent_rows()
+        except OSError:
+            return None
+        if not rows:
+            return None
+        fps_values = [row[0] for row in rows]
+        frame_values = [row[1] for row in rows]
+        window_s = _elapsed_window_s([row[2] for row in rows])
+        return FramePerformanceTelemetry(
+            avg_fps=round(sum(fps_values) / len(fps_values), 3),
+            p95_frame_ms=_percentile(frame_values, 0.95),
+            sample_count=len(rows),
+            window_s=window_s,
+            source="mangohud-csv",
+            confidence="high" if len(rows) >= self.min_samples else "low",
+        )
+
+    def _read_recent_rows(self) -> deque[tuple[float, float, float | None]]:
+        rows: deque[tuple[float, float, float | None]] = deque(maxlen=self.window_samples)
+        header: list[str] | None = None
+        fps_index: int | None = None
+        frametime_index: int | None = None
+        elapsed_index: int | None = None
+        with self.path.open(newline="") as handle:
+            for raw_row in csv.reader(handle):
+                if not raw_row:
+                    continue
+                if header is None:
+                    normalized = [value.strip().lower() for value in raw_row]
+                    if "fps" not in normalized or "frametime" not in normalized:
+                        continue
+                    header = normalized
+                    fps_index = header.index("fps")
+                    frametime_index = header.index("frametime")
+                    elapsed_index = header.index("elapsed") if "elapsed" in header else None
+                    continue
+                assert fps_index is not None
+                assert frametime_index is not None
+                fps = _finite_positive_float_or_none(_row_value(raw_row, fps_index))
+                frametime = _finite_positive_float_or_none(
+                    _row_value(raw_row, frametime_index)
+                )
+                if fps is None or frametime is None:
+                    continue
+                elapsed = (
+                    _float_or_none(_row_value(raw_row, elapsed_index))
+                    if elapsed_index is not None
+                    else None
+                )
+                rows.append((fps, frametime, elapsed))
+        return rows
+
+
+def _row_value(row: list[str], index: int | None) -> str | None:
+    if index is None or index >= len(row):
+        return None
+    return row[index]
+
+
+def _finite_positive_float_or_none(value: object) -> float | None:
+    parsed = _float_or_none(value)
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _percentile(values: list[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, math.ceil(len(ordered) * fraction) - 1)
+    return round(ordered[min(index, len(ordered) - 1)], 3)
+
+
+def _elapsed_window_s(values: list[float | None]) -> float | None:
+    parsed = [value for value in values if value is not None]
+    if len(parsed) < 2:
+        return None
+    delta = parsed[-1] - parsed[0]
+    if delta <= 0:
+        return None
+    if delta > 1_000_000:
+        delta /= 1_000_000_000
+    return round(delta, 3)
 
 
 @dataclass(frozen=True)
@@ -385,6 +512,9 @@ class GamePowerConfig:
     hinted_activate_samples: int = 1
     session_hint_contradiction_samples: int = 2
     frame_target: FrameTargetTelemetry | None = None
+    fps_target_satisfied_headroom_ratio: float = 1.05
+    fps_target_satisfied_p95_ratio: float = 1.15
+    frame_performance_min_samples: int = 12
 
 
 @dataclass(frozen=True)
@@ -394,6 +524,7 @@ class GamePowerSample:
     pl1_w: int | None
     fdinfo_busy: dict[str, float] = field(default_factory=dict)
     frame_target: FrameTargetTelemetry | None = None
+    frame_performance: FramePerformanceTelemetry | None = None
     pressure: PressureTelemetry | None = None
 
 
@@ -925,6 +1056,19 @@ def classify_game_power_sample(
         return GamePowerClassification("no-foreground-game", confidence="high")
     if config.target_appid is not None and sample.appid != config.target_appid:
         return GamePowerClassification("non-target-game", confidence="high")
+    if _sample_fps_target_satisfied(config, sample):
+        return GamePowerClassification(
+            "fps-target-satisfied",
+            confidence="high",
+            advisories=_pressure_advisories(sample.pressure),
+            evidence=_compact_evidence(
+                {
+                    **_frame_target_evidence(sample),
+                    "controller_active": controller_active,
+                    "pressure_scopes": _pressure_scopes(sample.pressure),
+                }
+            ),
+        )
     if sample.rapl is None or sample.pl1_w is None or sample.rapl.package_w is None:
         return GamePowerClassification("insufficient-power-evidence", confidence="low")
 
@@ -944,6 +1088,8 @@ def classify_game_power_sample(
     if sample.frame_target is not None:
         evidence["fps_target"] = sample.frame_target.fps_target
         evidence["target_frame_ms"] = sample.frame_target.target_frame_ms
+    if sample.frame_performance is not None:
+        evidence.update(_frame_target_evidence(sample))
     pressure_scopes = _pressure_scopes(sample.pressure)
     if pressure_scopes:
         evidence["pressure_scopes"] = pressure_scopes
@@ -994,6 +1140,59 @@ def classify_game_power_sample(
 
 def _compact_evidence(evidence: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in evidence.items() if value is not None}
+
+
+def _sample_fps_target_satisfied(config: GamePowerConfig, sample: GamePowerSample) -> bool:
+    target = sample.frame_target
+    performance = sample.frame_performance
+    if target is None or performance is None:
+        return False
+    fps_target = target.fps_target
+    target_frame_ms = target.target_frame_ms
+    if fps_target is None or target_frame_ms is None:
+        return False
+    if performance.confidence != "high":
+        return False
+    if performance.sample_count < config.frame_performance_min_samples:
+        return False
+    if performance.avg_fps is None or performance.p95_frame_ms is None:
+        return False
+    if not math.isfinite(performance.avg_fps) or not math.isfinite(
+        performance.p95_frame_ms
+    ):
+        return False
+    return (
+        performance.avg_fps >= fps_target * config.fps_target_satisfied_headroom_ratio
+        and performance.p95_frame_ms
+        <= target_frame_ms * config.fps_target_satisfied_p95_ratio
+    )
+
+
+def _frame_target_evidence(sample: GamePowerSample) -> dict[str, object]:
+    target = sample.frame_target
+    performance = sample.frame_performance
+    fps_target = target.fps_target if target is not None else None
+    target_frame_ms = target.target_frame_ms if target is not None else None
+    avg_fps = performance.avg_fps if performance is not None else None
+    p95_frame_ms = performance.p95_frame_ms if performance is not None else None
+    return {
+        "fps_target": _round_or_none(fps_target),
+        "target_frame_ms": target_frame_ms,
+        "frame_avg_fps": _round_or_none(avg_fps),
+        "frame_p95_ms": _round_or_none(p95_frame_ms),
+        "fps_target_ratio": _round_or_none(_share(avg_fps, fps_target)),
+        "p95_frame_time_ratio": _round_or_none(_share(p95_frame_ms, target_frame_ms)),
+        "frame_performance_sample_count": (
+            performance.sample_count if performance is not None else None
+        ),
+        "frame_performance_window_s": _round_or_none(
+            performance.window_s if performance is not None else None
+        ),
+        "frame_performance_source": performance.source if performance is not None else None,
+        "frame_performance_confidence": (
+            performance.confidence if performance is not None else None
+        ),
+    }
 
 
 def _pressure_scopes(pressure: PressureTelemetry | None) -> list[str]:
@@ -1109,6 +1308,13 @@ class GamePowerController:
                 classification=classification,
             )
 
+        if not positive and classification.primary == "fps-target-satisfied":
+            return GamePowerDecision(
+                GamePowerAction.OBSERVE_ONLY,
+                "fps target satisfied",
+                classification=classification,
+            )
+
         activation_required = self._activation_required_samples()
         if self._positive_samples < activation_required:
             return GamePowerDecision(
@@ -1146,6 +1352,8 @@ class GamePowerController:
         )
 
     def _sample_supports_gpu_priority(self, sample: GamePowerSample) -> bool:
+        if _sample_fps_target_satisfied(self.config, sample):
+            return False
         if sample.appid is None:
             return False
         if self.config.target_appid is not None and sample.appid != self.config.target_appid:
@@ -1542,6 +1750,7 @@ def format_decision_jsonl(
 ) -> str:
     rapl = sample.rapl
     frame_target = sample.frame_target
+    frame_performance = sample.frame_performance
     payload = {
         "elapsed_s": round(elapsed_s, 3),
         "appid": sample.appid,
@@ -1559,6 +1768,24 @@ def format_decision_jsonl(
         "fps_target_confidence": frame_target.confidence if frame_target else None,
         "target_frame_ms": (
             frame_target.target_frame_ms if frame_target is not None else None
+        ),
+        "frame_avg_fps": _round_or_none(
+            frame_performance.avg_fps if frame_performance else None
+        ),
+        "frame_p95_ms": _round_or_none(
+            frame_performance.p95_frame_ms if frame_performance else None
+        ),
+        "frame_performance_sample_count": (
+            frame_performance.sample_count if frame_performance else None
+        ),
+        "frame_performance_window_s": _round_or_none(
+            frame_performance.window_s if frame_performance else None
+        ),
+        "frame_performance_source": (
+            frame_performance.source if frame_performance else None
+        ),
+        "frame_performance_confidence": (
+            frame_performance.confidence if frame_performance else None
         ),
         "classification": _classification_json(decision.classification),
         "pressure": _pressure_json(sample.pressure),
@@ -1686,12 +1913,14 @@ class SystemGamePowerObserver:
         cgroup_root: str | Path = "/sys/fs/cgroup",
         poll_s: float = 2.0,
         frame_target: FrameTargetTelemetry | None = None,
+        frame_performance_reader: object | None = None,
     ) -> None:
         self.rapl = RaplObserver(sysfs_root=sysfs_root)
         self.proc_root = Path(proc_root)
         self.cgroup_root = Path(cgroup_root)
         self.poll_s = poll_s
         self.frame_target = frame_target
+        self.frame_performance_reader = frame_performance_reader
         self._previous_rapl: EnergyReading | None = None
 
     async def sample(self) -> GamePowerSample:
@@ -1719,8 +1948,17 @@ class SystemGamePowerObserver:
             pl1_w=_read_current_pl1_w(self.rapl.sysfs_root),
             fdinfo_busy=busy,
             frame_target=self.frame_target,
+            frame_performance=self._read_frame_performance(),
             pressure=self._read_pressure(process),
         )
+
+    def _read_frame_performance(self) -> FramePerformanceTelemetry | None:
+        if self.frame_performance_reader is None:
+            return None
+        read = getattr(self.frame_performance_reader, "read", None)
+        if not callable(read):
+            return None
+        return read()
 
     def _read_pressure(self, process: GameProcess | None) -> PressureTelemetry:
         foreground = (
@@ -1811,12 +2049,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps-target", type=_positive_finite_float)
     parser.add_argument("--fps-target-source")
     parser.add_argument("--fps-target-confidence")
+    parser.add_argument("--frame-performance-csv")
+    parser.add_argument("--frame-performance-window-samples", type=_positive_int, default=20)
+    parser.add_argument("--frame-performance-min-samples", type=_positive_int, default=12)
     parser.add_argument("--hint-cache")
     return parser
 
 
 def config_from_args(args: argparse.Namespace) -> GamePowerConfig:
     frame_target = frame_target_from_args(args)
+    if args.frame_performance_min_samples > args.frame_performance_window_samples:
+        raise ValueError(
+            "--frame-performance-min-samples cannot exceed "
+            "--frame-performance-window-samples"
+        )
     return GamePowerConfig(
         mode=GamePowerMode(args.mode),
         poll_s=args.poll_s,
@@ -1827,6 +2073,7 @@ def config_from_args(args: argparse.Namespace) -> GamePowerConfig:
         cpu_cap_core_share_threshold=args.cpu_cap_core_share_threshold,
         target_appid=args.target_appid,
         frame_target=frame_target,
+        frame_performance_min_samples=args.frame_performance_min_samples,
     )
 
 
@@ -1837,6 +2084,16 @@ def _positive_finite_float(value: str) -> float:
         raise argparse.ArgumentTypeError("must be a finite positive float") from None
     if not math.isfinite(parsed) or parsed <= 0:
         raise argparse.ArgumentTypeError("must be a finite positive float")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a positive integer") from None
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
     return parsed
 
 
@@ -1856,12 +2113,22 @@ def frame_target_from_args(args: argparse.Namespace) -> FrameTargetTelemetry | N
 
 async def run_cli(args: argparse.Namespace) -> None:
     config = config_from_args(args)
+    frame_performance_reader = (
+        MangoHudCsvFramePerformanceReader(
+            args.frame_performance_csv,
+            window_samples=args.frame_performance_window_samples,
+            min_samples=args.frame_performance_min_samples,
+        )
+        if args.frame_performance_csv
+        else None
+    )
     observer = SystemGamePowerObserver(
         sysfs_root=args.sysfs_root,
         proc_root=args.proc_root,
         cgroup_root=args.cgroup_root,
         poll_s=config.poll_s,
         frame_target=config.frame_target,
+        frame_performance_reader=frame_performance_reader,
     )
     actuator = CpuPolicyActuator(discover_cpu_policies(args.sysfs_root))
     governor = GamePowerGovernor(
