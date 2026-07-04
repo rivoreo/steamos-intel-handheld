@@ -4,9 +4,9 @@
 
 **Goal:** Build a separate Decky Loader plugin that exposes safe game-power visibility and mode controls without exposing measured CPU/GPU policy internals.
 
-**Architecture:** Add a new `decky/steamos-intel-handheld-game-power` plugin beside the existing charge-limit plugin. The Decky backend owns only status, short sampling, allowlisted runtime mode override, and restore-defaults calls; the measured CPU cap constants remain hidden in the system service command line.
+**Architecture:** Add a new `decky/steamos-intel-handheld-game-power` plugin beside the existing charge-limit plugin. The Decky backend owns only status, short sampling, allowlisted runtime mode control, and restore-defaults calls; the measured CPU cap constants remain hidden in the daemon/service configuration.
 
-**Tech Stack:** Decky Loader, React, `@decky/ui`, `@decky/api`, `react-icons`, Python async backend, systemd runtime drop-in, existing `steamos-intel-handheld-game-power` CLI.
+**Tech Stack:** Decky Loader, React, `@decky/ui`, `@decky/api`, `react-icons`, Python async backend, `steamos-intel-handheld-game-power-control`, existing `steamos-intel-handheld-game-power` CLI.
 
 ---
 
@@ -45,21 +45,12 @@
   - `set_mode(mode)`,
   - `restore_defaults()`.
 - [ ] Allow only `off`, `observe`, and `automatic` modes.
-- [ ] Generate only one plugin-owned runtime drop-in path:
-  `/run/systemd/system/steamos-intel-handheld-power-control.service.d/70-game-power-decky.conf`.
-- [ ] Generate the drop-in as:
-
-```ini
-[Service]
-ExecStart=
-ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control wait-and-serve --user deck --bus system --apply-rapl --apply-msi-claw-ec --ec-write-debounce-ms 750 --tdp-policy auto --msi-claw-ec-shift-policy tdp-threshold --prepare-mangohud-sensors --game-power-mode <mode> --game-power-cpu-cap on --game-power-pcore-max-mhz 3000 --game-power-ecore-max-mhz 2400 --game-power-cpu-cap-core-share-threshold 0.30 --min-w 8 --max-w 30 --short-limit-max-w 37 --state-file /var/lib/steamos-intel-handheld/tdp_w
-```
-
-- [ ] Keep balanced automatic CPU cap constants internal to the backend command.
+- [ ] Call `steamos-intel-handheld-game-power-control` for runtime mode control.
+- [ ] Keep balanced automatic CPU cap constants internal to the daemon policy.
 - [ ] `get_status()` parses `systemctl show ... -p ActiveState -p SubState -p ExecStart --no-pager`.
 - [ ] `sample_once()` runs `/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power --mode observe --duration-s 2 --poll-s 1 --output-format jsonl` and returns the last JSON line.
-- [ ] `set_mode(mode)` writes only the plugin-owned `/run/systemd` drop-in through `tee`, then runs `systemctl daemon-reload` and `systemctl restart steamos-intel-handheld-power-control.service`.
-- [ ] `restore_defaults()` runs only `rm -f <plugin drop-in>`, `systemctl daemon-reload`, and `systemctl restart steamos-intel-handheld-power-control.service`.
+- [ ] `set_mode(mode)` runs `steamos-intel-handheld-game-power-control set-mode MODE --source decky --json`.
+- [ ] `restore_defaults()` runs `steamos-intel-handheld-game-power-control restore-defaults --json`.
 - [ ] Run backend tests and confirm they pass.
 
 ## Task 3: Frontend

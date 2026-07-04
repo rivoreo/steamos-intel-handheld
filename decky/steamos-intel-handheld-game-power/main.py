@@ -1,15 +1,13 @@
 import asyncio
 import json
 import os
-import shlex
 
 
 SERVICE = "steamos-intel-handheld-power-control.service"
-DROPIN_DIR = f"/run/systemd/system/{SERVICE}.d"
-DROPIN_PATH = f"{DROPIN_DIR}/70-game-power-decky.conf"
-POWER_CONTROL = "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control"
 GAME_POWER = "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power"
+GAME_POWER_CONTROL = "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-control"
 POLICY_LABEL = "Balanced automatic policy"
+VALID_MODES = {"automatic", "observe", "off"}
 
 
 def _clean_env() -> dict[str, str]:
@@ -36,59 +34,10 @@ async def _run_command(*cmd: str, input_text: str | None = None) -> str:
     return stdout.decode()
 
 
-def mode_to_service_args(mode: str) -> list[str]:
-    if mode == "off":
-        return ["--game-power-mode", "off"]
-    if mode == "observe":
-        return ["--game-power-mode", "observe"]
-    if mode == "automatic":
-        return [
-            "--game-power-mode",
-            "gpu-priority",
-            "--game-power-cpu-cap",
-            "on",
-            "--game-power-pcore-max-mhz",
-            "3000",
-            "--game-power-ecore-max-mhz",
-            "2400",
-            "--game-power-cpu-cap-core-share-threshold",
-            "0.30",
-        ]
+def validate_mode(mode: str) -> str:
+    if mode in VALID_MODES:
+        return mode
     raise ValueError(f"unsupported game-power mode: {mode}")
-
-
-def _service_args(mode: str) -> list[str]:
-    return [
-        POWER_CONTROL,
-        "wait-and-serve",
-        "--user",
-        "deck",
-        "--bus",
-        "system",
-        "--apply-rapl",
-        "--apply-msi-claw-ec",
-        "--ec-write-debounce-ms",
-        "750",
-        "--tdp-policy",
-        "auto",
-        "--msi-claw-ec-shift-policy",
-        "tdp-threshold",
-        "--prepare-mangohud-sensors",
-        *mode_to_service_args(mode),
-        "--min-w",
-        "8",
-        "--max-w",
-        "30",
-        "--short-limit-max-w",
-        "37",
-        "--state-file",
-        "/var/lib/steamos-intel-handheld/tdp_w",
-    ]
-
-
-def _dropin_text(mode: str) -> str:
-    command = " ".join(shlex.quote(arg) for arg in _service_args(mode))
-    return f"[Service]\nExecStart=\nExecStart={command}\n"
 
 
 def _parse_systemctl_show(output: str) -> dict[str, str]:
@@ -127,15 +76,23 @@ async def _service_status() -> dict:
         "ExecStart",
         "--no-pager",
     )
+    runtime = await _runtime_status()
     values = _parse_systemctl_show(output)
     execstart = values.get("ExecStart", "")
+    runtime_mode = runtime.get("mode")
+    mode = runtime_mode if runtime_mode != "default" else _mode_from_execstart(execstart)
     return {
         "active_state": values.get("ActiveState", "unknown"),
         "sub_state": values.get("SubState", "unknown"),
-        "mode": _mode_from_execstart(execstart),
-        "override_active": os.path.exists(DROPIN_PATH),
-        "policy_label": POLICY_LABEL,
+        "mode": mode,
+        "override_active": bool(runtime.get("override_active")),
+        "policy_label": runtime.get("policy_label", POLICY_LABEL),
     }
+
+
+async def _runtime_status() -> dict:
+    output = await _run_command(GAME_POWER_CONTROL, "status", "--json")
+    return json.loads(output)
 
 
 async def _sample_once() -> dict:
@@ -167,11 +124,6 @@ async def _sample_once() -> dict:
     }
 
 
-async def _restart_service() -> None:
-    await _run_command("systemctl", "daemon-reload")
-    await _run_command("systemctl", "restart", SERVICE)
-
-
 class Plugin:
     async def _main(self) -> None:
         pass
@@ -186,17 +138,19 @@ class Plugin:
         return await _sample_once()
 
     async def set_mode(self, mode: str) -> dict:
-        mode_to_service_args(mode)
-        await _run_command("install", "-d", "-m", "0755", DROPIN_DIR)
-        await _run_command("tee", DROPIN_PATH, input_text=_dropin_text(mode))
-        await _restart_service()
-        return {
-            "mode": mode,
-            "policy_label": POLICY_LABEL,
-            "override_active": True,
-        }
+        mode = validate_mode(mode)
+        output = await _run_command(
+            GAME_POWER_CONTROL,
+            "set-mode",
+            mode,
+            "--source",
+            "decky",
+            "--json",
+        )
+        return json.loads(output)
 
     async def restore_defaults(self) -> dict:
-        await _run_command("rm", "-f", DROPIN_PATH)
-        await _restart_service()
-        return {"restored": True, "policy_label": POLICY_LABEL}
+        output = await _run_command(GAME_POWER_CONTROL, "restore-defaults", "--json")
+        result = json.loads(output)
+        result["restored"] = True
+        return result

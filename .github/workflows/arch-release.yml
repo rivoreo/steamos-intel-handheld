@@ -253,6 +253,7 @@ jobs:
           contains "$main_pkg" "usr/bin/steamos-intel-handheld-power-control"
           contains "$main_pkg" "usr/bin/steamos-intel-handheld-ec-control"
           contains "$main_pkg" "usr/bin/steamos-intel-handheld-restore-etc"
+          contains "$main_pkg" "usr/bin/steamos-intel-handheld-game-power-control"
           contains "$main_pkg" "usr/lib/systemd/system/steamos-intel-handheld-restore.service"
           contains "$main_pkg" "usr/lib/systemd/system/steamos-intel-handheld-power-control.service"
           not_contains "$main_pkg" "usr/lib/systemd/system/steamos-intel-handheld-steamos-manager-remote.service"

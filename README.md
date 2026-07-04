@@ -213,7 +213,19 @@ CPU cap tuned from controlled 12W, 17W, 22W, and 30W A/B profiles:
 --game-power-cpu-cap on \
 --game-power-pcore-max-mhz 3000 \
 --game-power-ecore-max-mhz 2400 \
---game-power-cpu-cap-core-share-threshold 0.30
+--game-power-cpu-cap-core-share-threshold 0.30 \
+--game-power-control-file /run/steamos-intel-handheld/game-power-control.json
+```
+
+The Game Power Decky panel does not rewrite the systemd service command and
+does not expose the measured CPU policy constants. It calls the safe runtime
+control CLI, which only overlays the public mode (`automatic`, `observe`, or
+`off`) while the daemon keeps all measured policy values internal:
+
+```bash
+steamos-intel-handheld-game-power-control status --json
+steamos-intel-handheld-game-power-control set-mode observe --source decky --json
+steamos-intel-handheld-game-power-control restore-defaults --json
 ```
 
 Use the standalone validation CLI when checking a specific game scene:

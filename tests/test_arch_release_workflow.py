@@ -150,6 +150,7 @@ def test_arch_release_workflow_verifies_repository_artifact_before_pages_deploy(
     assert "opt/steamos-intel-handheld/bin/mangoapp" in workflow
     assert "usr/bin/steamos-intel-handheld-power-control" in workflow
     assert "usr/bin/steamos-intel-handheld-ec-control" in workflow
+    assert "usr/bin/steamos-intel-handheld-game-power-control" in workflow
     assert "usr/lib/systemd/system/steamos-intel-handheld-restore.service" in workflow
     assert (
         'not_contains "$main_pkg" "usr/lib/systemd/system/'

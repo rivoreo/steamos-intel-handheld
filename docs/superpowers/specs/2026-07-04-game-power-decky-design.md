@@ -43,13 +43,14 @@ UI.
 ## Architecture
 
 Decky frontend calls a plugin-local Python backend. The backend shells out only
-to project-owned system tools and systemd. Privileged writes remain inside a
-small allowlisted runtime override boundary:
+to project-owned system tools and uses `systemctl show` read-only for service
+state. Mode writes go through `steamos-intel-handheld-game-power-control`,
+which owns the validated runtime control JSON file read by the daemon:
 
 ```text
 Decky frontend
   -> Decky Python backend
-    -> systemctl / steamos-intel-handheld-game-power
+    -> steamos-intel-handheld-game-power-control
       -> steamos-intel-handheld-power-control.service
 ```
 
@@ -60,22 +61,13 @@ policy constants remain hardcoded to the measured balanced policy:
 - CPU cap remains enabled,
 - P-core/E-core caps and thresholds stay internal.
 
-The backend may write only this runtime file:
+The runtime control CLI may write only this runtime file:
 
-- `/run/systemd/system/steamos-intel-handheld-power-control.service.d/70-game-power-decky.conf`
+- `/run/steamos-intel-handheld/game-power-control.json`
 
-It must not write `/etc`, CPUFreq, RAPL, cgroup, uclamp, affinity, or EC state.
-The override is runtime-only: it disappears on reboot. Restore removes only the
-plugin-owned runtime drop-in, reloads systemd, and restarts the service. If the
-plugin is removed without restore, the current boot may keep the runtime
-drop-in until reboot, but packaged defaults remain intact and return after
-reboot or manual restore.
-
-The drop-in necessarily repeats the service command line for v1 because the
-current daemon does not yet expose a live configuration API. This is acceptable
-only under tests that ensure the command uses the measured balanced constants
-and the UI exposes no raw controls. A future daemon API should replace the
-drop-in path once live reconfiguration exists.
+The backend must not write `/etc`, systemd units/drop-ins, CPUFreq, RAPL,
+cgroup, uclamp, affinity, or EC state. The daemon live-reloads the control file
+and restores any active CPU policy snapshot before changing effective mode.
 
 ## Backend Contract
 
@@ -98,12 +90,13 @@ drop-in path once live reconfiguration exists.
 - `pl1_w`,
 - `render_busy`.
 
-`set_mode(mode)` accepts only `off`, `observe`, or `automatic`, writes the
-runtime drop-in, reloads systemd, restarts the service, and returns the selected
+`set_mode(mode)` accepts only `off`, `observe`, or `automatic`, calls
+`steamos-intel-handheld-game-power-control set-mode`, and returns the selected
 mode plus the policy label.
 
-`restore_defaults()` removes only the plugin-owned runtime drop-in, reloads
-systemd, restarts the service, and returns `restored: true`.
+`restore_defaults()` calls
+`steamos-intel-handheld-game-power-control restore-defaults` and returns
+`restored: true`.
 
 ## UI
 
@@ -135,6 +128,6 @@ Screen states:
 - The new plugin backend exposes status, sample, mode apply, and restore calls.
 - The frontend contains no controls or labels for P-core/E-core frequency,
   thresholds, uclamp, CPUWeight, PL2/Tau, or affinity masks.
-- Runtime writes are limited to the plugin-owned `/run/systemd` drop-in path.
+- Runtime writes are limited to the project-owned game-power control JSON path.
 - Tests verify the backend command boundary and the absence of unsafe UI knobs.
 - Local required harness passes after implementation.

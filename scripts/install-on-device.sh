@@ -71,11 +71,19 @@ export PYTHONPATH=/opt/steamos-intel-handheld/src
 exec /usr/bin/python3 -m steamos_intel_handheld.game_power_profile \"\$@\"
 WRAPPER
   chmod 0755 /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile
+  cat >/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-control <<'WRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+export PYTHONPATH=/opt/steamos-intel-handheld/src
+exec /usr/bin/python3 -m steamos_intel_handheld.game_power_control \"\$@\"
+WRAPPER
+  chmod 0755 /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-control
   rm -f /opt/steamos-intel-handheld/bin/steamos-intel-handheld-steamos-manager-remote
   rm -f /opt/rivoreo/bin/steamos-intel-handheld-power-control
   rm -f /opt/rivoreo/bin/steamos-intel-handheld-ec-control
   rm -f /opt/rivoreo/bin/steamos-intel-handheld-restore-etc
   rm -f /opt/rivoreo/bin/steamos-intel-handheld-game-power
+  rm -f /opt/rivoreo/bin/steamos-intel-handheld-game-power-control
   rm -rf /opt/rivoreo/steamos-intel-handheld
   rmdir --ignore-fail-on-non-empty /opt/rivoreo/bin /opt/rivoreo 2>/dev/null || true
   rm -f /etc/rivoreo/bin/steamos-intel-handheld-power-control

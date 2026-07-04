@@ -9,7 +9,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -439,11 +439,16 @@ class GamePowerGovernor:
         observer: object,
         actuator: object,
         output_format: str = "text",
+        config_provider: Callable[[GamePowerConfig], GamePowerConfig] | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
+        self.base_config = config
         self.config = config
         self.observer = observer
         self.actuator = actuator
         self.output_format = output_format
+        self.config_provider = config_provider
+        self.sleep = sleep
         self.controller = GamePowerController(config)
         self._started_s = time.monotonic()
         self._snapshot: object | None = None
@@ -461,6 +466,18 @@ class GamePowerGovernor:
             self.restore()
 
     async def run_once(self) -> GamePowerDecision:
+        self._refresh_config()
+        if self.config.mode == GamePowerMode.OFF:
+            self.restore()
+            await self.sleep(self.config.poll_s)
+            sample = GamePowerSample(appid=None, rapl=None, pl1_w=None)
+            decision = GamePowerDecision(GamePowerAction.IDLE, "mode is off")
+            elapsed_s = time.monotonic() - self._started_s
+            if self.output_format == "jsonl":
+                print(format_decision_jsonl(sample, decision, elapsed_s=elapsed_s), flush=True)
+            else:
+                print(_format_decision(sample, decision), flush=True)
+            return decision
         sample = await self.observer.sample()
         decision = self.controller.evaluate(sample)
         self._apply_decision(decision)
@@ -475,6 +492,17 @@ class GamePowerGovernor:
         if self._snapshot is not None:
             self.actuator.restore(self._snapshot)
             self._snapshot = None
+
+    def _refresh_config(self) -> None:
+        if self.config_provider is None:
+            return
+        next_config = self.config_provider(self.base_config)
+        if next_config == self.config:
+            return
+        self.restore()
+        self.config = next_config
+        self.controller = GamePowerController(next_config)
+        self._write_failed = False
 
     def _apply_decision(self, decision: GamePowerDecision) -> None:
         if self._write_failed:

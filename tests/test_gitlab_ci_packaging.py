@@ -173,6 +173,7 @@ def test_gitlab_artifact_dry_run_script_checks_package_and_repo_shape() -> None:
     assert "gamescope display profile and session hooks are installed" in script
     assert "usr/bin/steamos-intel-handheld-power-control" in script
     assert "usr/bin/steamos-intel-handheld-ec-control" in script
+    assert "usr/bin/steamos-intel-handheld-game-power-control" in script
 
 
 def test_package_repository_docs_describe_gitlab_ci_dry_run() -> None:

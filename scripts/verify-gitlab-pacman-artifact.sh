@@ -54,6 +54,7 @@ tar -xOf "$main_pkg" .PKGINFO | grep -Fx "pkgname = steamos-intel-handheld" >/de
 tar -tf "$main_pkg" | grep -Fx "usr/bin/steamos-intel-handheld-power-control" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "usr/bin/steamos-intel-handheld-ec-control" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "usr/bin/steamos-intel-handheld-restore-etc" >/dev/null
+tar -tf "$main_pkg" | grep -Fx "usr/bin/steamos-intel-handheld-game-power-control" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "usr/lib/systemd/system/steamos-intel-handheld-restore.service" >/dev/null
 reject_member "$main_pkg" "usr/lib/systemd/system/steamos-intel-handheld-steamos-manager-remote.service"
 tar -tf "$main_pkg" | grep -Fx "etc/systemd/system/steamos-intel-handheld-restore.service" >/dev/null

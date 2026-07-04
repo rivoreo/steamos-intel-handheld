@@ -90,28 +90,25 @@ class FakeCommandProcess:
 def test_game_power_backend_accepts_only_safe_modes():
     backend = load_game_power_backend()
 
-    assert backend.mode_to_service_args("automatic")[:2] == [
-        "--game-power-mode",
-        "gpu-priority",
-    ]
-    assert backend.mode_to_service_args("observe") == ["--game-power-mode", "observe"]
-    assert backend.mode_to_service_args("off") == ["--game-power-mode", "off"]
+    assert backend.validate_mode("automatic") == "automatic"
+    assert backend.validate_mode("observe") == "observe"
+    assert backend.validate_mode("off") == "off"
     for blocked in ("pcore", "ecore", "threshold", "uclamp", "affinity", "custom"):
         try:
-            backend.mode_to_service_args(blocked)
+            backend.validate_mode(blocked)
         except ValueError as exc:
             assert "unsupported game-power mode" in str(exc)
         else:
             raise AssertionError(f"{blocked} unexpectedly accepted")
 
 
-def test_game_power_backend_writes_only_plugin_owned_runtime_dropin(monkeypatch):
+def test_game_power_backend_calls_control_cli_for_mode_changes(monkeypatch):
     backend = load_game_power_backend()
     calls = []
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         calls.append((cmd, kwargs))
-        return FakeCommandProcess()
+        return FakeCommandProcess(stdout=b'{"mode": "automatic"}')
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
@@ -119,16 +116,87 @@ def test_game_power_backend_writes_only_plugin_owned_runtime_dropin(monkeypatch)
 
     assert result["mode"] == "automatic"
     commands = [call[0] for call in calls]
-    assert commands[0][:3] == ("install", "-d", "-m")
-    assert backend.DROPIN_DIR in commands[0]
-    tee_command = commands[1]
-    assert tee_command == ("tee", backend.DROPIN_PATH)
-    assert commands[-2] == ("systemctl", "daemon-reload")
-    assert commands[-1] == (
-        "systemctl",
-        "restart",
-        "steamos-intel-handheld-power-control.service",
-    )
+    assert commands == [
+        (
+            backend.GAME_POWER_CONTROL,
+            "set-mode",
+            "automatic",
+            "--source",
+            "decky",
+            "--json",
+        )
+    ]
+
+
+def test_game_power_backend_restore_calls_control_cli_without_service_restart(monkeypatch):
+    backend = load_game_power_backend()
+    calls = []
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return FakeCommandProcess(stdout=b'{"mode": "default", "override_active": false}')
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = asyncio.run(backend.Plugin().restore_defaults())
+
+    assert result["restored"] is True
+    assert [call[0] for call in calls] == [
+        (backend.GAME_POWER_CONTROL, "restore-defaults", "--json")
+    ]
+
+
+def test_game_power_backend_status_combines_service_and_runtime_control(monkeypatch):
+    backend = load_game_power_backend()
+    calls = []
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        if cmd[0] == "systemctl":
+            return FakeCommandProcess(
+                stdout=(
+                    b"ActiveState=active\n"
+                    b"SubState=running\n"
+                    b"ExecStart={ path=/opt/steamos-intel-handheld/bin/"
+                    b"steamos-intel-handheld-power-control ; argv[]=/opt/... ; }\n"
+                )
+            )
+        return FakeCommandProcess(
+            stdout=(
+                b'{"mode": "automatic", "effective_mode": "gpu-priority", '
+                b'"override_active": true, "policy_label": "Balanced automatic policy"}'
+            )
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = asyncio.run(backend.Plugin().get_status())
+
+    assert result["service"]["active_state"] == "active"
+    assert result["service"]["mode"] == "automatic"
+    assert result["service"]["override_active"] is True
+    assert [call[0] for call in calls] == [
+        (
+            "systemctl",
+            "show",
+            "steamos-intel-handheld-power-control.service",
+            "-p",
+            "ActiveState",
+            "-p",
+            "SubState",
+            "-p",
+            "ExecStart",
+            "--no-pager",
+        ),
+        (backend.GAME_POWER_CONTROL, "status", "--json"),
+    ]
+
+
+def test_game_power_backend_no_longer_exposes_dropin_constants():
+    backend = load_game_power_backend()
+
+    assert not hasattr(backend, "DROPIN_DIR")
+    assert not hasattr(backend, "DROPIN_PATH")
 
 
 def test_game_power_backend_restore_removes_only_plugin_dropin(monkeypatch):
@@ -137,7 +205,7 @@ def test_game_power_backend_restore_removes_only_plugin_dropin(monkeypatch):
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         calls.append((cmd, kwargs))
-        return FakeCommandProcess()
+        return FakeCommandProcess(stdout=b'{"mode": "default", "override_active": false}')
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
@@ -145,10 +213,8 @@ def test_game_power_backend_restore_removes_only_plugin_dropin(monkeypatch):
 
     assert result["restored"] is True
     commands = [call[0] for call in calls]
-    assert commands[0] == ("rm", "-f", backend.DROPIN_PATH)
-    assert commands[1] == ("systemctl", "daemon-reload")
-    assert commands[2] == (
-        "systemctl",
-        "restart",
-        "steamos-intel-handheld-power-control.service",
+    assert commands[0] == (
+        backend.GAME_POWER_CONTROL,
+        "restore-defaults",
+        "--json",
     )

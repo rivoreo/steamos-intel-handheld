@@ -38,6 +38,7 @@ FAILURE_MARKER='$failure_marker' \
 REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
 set -euo pipefail
 MANGOHUD_OUTPUT_DIR="$REMOTE_ROOT/mangohud-logs"
+PROFILE_CONTROL_FILE=/run/steamos-intel-handheld/game-power-profile-control.json
 chmod 0755 "$REMOTE_ROOT"
 
 wait_for_power_service() {
@@ -108,10 +109,12 @@ wait_for_power_provider() {
 set_service_game_power_mode() {
   local mode="$1"
   install -d -m 0755 /run/systemd/system/steamos-intel-handheld-power-control.service.d
+  install -d -m 0755 "$(dirname "$PROFILE_CONTROL_FILE")"
+  rm -f "$PROFILE_CONTROL_FILE"
   cat >/run/systemd/system/steamos-intel-handheld-power-control.service.d/50-game-power-profile.conf <<EOF
 [Service]
 ExecStart=
-ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control wait-and-serve --user deck --bus system --apply-rapl --apply-msi-claw-ec --ec-write-debounce-ms 750 --tdp-policy auto --msi-claw-ec-shift-policy tdp-threshold --prepare-mangohud-sensors --game-power-mode $mode --min-w 8 --max-w 30 --short-limit-max-w 37 --state-file /var/lib/steamos-intel-handheld/tdp_w
+ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control wait-and-serve --user deck --bus system --apply-rapl --apply-msi-claw-ec --ec-write-debounce-ms 750 --tdp-policy auto --msi-claw-ec-shift-policy tdp-threshold --prepare-mangohud-sensors --game-power-mode $mode --game-power-control-file $PROFILE_CONTROL_FILE --min-w 8 --max-w 30 --short-limit-max-w 37 --state-file /var/lib/steamos-intel-handheld/tdp_w
 EOF
   systemctl daemon-reload
   systemctl restart steamos-intel-handheld-power-control.service
@@ -120,6 +123,7 @@ EOF
 }
 
 restore_service_game_power_mode() {
+  rm -f "$PROFILE_CONTROL_FILE"
   rm -f /run/systemd/system/steamos-intel-handheld-power-control.service.d/50-game-power-profile.conf
   rmdir /run/systemd/system/steamos-intel-handheld-power-control.service.d 2>/dev/null || true
   systemctl daemon-reload

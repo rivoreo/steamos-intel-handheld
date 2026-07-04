@@ -416,6 +416,55 @@ def test_governor_restores_snapshot_when_active_write_fails():
     assert ("restore", actuator.snapshot_value) in actuator.events
 
 
+def test_governor_reloads_runtime_config_and_restores_when_mode_changes():
+    configs = [
+        GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY, activate_samples=1),
+        GamePowerConfig(mode=GamePowerMode.OFF, activate_samples=1),
+    ]
+
+    def config_provider(_base):
+        return configs.pop(0)
+
+    observer = FakeObserver([make_sample()])
+    actuator = RecordingActuator()
+    governor = GamePowerGovernor(
+        config=GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY, activate_samples=1),
+        observer=observer,
+        actuator=actuator,
+        config_provider=config_provider,
+    )
+
+    import asyncio
+
+    asyncio.run(governor.run_iterations(2))
+
+    assert ("apply", "balance_power", None, None) in actuator.events
+    assert ("restore", actuator.snapshot_value) in actuator.events
+    assert observer.samples == []
+
+
+def test_governor_off_mode_sleeps_without_sampling():
+    class ExplodingObserver:
+        async def sample(self):
+            raise AssertionError("off mode should not sample")
+
+    async def no_sleep(_seconds):
+        return None
+
+    governor = GamePowerGovernor(
+        config=GamePowerConfig(mode=GamePowerMode.OFF, poll_s=0.01),
+        observer=ExplodingObserver(),
+        actuator=RecordingActuator(),
+        sleep=no_sleep,
+    )
+
+    import asyncio
+
+    decision = asyncio.run(governor.run_once())
+
+    assert decision.action == GamePowerAction.IDLE
+
+
 def make_proc_game(proc_root: Path, pid: int, appid: str, command: str = "Cyberpunk2077.exe"):
     root = proc_root / str(pid)
     root.mkdir(parents=True)

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from steamos_intel_handheld import game_power_control
 from steamos_intel_handheld.game_power import (
     CpuPolicyActuator,
     GamePowerConfig,
@@ -1106,15 +1107,26 @@ def build_game_power_config(args: argparse.Namespace) -> GamePowerConfig:
 
 def build_game_power_governor(args: argparse.Namespace) -> GamePowerGovernor | None:
     config = build_game_power_config(args)
-    if config.mode == GamePowerMode.OFF:
+    control_file = Path(args.game_power_control_file) if args.game_power_control_file else None
+    if config.mode == GamePowerMode.OFF and control_file is None:
         return None
+    config_provider = (
+        (lambda base: game_power_control.effective_config_from_runtime_file(base, control_file))
+        if control_file is not None
+        else None
+    )
     observer = SystemGamePowerObserver(
         sysfs_root=args.sysfs_root,
         proc_root="/proc",
         poll_s=config.poll_s,
     )
     actuator = CpuPolicyActuator(discover_cpu_policies(args.sysfs_root))
-    return GamePowerGovernor(config=config, observer=observer, actuator=actuator)
+    return GamePowerGovernor(
+        config=config,
+        observer=observer,
+        actuator=actuator,
+        config_provider=config_provider,
+    )
 
 
 def prepare_mangohud_sensors_from_args(args: argparse.Namespace) -> list[Path]:
@@ -1177,6 +1189,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--game-power-cpu-cap", choices=["on", "off"], default="on")
     parser.add_argument("--game-power-cpu-cap-core-share-threshold", type=float, default=0.30)
     parser.add_argument("--game-power-target-appid")
+    parser.add_argument(
+        "--game-power-control-file",
+        default=str(game_power_control.DEFAULT_CONTROL_FILE),
+    )
     parser.add_argument("--user", default="deck")
     parser.add_argument("--wait-timeout-s", type=int, default=600)
     parser.add_argument("--wait-interval-s", type=float, default=2.0)

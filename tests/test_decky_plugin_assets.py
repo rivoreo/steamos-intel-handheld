@@ -130,9 +130,12 @@ def test_game_power_decky_backend_exposes_safe_mode_api():
     assert "async def sample_once" in backend
     assert "async def set_mode" in backend
     assert "async def restore_defaults" in backend
+    assert "steamos-intel-handheld-game-power-control" in backend
     assert "steamos-intel-handheld-power-control.service" in backend
-    assert "70-game-power-decky.conf" in backend
-    assert "--game-power-pcore-max-mhz" in backend
-    assert "--game-power-ecore-max-mhz" in backend
+    assert "70-game-power-decky.conf" not in backend
+    assert "ExecStart=" not in backend
+    assert "systemctl\", \"restart" not in backend
+    assert "--game-power-pcore-max-mhz" not in backend
+    assert "--game-power-ecore-max-mhz" not in backend
     assert "/usr/bin/python3" not in backend
     assert "LD_LIBRARY_PATH" not in backend

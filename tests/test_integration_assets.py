@@ -49,6 +49,7 @@ def test_power_control_service_enables_game_power_governor_by_default():
     assert "--game-power-pcore-max-mhz 3000" in unit
     assert "--game-power-ecore-max-mhz 2400" in unit
     assert "--game-power-cpu-cap-core-share-threshold 0.30" in unit
+    assert "--game-power-control-file /run/steamos-intel-handheld/game-power-control.json" in unit
 
 
 def test_restore_service_unit_runs_restore_cli_before_power_control():
@@ -165,6 +166,13 @@ def test_installer_installs_game_power_profile_cli_wrapper():
     assert r"python3 -m steamos_intel_handheld.game_power_profile \"\$@\"" in script
 
 
+def test_installer_installs_game_power_control_cli_wrapper():
+    script = (ROOT / "scripts/install-on-device.sh").read_text()
+
+    assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-control" in script
+    assert r"python3 -m steamos_intel_handheld.game_power_control \"\$@\"" in script
+
+
 def test_manual_installer_installs_restore_service_and_canonical_artifacts():
     script = (ROOT / "scripts/install-on-device.sh").read_text()
 
@@ -244,6 +252,15 @@ def test_arch_package_installs_decky_game_power_plugin():
     assert '"$game_power_decky_src/plugin.json"' in pkgbuild
     assert '"$game_power_decky_src/main.py"' in pkgbuild
     assert '"$game_power_decky_src/dist/index.js"' in pkgbuild
+
+
+def test_arch_package_declares_game_power_control_console_script():
+    pyproject = (ROOT / "pyproject.toml").read_text()
+
+    assert (
+        'steamos-intel-handheld-game-power-control = '
+        '"steamos_intel_handheld.game_power_control:main"'
+    ) in pyproject
 
 
 def test_gamescope_display_helper_sets_runtime_composite_force():
@@ -417,6 +434,12 @@ def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
     assert "restore_cpu_policy()" in script
     assert "set_service_game_power_mode()" in script
     assert "restore_service_game_power_mode()" in script
+    assert (
+        "PROFILE_CONTROL_FILE=/run/steamos-intel-handheld/game-power-profile-control.json"
+        in script
+    )
+    assert "--game-power-control-file $PROFILE_CONTROL_FILE" in script
+    assert 'rm -f "$PROFILE_CONTROL_FILE"' in script
     assert "setup_mangohud_controlled_capture()" in script
     assert "restore_mangohud_controlled_capture()" in script
     assert "provider_tdp()" in script
