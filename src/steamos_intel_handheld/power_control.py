@@ -6,13 +6,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import platform
 import signal
 import stat
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
@@ -23,7 +24,10 @@ from steamos_intel_handheld.game_power import (
     CpuPolicyActuator,
     GamePowerConfig,
     GamePowerGovernor,
+    GamePowerHintContext,
+    GamePowerHintStore,
     GamePowerMode,
+    GamePowerSample,
     SystemGamePowerObserver,
     discover_cpu_policies,
 )
@@ -41,6 +45,7 @@ DEFAULT_SHORT_LIMIT_MAX_W = 37
 HANDHELD_PL2_DELTA_W = 2
 HANDHELD_PL2_MAX_W = 32
 DEFAULT_STATE_FILE = "/var/lib/steamos-intel-handheld/tdp_w"
+DEFAULT_GAME_POWER_HINT_CACHE = "/var/lib/steamos-intel-handheld/game-power-hints.json"
 RAPL_DOMAIN_NAMES = ("intel-rapl:0", "intel-rapl-mmio:0")
 MANGOHUD_RAPL_SENSOR_NAMES = ("package-0", "uncore")
 MSI_CLAW_8_AI_PLUS_DMI = {
@@ -1041,7 +1046,7 @@ async def serve(args: argparse.Namespace) -> None:
             loop.add_signal_handler(signum, request_stop)
 
     tasks = [asyncio.create_task(poll_power_source_changes(backend))]
-    game_power_governor = build_game_power_governor(args)
+    game_power_governor = build_game_power_governor(args, backend=backend)
     if game_power_governor is not None:
         tasks.append(asyncio.create_task(game_power_governor.run_forever()))
     await run_service_tasks_until_stopped(
@@ -1067,7 +1072,11 @@ async def run_service_tasks_until_stopped(
         for task in task_list:
             task.cancel()
         if game_power_governor is not None:
-            game_power_governor.restore()
+            close = getattr(game_power_governor, "close", None)
+            if callable(close):
+                close()
+            else:
+                game_power_governor.restore()
         if task_list:
             await asyncio.gather(*task_list, return_exceptions=True)
 
@@ -1105,11 +1114,16 @@ def build_game_power_config(args: argparse.Namespace) -> GamePowerConfig:
     )
 
 
-def build_game_power_governor(args: argparse.Namespace) -> GamePowerGovernor | None:
+def build_game_power_governor(
+    args: argparse.Namespace,
+    *,
+    backend: TdpBackend | None = None,
+) -> GamePowerGovernor | None:
     config = build_game_power_config(args)
     control_file = Path(args.game_power_control_file) if args.game_power_control_file else None
     if config.mode == GamePowerMode.OFF and control_file is None:
         return None
+    backend = backend or build_backend(args)
     config_provider = (
         (lambda base: game_power_control.effective_config_from_runtime_file(base, control_file))
         if control_file is not None
@@ -1121,12 +1135,79 @@ def build_game_power_governor(args: argparse.Namespace) -> GamePowerGovernor | N
         poll_s=config.poll_s,
     )
     actuator = CpuPolicyActuator(discover_cpu_policies(args.sysfs_root))
+    hint_store = (
+        GamePowerHintStore(args.game_power_hint_cache)
+        if args.game_power_hint_cache
+        else None
+    )
     return GamePowerGovernor(
         config=config,
         observer=observer,
         actuator=actuator,
         config_provider=config_provider,
+        hint_store=hint_store,
+        hint_context_provider=_build_game_power_hint_context_provider(args, backend),
     )
+
+
+def _build_game_power_hint_context_provider(
+    args: argparse.Namespace,
+    backend: TdpBackend,
+) -> Callable[[GamePowerSample], GamePowerHintContext | None]:
+    topology_signature = _game_power_topology_signature(args.sysfs_root)
+    os_signature = _game_power_os_signature(args.sysfs_root)
+
+    def provider(sample: GamePowerSample) -> GamePowerHintContext | None:
+        if sample.appid is None:
+            return None
+        power_source = backend.current_power_source().value
+        fps_target = (
+            str(int(sample.frame_target.fps_target))
+            if sample.frame_target is not None and sample.frame_target.fps_target is not None
+            else "none-configured"
+        )
+        complete = (
+            bool(sample.appid)
+            and sample.pl1_w is not None
+            and power_source in {PowerSource.AC.value, PowerSource.BATTERY.value}
+            and fps_target != "unknown"
+            and topology_signature != "unknown"
+            and os_signature != "unknown"
+        )
+        return GamePowerHintContext(
+            appid=sample.appid,
+            pl1_w=sample.pl1_w,
+            power_source=power_source,
+            fps_target=fps_target,
+            topology_signature=topology_signature,
+            os_signature=os_signature,
+            runtime_signature="unavailable",
+            runtime_signature_known=False,
+            complete=complete,
+        )
+
+    return provider
+
+
+def _game_power_topology_signature(sysfs_root: str | Path) -> str:
+    policies = discover_cpu_policies(sysfs_root)
+    if not policies:
+        return "unknown"
+    parts = []
+    for policy in policies:
+        cpus = ",".join(str(cpu) for cpu in policy.affected_cpus)
+        parts.append(f"{policy.name}:{policy.policy_class.value}:{cpus}")
+    return "policies:" + ";".join(parts)
+
+
+def _game_power_os_signature(sysfs_root: str | Path) -> str:
+    root = Path(sysfs_root)
+    driver = "unknown"
+    if (root / "module" / "xe").exists():
+        driver = "xe"
+    elif (root / "module" / "i915").exists():
+        driver = "i915"
+    return f"kernel={platform.release()};driver={driver}"
 
 
 def prepare_mangohud_sensors_from_args(args: argparse.Namespace) -> list[Path]:
@@ -1193,6 +1274,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--game-power-control-file",
         default=str(game_power_control.DEFAULT_CONTROL_FILE),
     )
+    parser.add_argument("--game-power-hint-cache", default=DEFAULT_GAME_POWER_HINT_CACHE)
     parser.add_argument("--user", default="deck")
     parser.add_argument("--wait-timeout-s", type=int, default=600)
     parser.add_argument("--wait-interval-s", type=float, default=2.0)

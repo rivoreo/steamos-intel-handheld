@@ -3155,11 +3155,11 @@ def replay_action_equivalence(output: str | Path | None = None) -> dict[str, obj
             ],
             "expected_actions": [
                 GamePowerAction.GPU_PRIORITY_EPP.value,
-                GamePowerAction.RESTORE.value,
+                GamePowerAction.OBSERVE_ONLY.value,
             ],
             "expected_reasons": [
                 "package limited with GPU activity",
-                "restore hysteresis reached",
+                "waiting for rolling restore evidence",
             ],
         },
     ]

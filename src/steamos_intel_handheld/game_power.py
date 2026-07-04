@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
+import hashlib
 import json
 import math
 import re
 import sys
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
@@ -378,6 +381,9 @@ class GamePowerConfig:
     render_busy_threshold: float = 0.70
     activate_samples: int = 2
     restore_samples: int = 3
+    rolling_window_samples: int = 5
+    hinted_activate_samples: int = 1
+    session_hint_contradiction_samples: int = 2
     frame_target: FrameTargetTelemetry | None = None
 
 
@@ -396,6 +402,513 @@ class GamePowerDecision:
     action: GamePowerAction
     reason: str
     classification: GamePowerClassification | None = None
+
+
+DEFAULT_GAME_POWER_POLICY_VERSION = "game-power-sampling-v1"
+GAME_POWER_HINT_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class GamePowerHintPolicy:
+    min_hint_sessions: int = 2
+    min_hint_samples: int = 20
+    min_hint_positive_ratio: float = 0.70
+    hint_contradiction_limit: int = 3
+    session_hint_contradiction_samples: int = 2
+    policy_version: str = DEFAULT_GAME_POWER_POLICY_VERSION
+    max_aggregate_records: int = 128
+    max_hint_entries: int = 64
+    max_hint_cache_bytes: int = 262_144
+    max_aggregate_age_days: int = 14
+    max_hint_age_days: int = 30
+    max_runtime_unaware_hint_age_days: int = 7
+
+
+@dataclass(frozen=True)
+class GamePowerHintContext:
+    appid: str
+    pl1_w: int | None
+    power_source: str
+    fps_target: str
+    topology_signature: str
+    os_signature: str
+    runtime_signature: str
+    runtime_signature_known: bool
+    policy_version: str = DEFAULT_GAME_POWER_POLICY_VERSION
+    complete: bool = False
+
+
+@dataclass
+class GamePowerSessionSummary:
+    context: GamePowerHintContext
+    started_s: float
+    samples: int = 0
+    positive_samples: int = 0
+    negative_samples: int = 0
+    applied_samples: int = 0
+    restored_samples: int = 0
+    cpu_cap_samples: int = 0
+    contradiction_samples: int = 0
+    hint_was_used: bool = False
+    hint_disabled: bool = False
+    hint_disable_reason: str | None = None
+    write_failed: bool = False
+    restore_attempted: bool = False
+    restore_succeeded: bool | None = None
+    restore_error: str | None = None
+
+
+@dataclass(frozen=True)
+class GamePowerHintEntry:
+    key: str
+    context: GamePowerHintContext
+    confidence: str
+    observed_sessions: int
+    total_samples: int
+    positive_ratio: float
+    cpu_cap_ratio: float
+    last_validated_at: float
+    contradiction_count: int = 0
+    stale: bool = False
+    runtime_unaware: bool = False
+
+
+@dataclass(frozen=True)
+class GamePowerHintStoreResult:
+    aggregate_updated: bool = False
+    hint_promoted: bool = False
+    cache_write_result: str = "not_configured"
+    promotion_skip_reason: str | None = None
+    hint_contradiction_count_before: int = 0
+    hint_contradiction_count_after: int = 0
+    hint_repair_delta: int = 0
+
+
+@dataclass(frozen=True)
+class GamePowerActuatorOutcome:
+    attempted: bool
+    succeeded: bool
+    reason: str
+
+
+def pl1_bucket_w(value_w: float | int | None) -> int | None:
+    if value_w is None or not math.isfinite(float(value_w)):
+        return None
+    if float(value_w) < 0.5:
+        return None
+    return math.floor(float(value_w) + 0.5)
+
+
+def canonical_hint_key(context: GamePowerHintContext) -> str:
+    payload = {
+        "appid": context.appid,
+        "fps_target": context.fps_target,
+        "os_signature": context.os_signature,
+        "pl1_w": context.pl1_w,
+        "policy_version": context.policy_version,
+        "power_source": context.power_source,
+        "runtime_signature": context.runtime_signature,
+        "topology_signature": context.topology_signature,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return f"game-power-context-v1:{hashlib.sha256(raw).hexdigest()}"
+
+
+def _context_json(context: GamePowerHintContext) -> dict[str, object]:
+    return {
+        "appid": context.appid,
+        "pl1_w": context.pl1_w,
+        "power_source": context.power_source,
+        "fps_target": context.fps_target,
+        "topology_signature": context.topology_signature,
+        "os_signature": context.os_signature,
+        "runtime_signature": context.runtime_signature,
+        "runtime_signature_known": context.runtime_signature_known,
+        "policy_version": context.policy_version,
+        "complete": context.complete,
+    }
+
+
+def _context_from_json(value: object) -> GamePowerHintContext | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        context = GamePowerHintContext(
+            appid=str(value["appid"]),
+            pl1_w=int(value["pl1_w"]) if value.get("pl1_w") is not None else None,
+            power_source=str(value["power_source"]),
+            fps_target=str(value["fps_target"]),
+            topology_signature=str(value["topology_signature"]),
+            os_signature=str(value["os_signature"]),
+            runtime_signature=str(value["runtime_signature"]),
+            runtime_signature_known=bool(value.get("runtime_signature_known", False)),
+            policy_version=str(value.get("policy_version", DEFAULT_GAME_POWER_POLICY_VERSION)),
+            complete=bool(value.get("complete", True)),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    return context
+
+
+def _session_eligible(summary: GamePowerSessionSummary) -> bool:
+    if not summary.context.complete:
+        return False
+    if summary.samples <= 0:
+        return False
+    restore_required = summary.applied_samples > 0 or summary.restore_attempted
+    return not (
+        summary.write_failed
+        or (restore_required and summary.restore_succeeded is not True)
+        or summary.contradiction_samples > 0
+        or summary.hint_disabled
+    )
+
+
+class GamePowerHintStore:
+    def __init__(
+        self,
+        path: str | Path | None,
+        *,
+        policy: GamePowerHintPolicy | None = None,
+        now: Callable[[], float] = time.time,
+    ) -> None:
+        self.path = Path(path) if path is not None else None
+        self.policy = policy or GamePowerHintPolicy()
+        self.now = now
+        self.load_error: str | None = None
+        self._aggregates: dict[str, dict[str, object]] = {}
+        self._entries: dict[str, GamePowerHintEntry] = {}
+        self._load()
+
+    def get_hint(self, context: GamePowerHintContext) -> GamePowerHintEntry | None:
+        if not context.complete:
+            return None
+        entry = self._entries.get(canonical_hint_key(context))
+        if entry is None or entry.stale:
+            return None
+        if self._entry_expired(entry):
+            return None
+        if entry.contradiction_count >= self.policy.hint_contradiction_limit:
+            return None
+        return entry
+
+    def record_session(self, summary: GamePowerSessionSummary) -> GamePowerHintStoreResult:
+        if self.path is None:
+            return GamePowerHintStoreResult(cache_write_result="not_configured")
+        if not _session_eligible(summary):
+            if summary.context.complete and (
+                summary.contradiction_samples > 0 or summary.hint_disabled
+            ):
+                return self._record_contradiction(summary)
+            return GamePowerHintStoreResult(
+                cache_write_result="not_eligible",
+                promotion_skip_reason=self._promotion_skip_reason(summary),
+            )
+        key = canonical_hint_key(summary.context)
+        aggregate = self._aggregates.get(key) or {
+            "context": _context_json(summary.context),
+            "observed_sessions": 0,
+            "total_samples": 0,
+            "positive_samples": 0,
+            "cpu_cap_samples": 0,
+            "clean_restore_sessions": 0,
+            "last_observed_at": 0.0,
+        }
+        aggregate["observed_sessions"] = int(aggregate["observed_sessions"]) + 1
+        aggregate["total_samples"] = int(aggregate["total_samples"]) + summary.samples
+        aggregate["positive_samples"] = (
+            int(aggregate["positive_samples"]) + summary.positive_samples
+        )
+        aggregate["cpu_cap_samples"] = int(aggregate["cpu_cap_samples"]) + summary.cpu_cap_samples
+        if summary.applied_samples == 0 or summary.restore_succeeded is True:
+            aggregate["clean_restore_sessions"] = int(aggregate["clean_restore_sessions"]) + 1
+        aggregate["last_observed_at"] = self.now()
+        self._aggregates[key] = aggregate
+
+        before_count = (
+            self._entries[key].contradiction_count if key in self._entries else 0
+        )
+        promoted = self._maybe_promote(
+            key,
+            aggregate,
+            previous_contradiction_count=before_count,
+        )
+        after_count = (
+            self._entries[key].contradiction_count if key in self._entries else before_count
+        )
+        self._prune()
+        write_result = self._write()
+        return GamePowerHintStoreResult(
+            aggregate_updated=True,
+            hint_promoted=promoted,
+            cache_write_result=write_result,
+            promotion_skip_reason=None if promoted else self._aggregate_skip_reason(aggregate),
+            hint_contradiction_count_before=before_count,
+            hint_contradiction_count_after=after_count,
+            hint_repair_delta=before_count - after_count,
+        )
+
+    def _record_contradiction(
+        self,
+        summary: GamePowerSessionSummary,
+    ) -> GamePowerHintStoreResult:
+        key = canonical_hint_key(summary.context)
+        entry = self._entries.get(key)
+        if entry is None:
+            return GamePowerHintStoreResult(
+                cache_write_result="not_eligible",
+                promotion_skip_reason=self._promotion_skip_reason(summary),
+            )
+        before_count = entry.contradiction_count
+        after_count = before_count + 1
+        self._entries[key] = replace(entry, contradiction_count=after_count)
+        self._prune()
+        write_result = self._write()
+        return GamePowerHintStoreResult(
+            cache_write_result=write_result,
+            promotion_skip_reason=self._promotion_skip_reason(summary),
+            hint_contradiction_count_before=before_count,
+            hint_contradiction_count_after=after_count,
+        )
+
+    def _maybe_promote(
+        self,
+        key: str,
+        aggregate: dict[str, object],
+        *,
+        previous_contradiction_count: int = 0,
+    ) -> bool:
+        sessions = int(aggregate["observed_sessions"])
+        samples = int(aggregate["total_samples"])
+        positives = int(aggregate["positive_samples"])
+        if sessions < self.policy.min_hint_sessions:
+            return False
+        if samples < self.policy.min_hint_samples:
+            return False
+        positive_ratio = positives / samples if samples else 0.0
+        if positive_ratio < self.policy.min_hint_positive_ratio:
+            return False
+        context = _context_from_json(aggregate.get("context"))
+        if context is None:
+            return False
+        self._entries[key] = GamePowerHintEntry(
+            key=key,
+            context=context,
+            confidence="medium",
+            observed_sessions=sessions,
+            total_samples=samples,
+            positive_ratio=positive_ratio,
+            cpu_cap_ratio=(
+                int(aggregate["cpu_cap_samples"]) / samples if samples else 0.0
+            ),
+            last_validated_at=float(aggregate["last_observed_at"]),
+            contradiction_count=max(0, previous_contradiction_count - 1),
+            stale=False,
+            runtime_unaware=not context.runtime_signature_known,
+        )
+        return True
+
+    def _load(self) -> None:
+        if self.path is None or not self.path.exists():
+            return
+        try:
+            if self.path.stat().st_size > self.policy.max_hint_cache_bytes:
+                self.load_error = "cache_over_budget"
+                return
+            data = json.loads(self.path.read_text())
+        except json.JSONDecodeError:
+            self.load_error = "invalid_json"
+            return
+        except OSError as exc:
+            self.load_error = f"read_failed:{exc.strerror or exc}"
+            return
+        if (
+            not isinstance(data, dict)
+            or data.get("schema_version") != GAME_POWER_HINT_SCHEMA_VERSION
+        ):
+            self.load_error = "schema_mismatch"
+            return
+        if data.get("policy_version") != self.policy.policy_version:
+            self.load_error = "policy_mismatch"
+            return
+        self._aggregates = self._load_aggregates(data.get("aggregates"))
+        self._entries = self._load_entries(data.get("entries"))
+
+    def _load_aggregates(self, value: object) -> dict[str, dict[str, object]]:
+        if not isinstance(value, dict):
+            return {}
+        loaded: dict[str, dict[str, object]] = {}
+        for key, record in value.items():
+            if not isinstance(key, str) or not isinstance(record, dict):
+                continue
+            context = _context_from_json(record.get("context"))
+            if context is None or canonical_hint_key(context) != key:
+                continue
+            try:
+                loaded[key] = {
+                    "context": _context_json(context),
+                    "observed_sessions": int(record["observed_sessions"]),
+                    "total_samples": int(record["total_samples"]),
+                    "positive_samples": int(record["positive_samples"]),
+                    "cpu_cap_samples": int(record.get("cpu_cap_samples", 0)),
+                    "clean_restore_sessions": int(record.get("clean_restore_sessions", 0)),
+                    "last_observed_at": float(record.get("last_observed_at", 0.0)),
+                }
+            except (KeyError, TypeError, ValueError):
+                continue
+        return loaded
+
+    def _load_entries(self, value: object) -> dict[str, GamePowerHintEntry]:
+        if not isinstance(value, dict):
+            return {}
+        loaded: dict[str, GamePowerHintEntry] = {}
+        for key, record in value.items():
+            if not isinstance(key, str) or not isinstance(record, dict):
+                continue
+            context = _context_from_json(record.get("context"))
+            if context is None or canonical_hint_key(context) != key:
+                continue
+            try:
+                loaded[key] = GamePowerHintEntry(
+                    key=key,
+                    context=context,
+                    confidence=str(record.get("confidence", "medium")),
+                    observed_sessions=int(record["observed_sessions"]),
+                    total_samples=int(record["total_samples"]),
+                    positive_ratio=float(record["positive_ratio"]),
+                    cpu_cap_ratio=float(record.get("cpu_cap_ratio", 0.0)),
+                    last_validated_at=float(record.get("last_validated_at", 0.0)),
+                    contradiction_count=int(record.get("contradiction_count", 0)),
+                    stale=bool(record.get("stale", False)),
+                    runtime_unaware=bool(record.get("runtime_unaware", False)),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return loaded
+
+    def _prune(self) -> None:
+        now = self.now()
+        aggregate_max_age_s = self.policy.max_aggregate_age_days * 86_400
+        hint_max_age_s = self.policy.max_hint_age_days * 86_400
+        runtime_unaware_max_age_s = self.policy.max_runtime_unaware_hint_age_days * 86_400
+        self._aggregates = {
+            key: aggregate
+            for key, aggregate in self._aggregates.items()
+            if now - float(aggregate.get("last_observed_at", 0.0)) <= aggregate_max_age_s
+        }
+        self._entries = {
+            key: entry
+            for key, entry in self._entries.items()
+            if not entry.stale
+            and now - entry.last_validated_at
+            <= (runtime_unaware_max_age_s if entry.runtime_unaware else hint_max_age_s)
+        }
+        self._aggregates = dict(
+            sorted(
+                self._aggregates.items(),
+                key=lambda item: float(item[1].get("last_observed_at", 0.0)),
+                reverse=True,
+            )[: self.policy.max_aggregate_records]
+        )
+        self._entries = dict(
+            sorted(
+                self._entries.items(),
+                key=lambda item: item[1].last_validated_at,
+                reverse=True,
+            )[: self.policy.max_hint_entries]
+        )
+
+    def _write(self) -> str:
+        if self.path is None:
+            return "not_configured"
+        data = self._json()
+        payload = json.dumps(data, sort_keys=True, separators=(",", ":"))
+        if len(payload.encode()) > self.policy.max_hint_cache_bytes:
+            return "cache_over_budget"
+        lock_handle = None
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            lock_handle = self._acquire_lock()
+            tmp = self.path.with_name(f"{self.path.name}.tmp")
+            tmp.write_text(payload)
+            tmp.replace(self.path)
+        except BlockingIOError:
+            return "lock_failed"
+        except OSError:
+            return "write_failed"
+        finally:
+            if lock_handle is not None:
+                fcntl.flock(lock_handle, fcntl.LOCK_UN)
+                lock_handle.close()
+        return "written"
+
+    def _acquire_lock(self):
+        if self.path is None:
+            return None
+        lock_path = self.path.with_name(f"{self.path.name}.lock")
+        handle = lock_path.open("a+")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            handle.close()
+            raise BlockingIOError(str(exc)) from exc
+        return handle
+
+    def _entry_expired(self, entry: GamePowerHintEntry) -> bool:
+        max_age_s = (
+            self.policy.max_runtime_unaware_hint_age_days * 86_400
+            if entry.runtime_unaware
+            else self.policy.max_hint_age_days * 86_400
+        )
+        return self.now() - entry.last_validated_at > max_age_s
+
+    def _json(self) -> dict[str, object]:
+        return {
+            "schema_version": GAME_POWER_HINT_SCHEMA_VERSION,
+            "policy_version": self.policy.policy_version,
+            "aggregates": self._aggregates,
+            "entries": {
+                key: {
+                    "context": _context_json(entry.context),
+                    "preferred_mode": "gpu-priority",
+                    "confidence": entry.confidence,
+                    "observed_sessions": entry.observed_sessions,
+                    "total_samples": entry.total_samples,
+                    "positive_ratio": entry.positive_ratio,
+                    "cpu_cap_ratio": entry.cpu_cap_ratio,
+                    "last_validated_at": entry.last_validated_at,
+                    "contradiction_count": entry.contradiction_count,
+                    "stale": entry.stale,
+                    "runtime_unaware": entry.runtime_unaware,
+                }
+                for key, entry in self._entries.items()
+            },
+        }
+
+    def _aggregate_skip_reason(self, aggregate: dict[str, object]) -> str:
+        if int(aggregate["observed_sessions"]) < self.policy.min_hint_sessions:
+            return "not_enough_sessions"
+        if int(aggregate["total_samples"]) < self.policy.min_hint_samples:
+            return "not_enough_samples"
+        samples = int(aggregate["total_samples"])
+        positives = int(aggregate["positive_samples"])
+        ratio = positives / samples if samples else 0.0
+        if ratio < self.policy.min_hint_positive_ratio:
+            return "positive_ratio_below_threshold"
+        return "not_eligible"
+
+    def _promotion_skip_reason(self, summary: GamePowerSessionSummary) -> str:
+        if not summary.context.complete:
+            return "context_incomplete"
+        if summary.write_failed:
+            return "write_failed"
+        if summary.contradiction_samples > 0 or summary.hint_disabled:
+            return "hint_contradicted"
+        if summary.restore_succeeded is not True and (
+            summary.applied_samples > 0 or summary.restore_attempted
+        ):
+            return "restore_not_clean"
+        return "not_eligible"
 
 
 def classify_game_power_sample(
@@ -464,15 +977,6 @@ def classify_game_power_sample(
         )
 
     core_share = rapl.core_share
-    if not controller_active and (
-        core_share is None or core_share < config.core_share_threshold
-    ):
-        return GamePowerClassification(
-            "insufficient-cpu-contention-evidence",
-            confidence="medium",
-            advisories=advisories,
-            evidence=_compact_evidence(evidence),
-        )
     if core_share is not None and core_share >= config.cpu_cap_core_share_threshold:
         return GamePowerClassification(
             "gpu-package-bound-cpu-contention",
@@ -539,11 +1043,25 @@ def _pressure_thresholds(resource: str) -> tuple[float, float]:
 
 
 class GamePowerController:
-    def __init__(self, config: GamePowerConfig) -> None:
+    def __init__(
+        self,
+        config: GamePowerConfig,
+        *,
+        hint: GamePowerHintEntry | None = None,
+    ) -> None:
         self.config = config
+        self.hint = hint
         self._positive_samples = 0
         self._negative_samples = 0
         self._active = False
+        self._hint_used = False
+        self._hint_disabled = False
+        self._hint_contradiction_samples = 0
+        self._hint_contradiction_total = 0
+        self.last_positive: bool | None = None
+        self._recent_positive: deque[bool] = deque(
+            maxlen=max(0, config.rolling_window_samples)
+        )
 
     def evaluate(self, sample: GamePowerSample) -> GamePowerDecision:
         classification = classify_game_power_sample(
@@ -564,15 +1082,26 @@ class GamePowerController:
                 classification=classification,
             )
 
-        positive = self._sample_supports_gpu_priority(sample, active=self._active)
+        positive = self._sample_supports_gpu_priority(sample)
+        self.last_positive = positive
+        if self.config.rolling_window_samples > 0:
+            self._recent_positive.append(positive)
         if positive:
             self._positive_samples += 1
             self._negative_samples = 0
         else:
             self._negative_samples += 1
             self._positive_samples = 0
+        self._update_hint_contradiction(sample, positive)
+        classification = self._with_rolling_evidence(classification)
 
         if self._active and self._negative_samples >= self.config.restore_samples:
+            if not self._rolling_restore_ready():
+                return GamePowerDecision(
+                    GamePowerAction.OBSERVE_ONLY,
+                    "waiting for rolling restore evidence",
+                    classification=classification,
+                )
             self._active = False
             return GamePowerDecision(
                 GamePowerAction.RESTORE,
@@ -580,14 +1109,27 @@ class GamePowerController:
                 classification=classification,
             )
 
-        if self._positive_samples < self.config.activate_samples:
+        activation_required = self._activation_required_samples()
+        if self._positive_samples < activation_required:
             return GamePowerDecision(
                 GamePowerAction.OBSERVE_ONLY,
                 "waiting for activation hysteresis",
                 classification=classification,
             )
+        if not self._rolling_activation_ready(activation_required):
+            return GamePowerDecision(
+                GamePowerAction.OBSERVE_ONLY,
+                "waiting for rolling activation evidence",
+                classification=classification,
+            )
 
         self._active = True
+        if self._hint_available():
+            self._hint_used = True
+            classification = self._with_rolling_evidence(classification)
+            reason = "validated hint reduced activation warmup"
+        else:
+            reason = "package limited with GPU activity"
         if self.config.cpu_cap_enabled and _sample_core_pressure_high(
             sample,
             self.config.cpu_cap_core_share_threshold,
@@ -599,16 +1141,11 @@ class GamePowerController:
             )
         return GamePowerDecision(
             GamePowerAction.GPU_PRIORITY_EPP,
-            "package limited with GPU activity",
+            reason,
             classification=classification,
         )
 
-    def _sample_supports_gpu_priority(
-        self,
-        sample: GamePowerSample,
-        *,
-        active: bool = False,
-    ) -> bool:
+    def _sample_supports_gpu_priority(self, sample: GamePowerSample) -> bool:
         if sample.appid is None:
             return False
         if self.config.target_appid is not None and sample.appid != self.config.target_appid:
@@ -617,17 +1154,94 @@ class GamePowerController:
             return False
         if sample.rapl.package_w < self.config.package_pressure_ratio * sample.pl1_w:
             return False
-        core_share = sample.rapl.core_share
-        if not active and (
-            core_share is None or core_share < self.config.core_share_threshold
-        ):
-            return False
         uncore_share = sample.rapl.uncore_share
         render_busy = sample.fdinfo_busy.get("render")
         has_gpu_activity = (
             uncore_share is not None and uncore_share >= self.config.uncore_share_threshold
         ) or (render_busy is not None and render_busy >= self.config.render_busy_threshold)
         return has_gpu_activity
+
+    def _rolling_activation_ready(self, activation_required: int) -> bool:
+        if self.config.rolling_window_samples <= 1:
+            return True
+        if len(self._recent_positive) < activation_required:
+            return False
+        positive = sum(1 for value in self._recent_positive if value)
+        return positive > len(self._recent_positive) / 2
+
+    def _rolling_restore_ready(self) -> bool:
+        if self.config.rolling_window_samples <= 1:
+            return True
+        if len(self._recent_positive) < self.config.restore_samples:
+            return False
+        negative = sum(1 for value in self._recent_positive if not value)
+        return negative > len(self._recent_positive) / 2
+
+    def _with_rolling_evidence(
+        self,
+        classification: GamePowerClassification,
+    ) -> GamePowerClassification:
+        positive = sum(1 for value in self._recent_positive if value)
+        total = len(self._recent_positive)
+        negative = total - positive
+        activation_required = self._activation_required_samples()
+        evidence = {
+            **classification.evidence,
+            "rolling_window_samples": self.config.rolling_window_samples,
+            "rolling_positive_samples": positive,
+            "rolling_negative_samples": negative,
+            "rolling_positive_ratio": _round_or_none(positive / total if total else None),
+            "rolling_ready": (
+                True
+                if self.config.rolling_window_samples <= 1
+                else total >= activation_required
+            ),
+            "activation_required_samples": activation_required,
+            "hint_key": self.hint.key if self.hint is not None else None,
+            "hint_confidence": self.hint.confidence if self.hint is not None else None,
+            "hint_used": self._hint_used,
+            "hint_disabled": self._hint_disabled,
+            "hint_contradiction_samples": self._hint_contradiction_total,
+            "hint_reason": (
+                "validated hint reduced activation warmup"
+                if self._hint_available()
+                else None
+            ),
+            "runtime_unaware": self.hint.runtime_unaware if self.hint is not None else None,
+        }
+        return replace(classification, evidence=_compact_evidence(evidence))
+
+    def _hint_available(self) -> bool:
+        return self.hint is not None and not self._hint_disabled
+
+    def _update_hint_contradiction(self, sample: GamePowerSample, positive: bool) -> None:
+        if not self._hint_available() or sample.appid != self.hint.context.appid:
+            return
+        if positive:
+            self._hint_contradiction_samples = 0
+            return
+        self._hint_contradiction_samples += 1
+        self._hint_contradiction_total += 1
+        threshold = max(1, self.config.session_hint_contradiction_samples)
+        if self._hint_contradiction_samples >= threshold:
+            self._hint_disabled = True
+
+    def _activation_required_samples(self) -> int:
+        if self._hint_available():
+            return max(1, self.config.hinted_activate_samples)
+        return max(1, self.config.activate_samples)
+
+    @property
+    def hint_was_used(self) -> bool:
+        return self._hint_used
+
+    @property
+    def hint_disabled(self) -> bool:
+        return self._hint_disabled
+
+    @property
+    def hint_contradiction_samples(self) -> int:
+        return self._hint_contradiction_total
 
 
 def _sample_core_pressure_high(sample: GamePowerSample, threshold: float) -> bool:
@@ -647,6 +1261,9 @@ class GamePowerGovernor:
         actuator: object,
         output_format: str = "text",
         config_provider: Callable[[GamePowerConfig], GamePowerConfig] | None = None,
+        hint_store: GamePowerHintStore | None = None,
+        hint_context_provider: Callable[[GamePowerSample], GamePowerHintContext | None]
+        | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.base_config = config
@@ -656,10 +1273,15 @@ class GamePowerGovernor:
         self.output_format = output_format
         self.config_provider = config_provider
         self.sleep = sleep
+        self.hint_store = hint_store
+        self.hint_context_provider = hint_context_provider
         self.controller = GamePowerController(config)
         self._started_s = time.monotonic()
         self._snapshot: object | None = None
         self._write_failed = False
+        self._active_context_key: str | None = None
+        self._active_context: GamePowerHintContext | None = None
+        self._session: GamePowerSessionSummary | None = None
 
     async def run_iterations(self, count: int) -> None:
         for _ in range(count):
@@ -670,11 +1292,12 @@ class GamePowerGovernor:
             while True:
                 await self.run_once()
         finally:
-            self.restore()
+            self.close()
 
     async def run_once(self) -> GamePowerDecision:
         self._refresh_config()
         if self.config.mode == GamePowerMode.OFF:
+            self._close_current_session()
             self.restore()
             await self.sleep(self.config.poll_s)
             sample = GamePowerSample(
@@ -695,8 +1318,10 @@ class GamePowerGovernor:
                 print(_format_decision(sample, decision), flush=True)
             return decision
         sample = await self.observer.sample()
+        self._prepare_context(sample)
         decision = self.controller.evaluate(sample)
-        self._apply_decision(decision)
+        outcome = self._apply_decision(decision)
+        self._record_session_sample(decision, outcome)
         elapsed_s = time.monotonic() - self._started_s
         if self.output_format == "jsonl":
             print(format_decision_jsonl(sample, decision, elapsed_s=elapsed_s), flush=True)
@@ -704,10 +1329,20 @@ class GamePowerGovernor:
             print(_format_decision(sample, decision), flush=True)
         return decision
 
-    def restore(self) -> None:
+    def restore(self) -> GamePowerActuatorOutcome:
         if self._snapshot is not None:
-            self.actuator.restore(self._snapshot)
+            try:
+                self.actuator.restore(self._snapshot)
+            except Exception as exc:
+                print(f"game-power: restore failed: {exc}", file=sys.stderr)
+                return GamePowerActuatorOutcome(True, False, str(exc))
             self._snapshot = None
+            return GamePowerActuatorOutcome(True, True, "restored")
+        return GamePowerActuatorOutcome(False, True, "no-snapshot")
+
+    def close(self) -> None:
+        self._close_current_session()
+        self.restore()
 
     def _refresh_config(self) -> None:
         if self.config_provider is None:
@@ -715,19 +1350,18 @@ class GamePowerGovernor:
         next_config = self.config_provider(self.base_config)
         if next_config == self.config:
             return
-        self.restore()
+        self._close_current_session()
         self.config = next_config
         self.controller = GamePowerController(next_config)
         self._write_failed = False
 
-    def _apply_decision(self, decision: GamePowerDecision) -> None:
+    def _apply_decision(self, decision: GamePowerDecision) -> GamePowerActuatorOutcome:
         if self._write_failed:
-            return
+            return GamePowerActuatorOutcome(False, False, "writes-disabled")
         if decision.action in {GamePowerAction.IDLE, GamePowerAction.OBSERVE_ONLY}:
-            return
+            return GamePowerActuatorOutcome(False, True, "no-write-action")
         if decision.action == GamePowerAction.RESTORE:
-            self.restore()
-            return
+            return self.restore()
         try:
             if self._snapshot is None:
                 self._snapshot = self.actuator.snapshot()
@@ -745,8 +1379,148 @@ class GamePowerGovernor:
                 f"{exc}",
                 file=sys.stderr,
             )
-            self.restore()
+            outcome = self.restore()
             self._write_failed = True
+            return outcome
+        return GamePowerActuatorOutcome(False, True, "applied")
+
+    def _prepare_context(self, sample: GamePowerSample) -> None:
+        context = self._sample_context(sample)
+        next_key = canonical_hint_key(context) if context is not None and context.complete else None
+        if next_key == self._active_context_key:
+            return
+        self._close_current_session()
+        self._active_context = context
+        self._active_context_key = next_key
+        hint = (
+            self.hint_store.get_hint(context)
+            if self.hint_store is not None and context is not None and context.complete
+            else None
+        )
+        self.controller = GamePowerController(self.config, hint=hint)
+        if context is not None:
+            self._session = GamePowerSessionSummary(
+                context=context,
+                started_s=time.monotonic() - self._started_s,
+            )
+
+    def _sample_context(self, sample: GamePowerSample) -> GamePowerHintContext | None:
+        if sample.appid is None:
+            return None
+        if self.config.target_appid is not None and sample.appid != self.config.target_appid:
+            return None
+        if self.hint_context_provider is None:
+            return None
+        return self.hint_context_provider(sample)
+
+    def _record_session_sample(
+        self,
+        decision: GamePowerDecision,
+        outcome: GamePowerActuatorOutcome,
+    ) -> None:
+        if self._session is None:
+            return
+        self._session.samples += 1
+        if self.controller.last_positive:
+            self._session.positive_samples += 1
+        else:
+            self._session.negative_samples += 1
+        if decision.action in {
+            GamePowerAction.GPU_PRIORITY_EPP,
+            GamePowerAction.GPU_PRIORITY_CPU_CAP,
+        }:
+            self._session.applied_samples += 1
+        if decision.action == GamePowerAction.GPU_PRIORITY_CPU_CAP:
+            self._session.cpu_cap_samples += 1
+        if decision.action == GamePowerAction.RESTORE:
+            self._session.restored_samples += 1
+        if self.controller.hint_was_used:
+            self._session.hint_was_used = True
+        if self.controller.hint_disabled:
+            self._session.hint_disabled = True
+            self._session.hint_disable_reason = "current-session-contradiction"
+        self._session.contradiction_samples = max(
+            self._session.contradiction_samples,
+            self.controller.hint_contradiction_samples,
+        )
+        if self._write_failed:
+            self._session.write_failed = True
+        if outcome.attempted:
+            self._session.restore_attempted = True
+            self._session.restore_succeeded = outcome.succeeded
+            self._session.restore_error = None if outcome.succeeded else outcome.reason
+
+    def _close_current_session(self) -> None:
+        if self._session is None:
+            self._active_context = None
+            self._active_context_key = None
+            return
+        if self._snapshot is not None:
+            outcome = self.restore()
+            self._session.restore_attempted = True
+            self._session.restore_succeeded = outcome.succeeded
+            self._session.restore_error = None if outcome.succeeded else outcome.reason
+        if self.config.mode == GamePowerMode.GPU_PRIORITY and self.hint_store is not None:
+            result = self.hint_store.record_session(self._session)
+        else:
+            result = GamePowerHintStoreResult(
+                cache_write_result=(
+                    "not_eligible"
+                    if self.config.mode != GamePowerMode.GPU_PRIORITY
+                    else "not_configured"
+                ),
+                promotion_skip_reason=(
+                    "mode_not_actuating"
+                    if self.config.mode != GamePowerMode.GPU_PRIORITY
+                    else "cache_not_configured"
+                ),
+            )
+        if self.output_format == "jsonl":
+            print(self._format_session_close_jsonl(self._session, result), flush=True)
+        self._session = None
+        self._active_context = None
+        self._active_context_key = None
+        self.controller = GamePowerController(self.config)
+
+    def _format_session_close_jsonl(
+        self,
+        summary: GamePowerSessionSummary,
+        result: GamePowerHintStoreResult,
+    ) -> str:
+        contradiction_limit = (
+            self.hint_store.policy.hint_contradiction_limit
+            if self.hint_store is not None
+            else GamePowerHintPolicy().hint_contradiction_limit
+        )
+        payload = {
+            "event": "game-power-session-close",
+            "appid": summary.context.appid,
+            "hint_key": canonical_hint_key(summary.context) if summary.context.complete else None,
+            "samples": summary.samples,
+            "positive_ratio": _round_or_none(
+                summary.positive_samples / summary.samples if summary.samples else None
+            ),
+            "hint_was_used": summary.hint_was_used,
+            "hint_disabled": summary.hint_disabled,
+            "hint_disable_reason": summary.hint_disable_reason,
+            "contradiction_samples": summary.contradiction_samples,
+            "hint_contradiction_count_before": result.hint_contradiction_count_before,
+            "hint_contradiction_count_after": result.hint_contradiction_count_after,
+            "hint_repair_delta": result.hint_repair_delta,
+            "hint_contradiction_limit_reached": (
+                result.hint_contradiction_count_after >= contradiction_limit
+                if result.hint_contradiction_count_after
+                else False
+            ),
+            "aggregate_updated": result.aggregate_updated,
+            "hint_promoted": result.hint_promoted,
+            "promotion_skip_reason": result.promotion_skip_reason,
+            "restore_attempted": summary.restore_attempted,
+            "restore_succeeded": summary.restore_succeeded,
+            "write_failed": summary.write_failed,
+            "cache_write_result": result.cache_write_result,
+        }
+        return json.dumps(_compact_evidence(payload), sort_keys=True)
 
 
 def _format_decision(sample: GamePowerSample, decision: GamePowerDecision) -> str:
@@ -1037,6 +1811,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps-target", type=_positive_finite_float)
     parser.add_argument("--fps-target-source")
     parser.add_argument("--fps-target-confidence")
+    parser.add_argument("--hint-cache")
     return parser
 
 
@@ -1094,12 +1869,13 @@ async def run_cli(args: argparse.Namespace) -> None:
         observer=observer,
         actuator=actuator,
         output_format=args.output_format,
+        hint_store=GamePowerHintStore(args.hint_cache) if args.hint_cache else None,
     )
     iterations = max(1, int(args.duration_s / config.poll_s))
     try:
         await governor.run_iterations(iterations)
     finally:
-        governor.restore()
+        governor.close()
 
 
 def main(argv: list[str] | None = None) -> None:

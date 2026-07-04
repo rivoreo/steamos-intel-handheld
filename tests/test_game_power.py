@@ -235,6 +235,90 @@ def test_controller_waits_for_hysteresis_before_applying_gpu_priority():
     assert second.action == GamePowerAction.GPU_PRIORITY_EPP
 
 
+def test_controller_rolling_majority_blocks_activation_after_two_recent_positives():
+    config = GamePowerConfig(
+        mode=GamePowerMode.GPU_PRIORITY,
+        activate_samples=2,
+        rolling_window_samples=4,
+    )
+    controller = GamePowerController(config)
+
+    decisions = [
+        controller.evaluate(make_sample(appid=None)),
+        controller.evaluate(make_sample(appid=None)),
+        controller.evaluate(make_sample()),
+        controller.evaluate(make_sample()),
+    ]
+
+    assert [decision.action for decision in decisions] == [
+        GamePowerAction.OBSERVE_ONLY,
+        GamePowerAction.OBSERVE_ONLY,
+        GamePowerAction.OBSERVE_ONLY,
+        GamePowerAction.OBSERVE_ONLY,
+    ]
+    assert decisions[-1].reason == "waiting for rolling activation evidence"
+
+
+def test_active_controller_rolling_majority_blocks_restore_after_two_recent_negatives():
+    config = GamePowerConfig(
+        mode=GamePowerMode.GPU_PRIORITY,
+        activate_samples=1,
+        restore_samples=2,
+        rolling_window_samples=5,
+    )
+    controller = GamePowerController(config)
+
+    decisions = [
+        controller.evaluate(make_sample()),
+        controller.evaluate(make_sample()),
+        controller.evaluate(make_sample()),
+        controller.evaluate(make_sample(appid=None)),
+        controller.evaluate(make_sample(appid=None)),
+    ]
+
+    assert decisions[0].action == GamePowerAction.GPU_PRIORITY_EPP
+    assert decisions[-1].action == GamePowerAction.OBSERVE_ONLY
+    assert decisions[-1].reason == "waiting for rolling restore evidence"
+
+
+def test_rolling_window_zero_and_one_preserve_legacy_hysteresis():
+    for rolling_window_samples in (0, 1):
+        controller = GamePowerController(
+            GamePowerConfig(
+                mode=GamePowerMode.GPU_PRIORITY,
+                activate_samples=2,
+                rolling_window_samples=rolling_window_samples,
+            )
+        )
+
+        decisions = [
+            controller.evaluate(make_sample(appid=None)),
+            controller.evaluate(make_sample(appid=None)),
+            controller.evaluate(make_sample()),
+            controller.evaluate(make_sample()),
+        ]
+
+        assert decisions[-1].action == GamePowerAction.GPU_PRIORITY_EPP
+
+
+def test_controller_classification_evidence_includes_post_update_rolling_state():
+    controller = GamePowerController(
+        GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY, rolling_window_samples=4)
+    )
+
+    first = controller.evaluate(make_sample())
+    second = controller.evaluate(make_sample())
+
+    assert first.classification is not None
+    assert first.classification.evidence["rolling_window_samples"] == 4
+    assert first.classification.evidence["rolling_positive_samples"] == 1
+    assert first.classification.evidence["rolling_negative_samples"] == 0
+    assert first.classification.evidence["rolling_ready"] is False
+    assert second.classification is not None
+    assert second.classification.evidence["rolling_positive_samples"] == 2
+    assert second.classification.evidence["rolling_ready"] is True
+
+
 def test_controller_restores_after_consecutive_invalid_samples():
     controller = GamePowerController(GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY))
     controller.evaluate(make_sample())
@@ -294,7 +378,7 @@ def test_controller_does_not_restore_cpu_cap_only_because_cap_lowered_core_share
     ]
 
 
-def test_controller_still_requires_core_pressure_before_initial_activation():
+def test_controller_allows_initial_epp_activation_without_high_core_share():
     config = GamePowerConfig(
         mode=GamePowerMode.GPU_PRIORITY,
         cpu_cap_enabled=True,
@@ -306,7 +390,7 @@ def test_controller_still_requires_core_pressure_before_initial_activation():
     second = controller.evaluate(make_sample(core_w=6.0, package_w=22.0, uncore_w=9.4))
 
     assert first.action == GamePowerAction.OBSERVE_ONLY
-    assert second.action == GamePowerAction.OBSERVE_ONLY
+    assert second.action == GamePowerAction.GPU_PRIORITY_EPP
 
 
 class FakeObserver:
@@ -337,6 +421,361 @@ class FailingActuator(RecordingActuator):
     def apply(self, *, epp, pcore_max_khz=None, ecore_max_khz=None):
         self.events.append(("apply-failed", epp, pcore_max_khz, ecore_max_khz))
         raise OSError("simulated sysfs write failure")
+
+
+class RestoreFailingActuator(RecordingActuator):
+    def restore(self, snapshot):
+        self.events.append(("restore-failed", snapshot))
+        raise OSError("simulated restore failure")
+
+
+def make_hint_context(**overrides):
+    values = {
+        "appid": "1091500",
+        "pl1_w": 22,
+        "power_source": "battery",
+        "fps_target": "60",
+        "topology_signature": "p|e|with|delimiters",
+        "os_signature": "kernel=6.16;driver=xe",
+        "runtime_signature": "unavailable",
+        "runtime_signature_known": False,
+        "policy_version": "game-power-sampling-v1",
+        "complete": True,
+    }
+    values.update(overrides)
+    return game_power.GamePowerHintContext(**values)
+
+
+def make_session_summary(context=None, **overrides):
+    values = {
+        "context": context or make_hint_context(),
+        "started_s": 1.0,
+        "samples": 1,
+        "positive_samples": 1,
+        "negative_samples": 0,
+        "applied_samples": 1,
+        "restored_samples": 1,
+        "cpu_cap_samples": 0,
+        "contradiction_samples": 0,
+        "hint_was_used": False,
+        "hint_disabled": False,
+        "hint_disable_reason": None,
+        "write_failed": False,
+        "restore_attempted": True,
+        "restore_succeeded": True,
+        "restore_error": None,
+    }
+    values.update(overrides)
+    return game_power.GamePowerSessionSummary(**values)
+
+
+def test_hint_context_key_uses_canonical_json_hash_and_rejects_mismatch():
+    context = make_hint_context()
+    same_context = make_hint_context()
+    changed_context = make_hint_context(topology_signature="p|different")
+
+    key = game_power.canonical_hint_key(context)
+
+    assert key.startswith("game-power-context-v1:")
+    assert len(key.removeprefix("game-power-context-v1:")) == 64
+    assert key == game_power.canonical_hint_key(same_context)
+    assert key != game_power.canonical_hint_key(changed_context)
+
+
+def test_pl1_bucket_rounding_is_deterministic():
+    assert game_power.pl1_bucket_w(21.49) == 21
+    assert game_power.pl1_bucket_w(21.5) == 22
+    assert game_power.pl1_bucket_w(22.01) == 22
+    assert game_power.pl1_bucket_w(0.49) is None
+    assert game_power.pl1_bucket_w(None) is None
+
+
+def test_hint_store_promotes_after_two_clean_matching_sessions(tmp_path):
+    context = make_hint_context()
+    policy = game_power.GamePowerHintPolicy(
+        min_hint_sessions=2,
+        min_hint_samples=2,
+        min_hint_positive_ratio=0.50,
+    )
+    store = game_power.GamePowerHintStore(tmp_path / "hints.json", policy=policy)
+
+    first = store.record_session(make_session_summary(context))
+    second = store.record_session(make_session_summary(context))
+
+    assert first.aggregate_updated is True
+    assert first.hint_promoted is False
+    assert second.aggregate_updated is True
+    assert second.hint_promoted is True
+    assert store.get_hint(context) is not None
+
+
+def test_hint_store_ignores_oversized_invalid_and_malformed_cache(tmp_path):
+    oversized = tmp_path / "oversized.json"
+    oversized.write_text("x" * 64)
+    small_policy = game_power.GamePowerHintPolicy(max_hint_cache_bytes=16)
+
+    oversized_store = game_power.GamePowerHintStore(oversized, policy=small_policy)
+
+    assert oversized_store.load_error == "cache_over_budget"
+    assert oversized_store.get_hint(make_hint_context()) is None
+
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("{not json")
+    invalid_store = game_power.GamePowerHintStore(invalid)
+
+    assert invalid_store.load_error == "invalid_json"
+    assert invalid.read_text() == "{not json"
+
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "policy_version": "game-power-sampling-v1",
+                "aggregates": {"bad": {"context": {"appid": "1091500"}}},
+                "entries": {"bad": {"preferred_mode": "gpu-priority"}},
+            }
+        )
+    )
+    malformed_store = game_power.GamePowerHintStore(malformed)
+
+    assert malformed_store.get_hint(make_hint_context()) is None
+
+
+def test_hint_store_prunes_oldest_records_and_respects_entry_limit(tmp_path):
+    policy = game_power.GamePowerHintPolicy(
+        min_hint_sessions=1,
+        min_hint_samples=1,
+        min_hint_positive_ratio=0.50,
+        max_hint_entries=1,
+        max_aggregate_records=1,
+    )
+    store = game_power.GamePowerHintStore(tmp_path / "hints.json", policy=policy)
+    old_context = make_hint_context(appid="111")
+    new_context = make_hint_context(appid="222")
+
+    store.record_session(make_session_summary(old_context, started_s=1.0))
+    store.record_session(make_session_summary(new_context, started_s=2.0))
+
+    assert store.get_hint(old_context) is None
+    assert store.get_hint(new_context) is not None
+
+
+def test_matching_hint_reduces_warmup_but_requires_current_positive_sample(tmp_path):
+    context = make_hint_context()
+    store = game_power.GamePowerHintStore(
+        tmp_path / "hints.json",
+        policy=game_power.GamePowerHintPolicy(
+            min_hint_sessions=1,
+            min_hint_samples=1,
+            min_hint_positive_ratio=0.50,
+        ),
+    )
+    store.record_session(make_session_summary(context))
+    hint = store.get_hint(context)
+    assert hint is not None
+    controller = GamePowerController(
+        GamePowerConfig(
+            mode=GamePowerMode.GPU_PRIORITY,
+            activate_samples=2,
+            hinted_activate_samples=0,
+            rolling_window_samples=1,
+        ),
+        hint=hint,
+    )
+
+    negative = controller.evaluate(make_sample(appid=None))
+    positive = controller.evaluate(make_sample())
+
+    assert negative.action == GamePowerAction.OBSERVE_ONLY
+    assert positive.action == GamePowerAction.GPU_PRIORITY_EPP
+    assert positive.reason == "validated hint reduced activation warmup"
+    assert positive.classification is not None
+    assert positive.classification.evidence["hint_used"] is True
+    assert positive.classification.evidence["activation_required_samples"] == 1
+
+
+def test_controller_disables_hint_after_same_game_contradiction_samples(tmp_path):
+    context = make_hint_context()
+    store = game_power.GamePowerHintStore(
+        tmp_path / "hints.json",
+        policy=game_power.GamePowerHintPolicy(
+            min_hint_sessions=1,
+            min_hint_samples=1,
+            min_hint_positive_ratio=0.50,
+        ),
+    )
+    store.record_session(make_session_summary(context))
+    hint = store.get_hint(context)
+    assert hint is not None
+    controller = GamePowerController(
+        GamePowerConfig(
+            mode=GamePowerMode.GPU_PRIORITY,
+            activate_samples=2,
+            hinted_activate_samples=1,
+            rolling_window_samples=1,
+            session_hint_contradiction_samples=2,
+        ),
+        hint=hint,
+    )
+
+    controller.evaluate(make_sample(package_w=3.0))
+    second = controller.evaluate(make_sample(package_w=3.0))
+    positive_after_disable = controller.evaluate(make_sample())
+
+    assert controller.hint_disabled is True
+    assert controller.hint_contradiction_samples == 2
+    assert second.classification is not None
+    assert second.classification.evidence["hint_disabled"] is True
+    assert second.classification.evidence["hint_contradiction_samples"] == 2
+    assert positive_after_disable.action == GamePowerAction.OBSERVE_ONLY
+    assert positive_after_disable.reason == "waiting for activation hysteresis"
+    assert positive_after_disable.classification is not None
+    assert positive_after_disable.classification.evidence["activation_required_samples"] == 2
+
+
+def test_contradicted_hinted_session_cannot_learn_or_repair(tmp_path):
+    context = make_hint_context()
+    store = game_power.GamePowerHintStore(
+        tmp_path / "hints.json",
+        policy=game_power.GamePowerHintPolicy(
+            min_hint_sessions=1,
+            min_hint_samples=1,
+            min_hint_positive_ratio=0.50,
+        ),
+    )
+
+    result = store.record_session(
+        make_session_summary(
+            context,
+            contradiction_samples=1,
+            hint_was_used=True,
+            hint_disabled=True,
+            hint_disable_reason="current-session-contradiction",
+        )
+    )
+
+    assert result.aggregate_updated is False
+    assert result.cache_write_result == "not_eligible"
+    assert result.promotion_skip_reason == "hint_contradicted"
+    assert store.get_hint(context) is None
+
+
+def test_hint_store_records_contradiction_count_against_existing_hint(tmp_path):
+    context = make_hint_context()
+    store = game_power.GamePowerHintStore(
+        tmp_path / "hints.json",
+        policy=game_power.GamePowerHintPolicy(
+            min_hint_sessions=1,
+            min_hint_samples=1,
+            min_hint_positive_ratio=0.50,
+            hint_contradiction_limit=1,
+        ),
+    )
+    store.record_session(make_session_summary(context))
+    assert store.get_hint(context) is not None
+
+    result = store.record_session(
+        make_session_summary(
+            context,
+            positive_samples=0,
+            negative_samples=2,
+            applied_samples=0,
+            restored_samples=0,
+            contradiction_samples=2,
+            hint_was_used=True,
+            hint_disabled=True,
+            hint_disable_reason="current-session-contradiction",
+            restore_attempted=False,
+            restore_succeeded=None,
+        )
+    )
+
+    assert result.aggregate_updated is False
+    assert result.cache_write_result == "written"
+    assert result.promotion_skip_reason == "hint_contradicted"
+    assert result.hint_contradiction_count_before == 0
+    assert result.hint_contradiction_count_after == 1
+    assert store.get_hint(context) is None
+
+
+def test_context_change_restores_before_aggregate_update(tmp_path):
+    context_a = make_hint_context(appid="1091500")
+    context_b = make_hint_context(appid="222")
+    contexts = [context_a, context_b]
+
+    def context_provider(_sample):
+        return contexts.pop(0)
+
+    store = game_power.GamePowerHintStore(
+        tmp_path / "hints.json",
+        policy=game_power.GamePowerHintPolicy(
+            min_hint_sessions=1,
+            min_hint_samples=1,
+            min_hint_positive_ratio=0.50,
+        ),
+    )
+    observer = FakeObserver([make_sample(appid="1091500"), make_sample(appid="222")])
+    actuator = RestoreFailingActuator()
+    governor = GamePowerGovernor(
+        config=GamePowerConfig(
+            mode=GamePowerMode.GPU_PRIORITY,
+            activate_samples=1,
+            rolling_window_samples=1,
+        ),
+        observer=observer,
+        actuator=actuator,
+        hint_store=store,
+        hint_context_provider=context_provider,
+    )
+
+    import asyncio
+
+    asyncio.run(governor.run_iterations(2))
+
+    assert ("restore-failed", actuator.snapshot_value) in actuator.events
+    assert store.get_hint(context_a) is None
+
+
+def test_session_close_jsonl_emits_bounded_persistence_outcome(tmp_path, capsys):
+    context = make_hint_context()
+    store = game_power.GamePowerHintStore(
+        tmp_path / "hints.json",
+        policy=game_power.GamePowerHintPolicy(
+            min_hint_sessions=1,
+            min_hint_samples=1,
+            min_hint_positive_ratio=0.50,
+        ),
+    )
+    observer = FakeObserver([make_sample(), make_sample(appid=None)])
+    governor = GamePowerGovernor(
+        config=GamePowerConfig(
+            mode=GamePowerMode.GPU_PRIORITY,
+            activate_samples=1,
+            rolling_window_samples=1,
+        ),
+        observer=observer,
+        actuator=RecordingActuator(),
+        output_format="jsonl",
+        hint_store=store,
+        hint_context_provider=lambda sample: context if sample.appid else None,
+    )
+
+    import asyncio
+
+    asyncio.run(governor.run_iterations(2))
+
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    close_rows = [row for row in rows if row.get("event") == "game-power-session-close"]
+
+    assert len(close_rows) == 1
+    assert close_rows[0]["appid"] == "1091500"
+    assert close_rows[0]["aggregate_updated"] is True
+    assert close_rows[0]["hint_promoted"] is True
+    assert close_rows[0]["cache_write_result"] == "written"
+    assert "contradiction_samples" in close_rows[0]
+    assert "restore_succeeded" in close_rows[0]
+    assert "pressure" not in close_rows[0]
 
 
 def test_build_parser_defaults_game_power_cli_to_observe_for_standalone_probe():
@@ -454,7 +893,7 @@ def test_format_decision_jsonl_emits_classification_pressure_and_target_schema()
     assert row["pressure"]["io"] == []
 
 
-def test_classification_uses_controller_active_state_for_core_share_gate():
+def test_low_core_share_still_allows_low_risk_epp_gpu_priority():
     config = GamePowerConfig(
         mode=GamePowerMode.GPU_PRIORITY,
         cpu_cap_enabled=True,
@@ -464,12 +903,17 @@ def test_classification_uses_controller_active_state_for_core_share_gate():
 
     inactive = classify_game_power_sample(config, sample, controller_active=False)
     active = classify_game_power_sample(config, sample, controller_active=True)
-    decision = GamePowerController(config).evaluate(sample)
+    controller = GamePowerController(config)
+    decision = controller.evaluate(sample)
+    second = controller.evaluate(sample)
 
-    assert inactive.primary == "insufficient-cpu-contention-evidence"
+    assert inactive.primary == "gpu-package-bound"
     assert active.primary == "gpu-package-bound"
     assert decision.action == GamePowerAction.OBSERVE_ONLY
-    assert decision.classification == inactive
+    assert second.action == GamePowerAction.GPU_PRIORITY_EPP
+    assert decision.classification is not None
+    assert decision.classification.primary == inactive.primary
+    assert decision.classification.evidence["controller_active"] is False
 
 
 def test_pressure_parser_preserves_missing_full_as_none():

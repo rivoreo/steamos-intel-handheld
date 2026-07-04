@@ -85,6 +85,28 @@ def test_parser_configures_game_power_defaults_gpu_priority_with_balanced_cpu_ca
     assert config.cpu_cap_core_share_threshold == 0.30
     assert config.target_appid is None
     assert power_control.build_game_power_governor(args) is not None
+    assert args.game_power_hint_cache == "/var/lib/steamos-intel-handheld/game-power-hints.json"
+
+
+def test_build_game_power_governor_wires_power_source_context_provider(tmp_path):
+    args = power_control.build_parser().parse_args(
+        [
+            "serve",
+            "--sysfs-root",
+            str(tmp_path / "sys"),
+            "--game-power-hint-cache",
+            str(tmp_path / "hints.json"),
+            "--power-source-override",
+            "battery",
+        ]
+    )
+    backend = power_control.build_backend(args)
+
+    governor = power_control.build_game_power_governor(args, backend=backend)
+
+    assert governor is not None
+    assert governor.hint_store is not None
+    assert governor.hint_context_provider is not None
 
 
 def test_parser_configures_game_power_gpu_priority_options():
