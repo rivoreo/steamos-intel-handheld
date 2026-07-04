@@ -19,6 +19,10 @@ tar -C "$repo_root" -czf - \
   decky/steamos-intel-handheld-ec/dist/index.js \
   decky/steamos-intel-handheld-ec/main.py \
   decky/steamos-intel-handheld-ec/plugin.json \
+  decky/steamos-intel-handheld-game-power/README.md \
+  decky/steamos-intel-handheld-game-power/dist/index.js \
+  decky/steamos-intel-handheld-game-power/main.py \
+  decky/steamos-intel-handheld-game-power/plugin.json \
   | ssh "$target" "
   set -euo pipefail
   rm -rf '$remote_tmp'
@@ -80,14 +84,16 @@ WRAPPER
 
   report_decky_loader_status() {
     plugin_loader=/home/deck/homebrew/services/PluginLoader
-    plugin_dir=/home/deck/homebrew/plugins/steamos-intel-handheld-ec
+    charge_plugin_dir=/home/deck/homebrew/plugins/steamos-intel-handheld-ec
+    game_power_plugin_dir=/home/deck/homebrew/plugins/steamos-intel-handheld-game-power
 
     if [ -x \"\$plugin_loader\" ]; then
-      echo \"Decky Loader detected. Charge Limit plugin files are installed at \$plugin_dir.\"
+      echo \"Decky Loader detected. Charge Limit plugin files are installed at \$charge_plugin_dir.\"
+      echo \"Game Power plugin files are installed at \$game_power_plugin_dir.\"
       echo \"If the panel is not visible, restart Steam or Decky Loader.\"
     else
       echo \"Decky Loader not detected. Backend service and CLI are installed.\" >&2
-      echo \"Steam UI Charge Limit panel requires Decky Loader; install Decky Loader first, then rerun scripts/install-on-device.sh.\" >&2
+      echo \"Steam UI Charge Limit and Game Power panels require Decky Loader; install Decky Loader first, then rerun scripts/install-on-device.sh.\" >&2
     fi
 
     return 0
@@ -117,6 +123,14 @@ WRAPPER
   install -m 0644 \"\$decky_src/main.py\" \"\$decky_dst/main.py\"
   install -m 0644 \"\$decky_src/dist/index.js\" \"\$decky_dst/dist/index.js\"
   install -m 0644 \"\$decky_src/README.md\" \"\$decky_dst/README.md\"
+
+  game_power_decky_src='$remote_tmp/decky/steamos-intel-handheld-game-power'
+  game_power_decky_dst=/home/deck/homebrew/plugins/steamos-intel-handheld-game-power
+  install -d -m 0755 \"\$game_power_decky_dst/dist\"
+  install -m 0644 \"\$game_power_decky_src/plugin.json\" \"\$game_power_decky_dst/plugin.json\"
+  install -m 0644 \"\$game_power_decky_src/main.py\" \"\$game_power_decky_dst/main.py\"
+  install -m 0644 \"\$game_power_decky_src/dist/index.js\" \"\$game_power_decky_dst/dist/index.js\"
+  install -m 0644 \"\$game_power_decky_src/README.md\" \"\$game_power_decky_dst/README.md\"
   report_decky_loader_status || true
 
   artifact_root=/opt/steamos-intel-handheld/share/etc-artifacts

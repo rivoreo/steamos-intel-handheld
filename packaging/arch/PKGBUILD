@@ -72,4 +72,11 @@ package() {
   install -Dm0644 "$decky_src/main.py" "$decky_dst/main.py"
   install -Dm0644 "$decky_src/dist/index.js" "$decky_dst/dist/index.js"
   install -Dm0644 "$decky_src/README.md" "$decky_dst/README.md"
+
+  game_power_decky_src="decky/steamos-intel-handheld-game-power"
+  game_power_decky_dst="$pkgdir/home/deck/homebrew/plugins/steamos-intel-handheld-game-power"
+  install -Dm0644 "$game_power_decky_src/plugin.json" "$game_power_decky_dst/plugin.json"
+  install -Dm0644 "$game_power_decky_src/main.py" "$game_power_decky_dst/main.py"
+  install -Dm0644 "$game_power_decky_src/dist/index.js" "$game_power_decky_dst/dist/index.js"
+  install -Dm0644 "$game_power_decky_src/README.md" "$game_power_decky_dst/README.md"
 }

@@ -371,6 +371,8 @@ a generic telemetry-driven governor rather than a per-game table.
 - `data/` - systemd, D-Bus, SteamOS Manager, and optional gamescope integration
   files.
 - `decky/` - Decky Loader plugin assets packaged for the charge-limit UI.
+- `decky/steamos-intel-handheld-game-power/` - Decky Loader plugin assets for
+  the safe game-power governor panel.
 - `external/MangoHud/` - MangoHud fork branch used for the Intel RAPL GPU
   power patch; keep `upstream` pointed at flightlessmango for mainline merges.
 - `scripts/` - real-device install, verification, and inventory harness.

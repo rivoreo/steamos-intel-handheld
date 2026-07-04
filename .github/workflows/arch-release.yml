@@ -281,6 +281,9 @@ jobs:
           contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-ec/plugin.json"
           contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-ec/main.py"
           contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-ec/dist/index.js"
+          contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/plugin.json"
+          contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/main.py"
+          contains "$main_pkg" "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/dist/index.js"
           contains "$main_pkg" ".INSTALL"
           tar -xOf "$main_pkg" .INSTALL | grep -F "Decky Loader not detected" >/dev/null
           tar -xOf "$main_pkg" .INSTALL | grep -F "gamescope display profile and session hooks are installed" >/dev/null

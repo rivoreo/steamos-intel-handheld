@@ -222,6 +222,30 @@ def test_manual_installer_installs_decky_charge_limit_plugin():
     assert "Decky Loader not detected" in script
 
 
+def test_manual_installer_installs_decky_game_power_plugin():
+    script = (ROOT / "scripts/install-on-device.sh").read_text()
+
+    assert "decky/steamos-intel-handheld-game-power/plugin.json" in script
+    assert "/home/deck/homebrew/plugins/steamos-intel-handheld-game-power" in script
+    assert "game_power_decky_src" in script
+    assert "game_power_decky_dst" in script
+    assert "game_power_decky_src/dist/index.js" in script
+    assert "Game Power plugin files are installed" in script
+
+
+def test_arch_package_installs_decky_game_power_plugin():
+    pkgbuild = (ROOT / "packaging/arch/PKGBUILD").read_text()
+
+    assert 'game_power_decky_src="decky/steamos-intel-handheld-game-power"' in pkgbuild
+    assert (
+        'game_power_decky_dst="$pkgdir/home/deck/homebrew/plugins/'
+        'steamos-intel-handheld-game-power"'
+    ) in pkgbuild
+    assert '"$game_power_decky_src/plugin.json"' in pkgbuild
+    assert '"$game_power_decky_src/main.py"' in pkgbuild
+    assert '"$game_power_decky_src/dist/index.js"' in pkgbuild
+
+
 def test_gamescope_display_helper_sets_runtime_composite_force():
     helper = (ROOT / "data/bin/steamos-intel-handheld-gamescope-display").read_text()
 

@@ -73,6 +73,9 @@ tar -tf "$main_pkg" | grep -Fx "etc/gamescope/scripts/00-steamos-intel-handheld/
 tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-ec/plugin.json" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-ec/main.py" >/dev/null
 tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-ec/dist/index.js" >/dev/null
+tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/plugin.json" >/dev/null
+tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/main.py" >/dev/null
+tar -tf "$main_pkg" | grep -Fx "home/deck/homebrew/plugins/steamos-intel-handheld-game-power/dist/index.js" >/dev/null
 tar -tf "$main_pkg" | grep -Fx ".INSTALL" >/dev/null
 tar -xOf "$main_pkg" .INSTALL | grep -F "Decky Loader not detected" >/dev/null
 tar -xOf "$main_pkg" .INSTALL | grep -F "gamescope display profile and session hooks are installed" >/dev/null

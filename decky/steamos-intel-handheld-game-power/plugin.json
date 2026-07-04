@@ -1,0 +1,10 @@
+{
+  "name": "Game Power",
+  "author": "Rivoreo",
+  "api_version": 1,
+  "flags": ["root"],
+  "publish": {
+    "tags": ["utility", "performance", "gaming"]
+  },
+  "main": "dist/index.js"
+}

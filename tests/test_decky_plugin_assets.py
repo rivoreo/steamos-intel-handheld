@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "decky" / "steamos-intel-handheld-ec"
+GAME_POWER_PLUGIN = ROOT / "decky" / "steamos-intel-handheld-game-power"
 
 
 def test_decky_plugin_has_required_manifest_files():
@@ -66,3 +67,72 @@ def test_decky_frontend_contains_safe_presets_and_apply_copy():
     assert "Unknown" not in frontend
     assert "EC status unavailable" not in frontend
     assert "Intel Handheld EC" not in frontend
+
+
+def test_game_power_decky_plugin_has_separate_required_files():
+    assert GAME_POWER_PLUGIN != PLUGIN
+    assert (GAME_POWER_PLUGIN / "plugin.json").is_file()
+    assert (GAME_POWER_PLUGIN / "package.json").is_file()
+    assert (GAME_POWER_PLUGIN / "rollup.config.js").is_file()
+    assert not (GAME_POWER_PLUGIN / "webpack.config.js").exists()
+    assert (GAME_POWER_PLUGIN / "main.py").is_file()
+    assert (GAME_POWER_PLUGIN / "src" / "index.tsx").is_file()
+    assert (GAME_POWER_PLUGIN / "dist" / "index.js").is_file()
+
+
+def test_game_power_decky_manifest_names_game_power_panel():
+    manifest = json.loads((GAME_POWER_PLUGIN / "plugin.json").read_text())
+
+    assert manifest["name"] == "Game Power"
+    assert manifest["api_version"] == 1
+    assert "root" in manifest["flags"]
+    assert manifest["main"] == "dist/index.js"
+    assert "performance" in manifest["publish"]["tags"]
+    assert "charge-limit" not in manifest["publish"]["tags"]
+
+
+def test_game_power_decky_frontend_exposes_intent_not_raw_policy_knobs():
+    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
+
+    assert "definePlugin" in frontend
+    assert "callable" in frontend
+    assert '"get_status"' in frontend
+    assert '"sample_once"' in frontend
+    assert '"set_mode"' in frontend
+    assert '"restore_defaults"' in frontend
+    assert "Automatic" in frontend
+    assert "Observe" in frontend
+    assert "Off" in frontend
+    assert "遊戲電力" in frontend
+    assert "自動" in frontend
+    for forbidden in (
+        "P-core",
+        "E-core",
+        "pcore",
+        "ecore",
+        "frequency",
+        "freq",
+        "threshold",
+        "uclamp",
+        "CPUWeight",
+        "PL2",
+        "Tau",
+        "affinity",
+    ):
+        assert forbidden not in frontend
+
+
+def test_game_power_decky_backend_exposes_safe_mode_api():
+    backend = (GAME_POWER_PLUGIN / "main.py").read_text()
+
+    assert "class Plugin" in backend
+    assert "async def get_status" in backend
+    assert "async def sample_once" in backend
+    assert "async def set_mode" in backend
+    assert "async def restore_defaults" in backend
+    assert "steamos-intel-handheld-power-control.service" in backend
+    assert "70-game-power-decky.conf" in backend
+    assert "--game-power-pcore-max-mhz" in backend
+    assert "--game-power-ecore-max-mhz" in backend
+    assert "/usr/bin/python3" not in backend
+    assert "LD_LIBRARY_PATH" not in backend
