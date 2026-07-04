@@ -101,16 +101,16 @@ def test_game_power_decky_frontend_exposes_intent_not_raw_policy_knobs():
     assert '"sample_once"' in frontend
     assert '"set_mode"' in frontend
     assert '"restore_defaults"' in frontend
-    assert "Balanced power" in frontend
-    assert "Monitor only" in frontend
-    assert "Power scheduler off" in frontend
+    assert "Balance CPU/GPU" in frontend
+    assert "View data only" in frontend
+    assert "Turn scheduler off" in frontend
     assert "遊戲電力" in frontend
-    assert "平衡調度" in frontend
-    assert "只監測" in frontend
-    assert "停用調度" in frontend
-    assert "平衡調度" in bundled
-    assert "只監測" in bundled
-    assert "停用調度" in bundled
+    assert "平衡 CPU/GPU" in frontend
+    assert "只看數據" in frontend
+    assert "完全停用" in frontend
+    assert "平衡 CPU/GPU" in bundled
+    assert "只看數據" in bundled
+    assert "完全停用" in bundled
     assert "模式: automatic" not in frontend
     assert "動作: observe-only" not in frontend
     assert "模式: automatic" not in bundled
@@ -130,6 +130,35 @@ def test_game_power_decky_frontend_exposes_intent_not_raw_policy_knobs():
         "affinity",
     ):
         assert forbidden not in frontend
+
+
+def test_game_power_decky_mode_copy_explains_control_state_differences():
+    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
+    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
+
+    required_copy = (
+        "Balances CPU and GPU power while a game is running.",
+        "Keeps sampling and decisions visible without changing power settings.",
+        "Stops game-power sampling and leaves power behavior to the system.",
+        "遊戲執行時自動平衡 CPU 與 GPU 功耗。",
+        "保留採樣與判斷，只顯示數據，不改變功耗設定。",
+        "停止遊戲電力採樣與調度，交回系統處理。",
+    )
+    ambiguous_copy = (
+        "Monitor only",
+        "Power scheduler off",
+        "只監測",
+        "停用調度",
+        "只讀取遊戲電力資料，不改變功耗行為。",
+        "不接管 CPU/GPU 功耗，交回系統處理。",
+    )
+
+    for text in required_copy:
+        assert text in frontend
+        assert text in bundled
+    for text in ambiguous_copy:
+        assert text not in frontend
+        assert text not in bundled
 
 
 def test_game_power_decky_backend_exposes_safe_mode_api():
