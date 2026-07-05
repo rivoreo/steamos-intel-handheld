@@ -230,6 +230,19 @@ steamos-intel-handheld-game-power-control set-mode observe --source decky --json
 steamos-intel-handheld-game-power-control restore-defaults --json
 ```
 
+If the runtime control file is corrupt, names an unsupported mode, or contains
+an invalid manual FPS target override, status reports the override as `invalid`
+and the daemon fails closed for that runtime overlay instead of silently
+falling back to the packaged automatic policy.
+
+V7 exposes local evidence readiness so the Decky panel can distinguish
+target/frame runtime evidence from power-signal-only balancing. The UI only
+shows local target/frame evidence as ready when runtime control is healthy, the
+mode is automatic, the FPS target is finite and known, and high-confidence
+frame data has enough samples. Background-shaping readiness remains an advisory
+profiler output with `write_policy=disabled` until guarded device A/B runs pass
+restore, pacing, and power-saving gates.
+
 Use the standalone validation CLI when checking a specific game scene:
 
 ```bash
@@ -400,9 +413,10 @@ appeared across the included runs and their median migration/runqueue-wait
 scores. It also emits an `affinity_experiment_plan`: an observe-only next-run
 plan that becomes `ready-for-guarded-experiment` only when repeated controlled
 runs, restore checks, `restore-affinity.json` coverage, policy comparison, and
-stable foreground role evidence all pass. The plan does not apply affinity; it
-identifies whether a future soft compact preferred-CPU-set experiment is
-justified. When sibling `background-shaping.json` files are present, aggregate
+stable foreground role evidence all pass. The plan itself does not apply
+affinity; it identifies whether a guarded hard compact foreground-role affinity
+experiment is justified and records the role key plus compact CPU mask for a
+future profile run. When sibling `background-shaping.json` files are present, aggregate
 also emits `baseline_background_shaping_candidates`,
 `candidate_background_shaping_candidates`, and
 `background_shaping_experiment_plan`. That plan remains write-disabled and only
@@ -410,6 +424,9 @@ identifies whether a future guarded background-helper `cpu.weight` or
 `cpu.uclamp.max` soft-cap experiment is justified. A background candidate is not
 eligible for that plan unless its own cgroup appears in `restore-affinity.json`
 with CPU-controller restore files in every run where the candidate was observed.
+The plan also includes machine-readable readiness booleans and
+`blocking_reason_codes`, so missing restore coverage, insufficient candidate
+stability, and failed controlled-run gates are distinguishable.
 When those gates pass, the plan includes a dry-run write ladder for the next
 A/B run. The ladder records the candidate cgroup, observed restore values, and
 one-control-per-run proposals such as `cpu.weight=80` or
@@ -422,6 +439,39 @@ systemd-managed user `.service` cgroups, `cpu.weight` is applied through
 `systemctl --user set-property --runtime CPUWeight=...` instead of by directly
 writing the transient cgroup file, so restore follows systemd's own controller
 lifecycle.
+
+The device profiler also exposes a guarded foreground affinity candidate policy,
+`gpu-priority-affinity`. This is a two-phase profiler workflow, not a daemon or
+Decky runtime switch:
+
+```bash
+PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
+PROFILE_GAME_POWER_POLICIES="off gpu-priority off" \
+PROFILE_GAME_POWER_REPEATS=3 \
+scripts/profile-game-power-on-device.sh root@10.100.0.19
+
+.venv/bin/python -m steamos_intel_handheld.game_power_profile aggregate \
+  --root .cache/game-power/profiles \
+  --baseline-policy off \
+  --candidate-policy gpu-priority \
+  --appid 1091500 \
+  --tdp-w 22 \
+  --capture-mode controlled \
+  --min-runs 3 > .cache/game-power/profiles/aggregate.json
+
+PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
+PROFILE_GAME_POWER_POLICIES="off gpu-priority-affinity off" \
+PROFILE_GAME_POWER_AFFINITY_PLAN_JSON=".cache/game-power/profiles/aggregate.json" \
+scripts/profile-game-power-on-device.sh root@10.100.0.19
+```
+
+For `gpu-priority-affinity`, the wrapper copies the aggregate or raw
+`affinity_experiment_plan` JSON to the target, resolves the first ready
+`foreground-role-compact` candidate there, applies the affinity mask only to
+current foreground threads matching the stable role key, and restores original
+masks before accepting the run summary. A zero-write, partial-failure,
+missing-`taskset`, stale-thread, or restore-mismatch run is rejected as invalid
+affinity evidence. The daemon scheduler still does not apply affinity.
 
 A positive aggregate verdict is intentionally scoped. Reports render it as
 `BETTER (scene/profile-specific controlled result; not a general performance claim)`

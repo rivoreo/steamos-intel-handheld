@@ -552,6 +552,35 @@ def test_game_power_profile_wrapper_supports_background_shaping_policy_variants(
     assert 'restore_background_shaping_variant "$run_dir" || restored=false' in script
 
 
+def test_game_power_profile_wrapper_supports_foreground_affinity_policy_variant():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert 'affinity_plan_json="${PROFILE_GAME_POWER_AFFINITY_PLAN_JSON:-}"' in script
+    assert "remote_affinity_plan_json=" in script
+    assert 'scp "$affinity_plan_json" "$target:$remote_affinity_plan_json"' in script
+    assert "AFFINITY_PLAN_JSON='$remote_affinity_plan_json'" in script
+    assert "resolve_foreground_affinity_candidate()" in script
+    assert "foreground_affinity_candidate_field()" in script
+    assert "apply_foreground_affinity_variant()" in script
+    assert "restore_foreground_affinity_variant()" in script
+    assert "gpu-priority-affinity)" in script
+    assert 'foreground_affinity_variant="foreground-role-compact"' in script
+    assert "resolve-foreground-affinity" in script
+    assert "apply-foreground-affinity" in script
+    assert "restore-foreground-affinity" in script
+    assert "foreground-affinity-candidate.json" in script
+    assert "foreground-affinity-writes.json" in script
+    assert "foreground-affinity-restore.json" in script
+    apply_line = (
+        'if ! apply_foreground_affinity_variant "$run_dir" '
+        '"$foreground_affinity_variant"; then'
+    )
+    assert apply_line in script
+    assert 'restore_foreground_affinity_variant "$run_dir" || restored=false' in script
+    assert "PROFILE_GAME_POWER_AFFINITY_ROLE_KEY" not in script
+    assert "PROFILE_GAME_POWER_AFFINITY_CPUS" not in script
+
+
 def test_game_power_profile_wrapper_aborts_after_unrestored_policy_run():
     script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
 

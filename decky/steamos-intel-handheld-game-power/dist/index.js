@@ -119,6 +119,15 @@ const COPY = {
         restore: "Use service default",
         applying: "Applying...",
         restored: "Using the service default.",
+        evidenceLabel: "Local evidence",
+        evidenceStates: {
+            "target-aware-live": "Local target/frame evidence ready",
+            "power-signals-only": "Local evidence: power signals only",
+            "view-data-only": "View data only",
+            stopped: "Game Power stopped",
+            "control-invalid": "Local evidence unavailable",
+            unavailable: "Local evidence unavailable",
+        },
         modes: {
             automatic: "Balance to FPS target",
             observe: "Watch data only",
@@ -212,6 +221,15 @@ const COPY = {
         restore: "使用服務預設",
         applying: "正在套用...",
         restored: "已切回服務預設。",
+        evidenceLabel: "本機證據",
+        evidenceStates: {
+            "target-aware-live": "本機 FPS 目標與影格資料可用",
+            "power-signals-only": "本機證據：僅有功耗訊號",
+            "view-data-only": "只看數據",
+            stopped: "遊戲電力已停止",
+            "control-invalid": "本機證據不可用",
+            unavailable: "本機證據不可用",
+        },
         modes: {
             automatic: "依 FPS 目標自動平衡",
             observe: "只看數據，不調整功耗",
@@ -350,12 +368,20 @@ function modeKey(mode) {
     }
     return "unknown";
 }
+function isTargetAwareReady(readiness) {
+    return readiness?.status === "target-aware-live" && readiness?.claim_ready === true;
+}
+function evidenceText(t, readiness) {
+    if (!readiness) {
+        return t.evidenceStates.unavailable;
+    }
+    if (!isTargetAwareReady(readiness) && readiness.status === "target-aware-live") {
+        return t.evidenceStates.unavailable;
+    }
+    return t.evidenceStates[readiness.status] ?? t.evidenceStates.unavailable;
+}
 function modeLabel(t, mode, runtime) {
-    if (mode === "automatic" &&
-        !runtime?.stale &&
-        !runtime?.error &&
-        runtime?.fps_target?.status === "known" &&
-        runtime?.frame_source?.status === "live") {
+    if (mode === "automatic" && isTargetAwareReady(runtime?.evidence_readiness)) {
         return t.telemetryLabels.targetAware;
     }
     return t.modes[modeKey(mode)] ?? t.modes.unknown;
@@ -409,7 +435,7 @@ function runtimeHeadline(t, mode, runtime) {
     if (runtime.stale) {
         return t.telemetryLabels.stale;
     }
-    if (runtime.fps_target.status === "known" && runtime.frame_source.status === "live") {
+    if (isTargetAwareReady(runtime?.evidence_readiness)) {
         return t.telemetryLabels.targetAware;
     }
     if (runtime.frame_source.status !== "live") {
@@ -558,7 +584,7 @@ const GamePowerPanel = () => {
                                     ? `${t.currentMode}: ${modeLabel(t, status.mode, runtime)}`
                                     : busy
                                         ? t.loading
-                                        : t.unavailable }), status ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.serviceState, ": ", status.active_state, "/", status.sub_state] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.policyLabels, status.policy_label) }), SP_JSX.jsx("div", { style: detailStyle, children: modeDescription(t, status.mode) }), SP_JSX.jsx("div", { style: detailStyle, children: runtimeHeadline(t, status.mode, runtime) }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, runtime?.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, runtime?.frame_source) }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.learning, ": ", learningText(t, runtime?.learning)] })] })) : null, notice ? SP_JSX.jsx("div", { style: detailStyle, children: notice }) : null, error ? (SP_JSX.jsxs("div", { role: "alert", style: detailStyle, children: [t.errorPrefix, ": ", error] })) : null] }) }) }), SP_JSX.jsxs(DFL.PanelSection, { title: t.control, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("automatic"), children: busy ? t.applying : t.modes.automatic }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("observe"), children: busy ? t.applying : t.modes.observe }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("off"), children: busy ? t.applying : t.modes.off }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsxs("div", { className: DFL.staticClasses.Title, style: titleStyle, children: [t.fpsTarget, ": ", manualFps, " FPS"] }), SP_JSX.jsx("div", { style: detailStyle, children: targetMode }), SP_JSX.jsxs("div", { style: detailStyle, children: [supportedMin, "-", supportedMax, " FPS / ", supportedStep] }), SP_JSX.jsx("input", { "aria-label": t.targetManual, type: "range", min: 30, max: 120, step: 5, value: manualFps, style: sliderStyle, onChange: (event) => setManualFps(Number(event.currentTarget.value)) })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyFpsTarget(manualFps), children: busy ? t.applying : t.targetApply }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyFpsTarget(null), children: busy ? t.applying : t.targetAuto }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.telemetry, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: runtimeTitle }), runtime ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, runtime.last_action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(runtime.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(runtime.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(runtime.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.classifications, runtime.classification_primary) }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, runtime.last_reason) }), SP_JSX.jsxs("div", { style: detailStyle, children: ["Render: ", fmtPercent(runtime.render_busy)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.learning, ": ", learningText(t, runtime.learning)] })] })) : (SP_JSX.jsx("div", { style: detailStyle, children: busy ? t.loading : t.noSample }))] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: load, children: busy ? t.applying : t.refresh }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: restore, children: busy ? t.applying : t.restore }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.manualProbe, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: probeTitle }), SP_JSX.jsx("div", { style: detailStyle, children: t.probeNotice }), sample ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, sample.action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(sample.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(sample.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(sample.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, sample.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, sample.frame_source) }), sample.reason ? (SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, sample.reason) })) : null] })) : null] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: readProbe, children: busy ? t.applying : t.readProbe }) })] })] }));
+                                        : t.unavailable }), status ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.serviceState, ": ", status.active_state, "/", status.sub_state] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.policyLabels, status.policy_label) }), SP_JSX.jsx("div", { style: detailStyle, children: modeDescription(t, status.mode) }), SP_JSX.jsx("div", { style: detailStyle, children: runtimeHeadline(t, status.mode, runtime) }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.evidenceLabel, ": ", evidenceText(t, runtime?.evidence_readiness)] }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, runtime?.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, runtime?.frame_source) }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.learning, ": ", learningText(t, runtime?.learning)] })] })) : null, notice ? SP_JSX.jsx("div", { style: detailStyle, children: notice }) : null, error ? (SP_JSX.jsxs("div", { role: "alert", style: detailStyle, children: [t.errorPrefix, ": ", error] })) : null] }) }) }), SP_JSX.jsxs(DFL.PanelSection, { title: t.control, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("automatic"), children: busy ? t.applying : t.modes.automatic }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("observe"), children: busy ? t.applying : t.modes.observe }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("off"), children: busy ? t.applying : t.modes.off }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsxs("div", { className: DFL.staticClasses.Title, style: titleStyle, children: [t.fpsTarget, ": ", manualFps, " FPS"] }), SP_JSX.jsx("div", { style: detailStyle, children: targetMode }), SP_JSX.jsxs("div", { style: detailStyle, children: [supportedMin, "-", supportedMax, " FPS / ", supportedStep] }), SP_JSX.jsx("input", { "aria-label": t.targetManual, type: "range", min: 30, max: 120, step: 5, value: manualFps, style: sliderStyle, onChange: (event) => setManualFps(Number(event.currentTarget.value)) })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyFpsTarget(manualFps), children: busy ? t.applying : t.targetApply }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyFpsTarget(null), children: busy ? t.applying : t.targetAuto }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.telemetry, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: runtimeTitle }), runtime ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, runtime.last_action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(runtime.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(runtime.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(runtime.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.classifications, runtime.classification_primary) }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, runtime.last_reason) }), SP_JSX.jsxs("div", { style: detailStyle, children: ["Render: ", fmtPercent(runtime.render_busy)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.learning, ": ", learningText(t, runtime.learning)] })] })) : (SP_JSX.jsx("div", { style: detailStyle, children: busy ? t.loading : t.noSample }))] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: load, children: busy ? t.applying : t.refresh }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: restore, children: busy ? t.applying : t.restore }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.manualProbe, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: probeTitle }), SP_JSX.jsx("div", { style: detailStyle, children: t.probeNotice }), sample ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, sample.action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(sample.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(sample.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(sample.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, sample.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, sample.frame_source) }), sample.reason ? (SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, sample.reason) })) : null] })) : null] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: readProbe, children: busy ? t.applying : t.readProbe }) })] })] }));
 };
 var index = definePlugin(() => ({
     name: "Game Power",

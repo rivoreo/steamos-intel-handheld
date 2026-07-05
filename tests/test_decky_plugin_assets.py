@@ -191,22 +191,62 @@ def test_game_power_decky_mode_copy_explains_control_state_differences():
         assert text not in bundled
 
 
-def test_game_power_decky_automatic_copy_requires_live_target_and_frame_data():
+def test_game_power_decky_frontend_exposes_evidence_readiness_copy_and_types():
+    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
+    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
+
+    source_only = (
+        "type EvidenceReadiness",
+        "evidence_readiness: EvidenceReadiness",
+        "evidenceLabel: string",
+        'evidenceLabel: "Local evidence"',
+        'evidenceLabel: "本機證據"',
+    )
+    required_copy = (
+        "runtime?.evidence_readiness",
+        "evidenceText(t, runtime?.evidence_readiness)",
+        "isTargetAwareReady(runtime?.evidence_readiness)",
+        "Local evidence",
+        "Local target/frame evidence ready",
+        "Local evidence: power signals only",
+        "Local evidence unavailable",
+        "View data only",
+        "Game Power stopped",
+        "本機證據",
+        "本機 FPS 目標與影格資料可用",
+        "本機證據：僅有功耗訊號",
+        "本機證據不可用",
+        "只看數據",
+        "遊戲電力已停止",
+    )
+
+    for text in source_only:
+        assert text in frontend
+    for text in required_copy:
+        assert text in frontend
+        assert text in bundled
+
+
+def test_game_power_decky_automatic_copy_requires_evidence_readiness_claim():
     frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
     bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
     compact_frontend = "".join(frontend.split())
     compact_bundled = "".join(bundled.split())
 
     assert (
-        '!runtime?.stale&&!runtime?.error&&'
-        'runtime?.fps_target?.status==="known"&&'
-        'runtime?.frame_source?.status==="live"'
+        "functionisTargetAwareReady(readiness:EvidenceReadiness|null|undefined):boolean{"
+        'returnreadiness?.status==="target-aware-live"&&readiness?.claim_ready===true;'
+        "}"
     ) in compact_frontend
+    assert 'isTargetAwareReady(runtime?.evidence_readiness)' in frontend
     assert (
-        '!runtime?.stale&&!runtime?.error&&'
-        'runtime?.fps_target?.status==="known"&&'
+        '!runtime?.stale&&!runtime?.error&&runtime?.fps_target?.status==="known"&&'
         'runtime?.frame_source?.status==="live"'
-    ) in compact_bundled
+    ) not in compact_frontend
+    assert (
+        '!runtime?.stale&&!runtime?.error&&runtime?.fps_target?.status==="known"&&'
+        'runtime?.frame_source?.status==="live"'
+    ) not in compact_bundled
 
 
 def test_game_power_decky_headline_respects_observe_and_off_before_telemetry_state():

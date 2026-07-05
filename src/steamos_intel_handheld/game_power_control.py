@@ -86,6 +86,8 @@ def set_runtime_mode(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = _read_valid_payload(path) or {"schema_version": SCHEMA_VERSION}
+    if _fps_target_override_from_payload(payload).status == "invalid":
+        payload.pop("fps_target_override", None)
     payload.update({
         "schema_version": SCHEMA_VERSION,
         "mode": mode,
@@ -199,16 +201,52 @@ def effective_config_from_runtime_file(
     path: str | Path = DEFAULT_CONTROL_FILE,
 ) -> GamePowerConfig:
     status = read_runtime_status(path)
-    updates: dict[str, object] = {}
-    if status.effective_mode is not None:
+    control_health = _runtime_control_health_from_status(status)
+    updates: dict[str, object] = {"runtime_control_health": control_health}
+    control_valid = control_health["status"] == "ready"
+    if not control_valid:
+        updates["mode"] = GamePowerMode.OFF
+    elif status.effective_mode is not None:
         updates["mode"] = status.effective_mode
-    if status.fps_target_override.status == "manual" and status.fps_target_override.fps:
+    if (
+        control_valid
+        and status.fps_target_override.status == "manual"
+        and status.fps_target_override.fps
+    ):
         updates["frame_target"] = FrameTargetTelemetry(
             fps_target=float(status.fps_target_override.fps),
             source="manual",
             confidence="high",
         )
     return replace(base, **updates) if updates else base
+
+
+def _runtime_control_health_from_status(
+    status: RuntimeControlStatus,
+) -> dict[str, object]:
+    if status.mode == "invalid":
+        return {
+            "status": "invalid",
+            "mode": status.mode,
+            "override_active": status.override_active,
+            "fps_target_override_status": status.fps_target_override.status,
+            "reason": "invalid-control-file",
+        }
+    if status.fps_target_override.status == "invalid":
+        return {
+            "status": "invalid",
+            "mode": status.mode,
+            "override_active": status.override_active,
+            "fps_target_override_status": status.fps_target_override.status,
+            "reason": "invalid-fps-target-override",
+        }
+    return {
+        "status": "ready",
+        "mode": status.mode,
+        "override_active": status.override_active,
+        "fps_target_override_status": status.fps_target_override.status,
+        "reason": "control-ready",
+    }
 
 
 def _read_valid_payload(path: Path) -> dict[str, object] | None:

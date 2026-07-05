@@ -11,6 +11,8 @@ from steamos_intel_handheld.game_power_profile import (
     FpsTargetDiscovery,
     GamePowerLogSummary,
     MangoHudFpsSummary,
+    PolicyAggregate,
+    PolicyComparison,
     PolicyVerdict,
     ProcessCgroupSummary,
     RestoreAffinitySummary,
@@ -20,18 +22,24 @@ from steamos_intel_handheld.game_power_profile import (
     ThreadSchedstatSummary,
     aggregate_run_summaries,
     apply_background_shaping_writes,
+    apply_foreground_affinity_writes,
     build_affinity_advice,
     build_background_shaping_advice,
+    build_background_shaping_experiment_plan,
     compare_policy_aggregates,
     compare_run_summaries,
+    merge_run_summary,
     parse_game_power_jsonl,
     parse_gamescope_fps_target_from_argv,
     parse_mangohud_fps_csv,
     parse_mangohud_summary_csv,
     parse_pressure_file,
     replay_action_equivalence,
+    resolve_foreground_affinity_candidate,
     restore_background_shaping_writes,
+    restore_foreground_affinity_writes,
     summarize_cpu_topology,
+    summarize_foreground_affinity_artifacts,
     summarize_pressure_jsonl,
     summarize_process_cgroups_jsonl,
     summarize_restore_affinity_json,
@@ -62,6 +70,9 @@ def controlled_ab_run(
     avg_package_w: float | None = None,
     thermal_start_c: float = 61.0,
     thermal_end_c: float = 63.0,
+    foreground_affinity_valid_evidence: bool | None = None,
+    foreground_affinity_write_count: int | None = None,
+    foreground_affinity_failed_count: int | None = None,
 ) -> RunSummary:
     position_offsets = {
         "baseline-before": 0.0,
@@ -88,6 +99,9 @@ def controlled_ab_run(
         p99_frametime_ms=p99_frametime_ms,
         avg_package_w=avg_package_w,
         restored=True,
+        foreground_affinity_valid_evidence=foreground_affinity_valid_evidence,
+        foreground_affinity_write_count=foreground_affinity_write_count,
+        foreground_affinity_failed_count=foreground_affinity_failed_count,
         ab_order_strategy="paired-baseline",
         ab_run_order=f"off,{candidate_policy},off",
         ab_order_valid=True,
@@ -1030,6 +1044,438 @@ def test_background_shaping_writer_only_matches_explicit_gamescope_helpers(tmp_p
     }
 
 
+def test_apply_foreground_affinity_writes_only_matching_foreground_role(tmp_path):
+    restore = tmp_path / "restore-affinity.json"
+    output = tmp_path / "foreground-affinity-writes.json"
+    restore.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "threads": [
+                    {
+                        "pid": 200,
+                        "tid": 201,
+                        "comm": "Worker Thread",
+                        "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        "cpus_allowed_list": "0-7",
+                    },
+                    {
+                        "pid": 300,
+                        "tid": 301,
+                        "comm": "Render Thread",
+                        "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        "cpus_allowed_list": "0-7",
+                    },
+                    {
+                        "pid": 400,
+                        "tid": 401,
+                        "comm": "Worker Thread",
+                        "cgroup": "0::/user.slice/steam.service",
+                        "cpus_allowed_list": "0-7",
+                    },
+                ],
+            }
+        )
+    )
+    commands: list[list[str]] = []
+
+    def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="pid 201's current affinity list: 0,1\n",
+            stderr="",
+        )
+
+    payload = apply_foreground_affinity_writes(
+        restore,
+        output,
+        role_key="foreground-game:worker-thread",
+        preferred_cpus="0,1",
+        variant="foreground-role-compact",
+        command_runner=runner,
+        proc_root=None,
+    )
+
+    assert payload["mode"] == "foreground-affinity-writes"
+    assert payload["write_policy"] == "guarded-foreground-affinity"
+    assert payload["role_key"] == "foreground-game:worker-thread"
+    assert payload["preferred_cpus"] == "0,1"
+    assert payload["matched_thread_count"] == 1
+    assert payload["written_count"] == 1
+    assert payload["failed_count"] == 0
+    assert payload["valid"] is True
+    assert payload["writes"] == [
+        {
+            "tid": 201,
+            "pid": 200,
+            "comm": "Worker Thread",
+            "role_key": "foreground-game:worker-thread",
+            "original_cpus_allowed_list": "0-7",
+            "proposed_cpus": "0,1",
+            "returncode": 0,
+            "status": "written",
+            "stdout": "pid 201's current affinity list: 0,1\n",
+            "stderr": "",
+        }
+    ]
+    assert commands == [["taskset", "-pc", "0,1", "201"]]
+    assert json.loads(output.read_text()) == payload
+
+
+def test_apply_foreground_affinity_writes_rejects_unsafe_inputs(tmp_path):
+    restore = tmp_path / "restore-affinity.json"
+    restore.write_text(json.dumps({"threads": []}))
+
+    unsafe_inputs = [
+        ("background-helper:worker-thread", "0,1"),
+        ("foreground-game:worker-thread", ""),
+        ("foreground-game:worker-thread", "-1"),
+    ]
+    for role_key, preferred_cpus in unsafe_inputs:
+        try:
+            apply_foreground_affinity_writes(
+                restore,
+                tmp_path / "writes.json",
+                role_key=role_key,
+                preferred_cpus=preferred_cpus,
+                variant="foreground-role-compact",
+                proc_root=None,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {role_key!r}")
+
+
+def test_restore_foreground_affinity_writes_restores_original_masks(tmp_path):
+    writes = tmp_path / "foreground-affinity-writes.json"
+    output = tmp_path / "foreground-affinity-restore.json"
+    writes.write_text(
+        json.dumps(
+            {
+                "mode": "foreground-affinity-writes",
+                "write_policy": "guarded-foreground-affinity",
+                "writes": [
+                    {
+                        "tid": 201,
+                        "pid": 200,
+                        "comm": "Worker Thread",
+                        "role_key": "foreground-game:worker-thread",
+                        "original_cpus_allowed_list": "0-7",
+                        "proposed_cpus": "0,1",
+                        "status": "written",
+                    },
+                    {
+                        "tid": 301,
+                        "original_cpus_allowed_list": "0-7",
+                        "status": "skipped",
+                    },
+                ],
+            }
+        )
+    )
+    commands: list[list[str]] = []
+
+    def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                "pid 201's current affinity list: 0,1\n"
+                "pid 201's new affinity list: 0-7\n"
+            ),
+            stderr="",
+        )
+
+    payload = restore_foreground_affinity_writes(
+        writes,
+        output,
+        command_runner=runner,
+        proc_root=None,
+    )
+
+    assert payload["mode"] == "foreground-affinity-restore"
+    assert payload["write_policy"] == "restore-foreground-affinity"
+    assert payload["restored"] is True
+    assert payload["restores"][0]["status"] == "restored"
+    assert commands == [["taskset", "-pc", "0-7", "201"]]
+    assert json.loads(output.read_text()) == payload
+
+
+def test_resolve_foreground_affinity_candidate_accepts_aggregate_report(tmp_path):
+    report = tmp_path / "aggregate.json"
+    report.write_text(
+        json.dumps(
+            {
+                "comparisons": [
+                    {
+                        "candidate_policy": "gpu-priority",
+                        "affinity_experiment_plan": {
+                            "mode": "ready-for-guarded-experiment",
+                            "write_policy": "disabled",
+                            "candidates": [
+                                {
+                                    "role_key": "foreground-game:worker-thread",
+                                    "guarded_variant": "foreground-role-compact",
+                                    "preferred_cpus": [0, 1],
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    assert resolve_foreground_affinity_candidate(report) == {
+        "role_key": "foreground-game:worker-thread",
+        "preferred_cpus": "0,1",
+        "guarded_variant": "foreground-role-compact",
+    }
+
+
+def test_apply_foreground_affinity_writes_fails_closed_without_matching_threads(tmp_path):
+    restore = tmp_path / "restore-affinity.json"
+    output = tmp_path / "foreground-affinity-writes.json"
+    restore.write_text(
+        json.dumps(
+            {
+                "threads": [
+                    {
+                        "pid": 400,
+                        "tid": 401,
+                        "comm": "Worker Thread",
+                        "cgroup": "0::/user.slice/steam.service",
+                        "cpus_allowed_list": "0-7",
+                    }
+                ]
+            }
+        )
+    )
+
+    payload = apply_foreground_affinity_writes(
+        restore,
+        output,
+        role_key="foreground-game:worker-thread",
+        preferred_cpus="0,1",
+        variant="foreground-role-compact",
+        proc_root=None,
+    )
+
+    assert payload["matched_thread_count"] == 0
+    assert payload["written_count"] == 0
+    assert payload["valid"] is False
+    assert json.loads(output.read_text())["valid"] is False
+
+
+def test_apply_foreground_affinity_writes_records_partial_failure(tmp_path):
+    restore = tmp_path / "restore-affinity.json"
+    output = tmp_path / "foreground-affinity-writes.json"
+    restore.write_text(
+        json.dumps(
+            {
+                "threads": [
+                    {
+                        "pid": 200,
+                        "tid": 201,
+                        "comm": "Worker Thread",
+                        "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        "cpus_allowed_list": "0-7",
+                    },
+                    {
+                        "pid": 200,
+                        "tid": 202,
+                        "comm": "Worker Thread",
+                        "cgroup": "0::/user.slice/app-steam-app1091500.scope",
+                        "cpus_allowed_list": "0-7",
+                    },
+                ]
+            }
+        )
+    )
+    calls = 0
+
+    def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess(
+            command,
+            0 if calls == 1 else 1,
+            stdout="",
+            stderr="" if calls == 1 else "no such task",
+        )
+
+    payload = apply_foreground_affinity_writes(
+        restore,
+        output,
+        role_key="foreground-game:worker-thread",
+        preferred_cpus="0,1",
+        variant="foreground-role-compact",
+        command_runner=runner,
+        proc_root=None,
+    )
+
+    assert payload["matched_thread_count"] == 2
+    assert payload["written_count"] == 1
+    assert payload["failed_count"] == 1
+    assert payload["partial_failure"] is True
+    assert payload["valid"] is False
+    assert [item["status"] for item in payload["writes"]] == ["written", "write-failed"]
+
+
+def test_restore_foreground_affinity_writes_detects_mismatch(tmp_path):
+    writes = tmp_path / "foreground-affinity-writes.json"
+    output = tmp_path / "foreground-affinity-restore.json"
+    writes.write_text(
+        json.dumps(
+            {
+                "writes": [
+                    {
+                        "tid": 201,
+                        "pid": 200,
+                        "comm": "Worker Thread",
+                        "role_key": "foreground-game:worker-thread",
+                        "original_cpus_allowed_list": "0-7",
+                        "status": "written",
+                    }
+                ]
+            }
+        )
+    )
+
+    def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="pid 201's current affinity list: 0,1\n",
+            stderr="",
+        )
+
+    payload = restore_foreground_affinity_writes(
+        writes,
+        output,
+        command_runner=runner,
+        proc_root=None,
+    )
+
+    assert payload["restored"] is False
+    assert payload["restores"][0]["status"] == "restore-mismatch"
+
+
+def test_summarize_foreground_affinity_artifacts_requires_clean_restore(tmp_path):
+    writes = tmp_path / "foreground-affinity-writes.json"
+    restore = tmp_path / "foreground-affinity-restore.json"
+    writes.write_text(
+        json.dumps(
+            {
+                "role_key": "foreground-game:worker-thread",
+                "preferred_cpus": "0,1",
+                "matched_thread_count": 2,
+                "written_count": 2,
+                "failed_count": 0,
+            }
+        )
+    )
+    restore.write_text(json.dumps({"restored": True}))
+
+    summary = summarize_foreground_affinity_artifacts(writes, restore)
+
+    assert summary == {
+        "role_key": "foreground-game:worker-thread",
+        "preferred_cpus": "0,1",
+        "matched_thread_count": 2,
+        "written_count": 2,
+        "failed_count": 0,
+        "restore_restored": True,
+        "valid_evidence": True,
+    }
+    restore.write_text(json.dumps({"restored": False}))
+    assert summarize_foreground_affinity_artifacts(writes, restore)["valid_evidence"] is False
+
+
+def test_merge_run_summary_preserves_boolean_foreground_affinity_evidence():
+    summary = merge_run_summary(
+        appid="1903340",
+        tdp_w=17,
+        policy="gpu-priority-affinity",
+        fps=MangoHudFpsSummary(avg_fps=25.7, capture_mode=CaptureMode.CONTROLLED),
+        power=None,
+        foreground_affinity={
+            "role_key": "foreground-game:foreground-work",
+            "preferred_cpus": "2,3",
+            "matched_thread_count": 2,
+            "written_count": 2,
+            "failed_count": 0,
+            "restore_restored": True,
+            "valid_evidence": True,
+        },
+        restored=True,
+    )
+
+    assert summary.foreground_affinity_restore_restored is True
+    assert summary.foreground_affinity_valid_evidence is True
+
+
+def test_resolve_foreground_affinity_candidate_rejects_unsafe_shapes(tmp_path):
+    cases = [
+        {"mode": "observe-only", "candidates": []},
+        {
+            "mode": "ready-for-guarded-experiment",
+            "candidates": [{"role_key": "background:worker", "preferred_cpus": [0, 1]}],
+        },
+        {
+            "mode": "ready-for-guarded-experiment",
+            "candidates": [
+                {
+                    "role_key": "foreground-game:worker-thread",
+                    "guarded_variant": "wrong",
+                    "preferred_cpus": [0, 1],
+                }
+            ],
+        },
+        {
+            "mode": "ready-for-guarded-experiment",
+            "candidates": [
+                {
+                    "role_key": "foreground-game:worker-thread",
+                    "guarded_variant": "foreground-role-compact",
+                    "preferred_cpus": [0],
+                    "thread_count_median": 2,
+                }
+            ],
+        },
+    ]
+    for index, payload in enumerate(cases):
+        path = tmp_path / f"plan-{index}.json"
+        path.write_text(json.dumps(payload))
+        try:
+            resolve_foreground_affinity_candidate(path)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for case {index}")
+
+    raw = tmp_path / "raw.json"
+    raw.write_text(
+        json.dumps(
+            {
+                "mode": "ready-for-guarded-experiment",
+                "candidates": [
+                    {
+                        "role_key": "foreground-game:render-thread",
+                        "guarded_variant": "foreground-role-compact",
+                        "preferred_cpus": "0-1",
+                    }
+                ],
+            }
+        )
+    )
+    assert resolve_foreground_affinity_candidate(raw)["preferred_cpus"] == "0,1"
+
+
 def test_summarize_cpu_topology_groups_policy_domains_and_core_classes(tmp_path):
     path = tmp_path / "cpu-topology.json"
     path.write_text(
@@ -1888,6 +2334,44 @@ def test_compare_policy_aggregates_accepts_median_low_improvement():
 
     assert verdict.verdict == PolicyVerdict.BETTER
     assert "median 1% low improved" in verdict.reason
+
+
+def test_compare_policy_aggregates_rejects_affinity_candidate_without_valid_evidence():
+    baseline = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="off",
+                position="baseline-before",
+                avg_fps=54.0,
+                one_percent_low_fps=40.0,
+            ),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-after",
+                avg_fps=55.0,
+                one_percent_low_fps=40.5,
+            ),
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="gpu-priority-affinity",
+                position="candidate",
+                avg_fps=57.0,
+                one_percent_low_fps=44.0,
+                foreground_affinity_valid_evidence=False,
+                foreground_affinity_write_count=0,
+                foreground_affinity_failed_count=0,
+            )
+        ]
+    )
+
+    verdict = compare_policy_aggregates(baseline, candidate, min_runs=1)
+
+    assert verdict.verdict == PolicyVerdict.REJECTED
+    assert "foreground affinity evidence did not pass" in verdict.reason
+    assert candidate.foreground_affinity_valid_count == 0
 
 
 def test_compare_policy_aggregates_accepts_median_power_saving_at_target():
@@ -3086,12 +3570,13 @@ def test_profile_cli_aggregate_builds_guarded_affinity_experiment_plan(tmp_path)
         "role_key": "foreground-game:worker-thread",
         "comm": "Worker Thread",
         "control_scope": "foreground-game-role",
-        "candidate_control": "soft-compact-preferred-cpus",
-        "guarded_variant": "foreground-role-soft-compact",
+        "candidate_control": "guarded-hard-compact-affinity",
+        "guarded_variant": "foreground-role-compact",
         "preferred_cpus": [0, 1],
         "fallback": "restore-original-affinity-and-cgroup-state",
         "observed_run_count": 2,
         "run_coverage": 1.0,
+        "thread_count_median": 2.0,
         "classification": "latency-hot",
         "runqueue_wait_ms_delta_median": 100.0,
         "runqueue_wait_per_slice_ms_max_median": 4.0,
@@ -3324,6 +3809,21 @@ def test_profile_cli_aggregate_builds_background_shaping_experiment_plan(tmp_pat
     assert "background/helper cgroup candidate is stable across candidate runs" in plan[
         "reasons"
     ]
+    assert plan["readiness"] == {
+        "comparison_better": True,
+        "controlled_repeats": True,
+        "baseline_controlled": True,
+        "candidate_controlled": True,
+        "baseline_restored": True,
+        "candidate_restored": True,
+        "restore_coverage": True,
+        "candidate_restore_coverage": True,
+        "candidate_stability": True,
+        "candidate_guarded": True,
+        "write_policy_disabled": True,
+        "ready_for_guarded_experiment": True,
+        "blocking_reason_codes": [],
+    }
 
 
 def test_profile_cli_aggregate_requires_background_cgroup_restore_coverage(
@@ -3412,9 +3912,84 @@ def test_profile_cli_aggregate_requires_background_cgroup_restore_coverage(
     ]
     assert plan["mode"] == "observe-only"
     assert plan["candidates"] == []
+    readiness = plan["readiness"]
+    assert readiness["ready_for_guarded_experiment"] is False
+    assert readiness["write_policy_disabled"] is True
+    assert readiness["candidate_restore_coverage"] is False
+    assert readiness["candidate_stability"] is True
+    assert readiness["candidate_guarded"] is False
+    assert "candidate_restore_coverage_missing" in readiness["blocking_reason_codes"]
+    assert "no_guarded_background_candidate" in readiness["blocking_reason_codes"]
+    assert plan["write_policy"] == "disabled"
     assert "candidate background cgroups are missing from restore-affinity snapshots" in plan[
         "reasons"
     ]
+
+
+def background_aggregate(policy: str) -> PolicyAggregate:
+    return PolicyAggregate(
+        appid="1091500",
+        tdp_w=22,
+        policy=policy,
+        capture_mode=CaptureMode.CONTROLLED,
+        sample_count=2,
+        restored_count=2,
+        restore_affinity_snapshot_count=2,
+        restore_affinity_files=["cpu.uclamp.max", "cpu.weight"],
+        restore_affinity_cgroups=[
+            "0::/user.slice/app-steam-app1091500.scope",
+            "0::/user.slice/app-steam-client.scope",
+        ],
+        restore_affinity_cgroup_files={
+            "0::/user.slice/app-steam-client.scope": [
+                "cpu.uclamp.max",
+                "cpu.weight",
+            ],
+        },
+        restore_affinity_cgroup_file_values={
+            "0::/user.slice/app-steam-client.scope": {
+                "cpu.uclamp.max": ["max"],
+                "cpu.weight": ["100"],
+            },
+        },
+    )
+
+
+def test_background_shaping_readiness_distinguishes_restore_coverage_from_stability():
+    plan = build_background_shaping_experiment_plan(
+        baseline=background_aggregate("off"),
+        candidate=background_aggregate("gpu-priority"),
+        comparison=PolicyComparison(
+            baseline_policy="off",
+            candidate_policy="gpu-priority",
+            verdict=PolicyVerdict.BETTER,
+            reason="candidate policy comparison is better",
+        ),
+        baseline_candidates=[],
+        candidate_candidates=[
+            {
+                "candidate_key": "steam-helper:0::/user.slice/app-steam-client.scope",
+                "cgroup": "0::/user.slice/app-steam-client.scope",
+                "classification": "steam-helper",
+                "suggested_action": "future-cpu-weight-candidate",
+                "observed_run_count": 2,
+                "run_coverage": 1.0,
+                "restore_snapshot_observed_run_count": 2,
+                "restore_snapshot_run_coverage": 1.0,
+                "cpu_time_s_delta_median": 0.2,
+                "process_count_median": 2.0,
+                "commands": ["steamwebhelper"],
+            }
+        ],
+        min_runs=2,
+    )
+
+    readiness = plan["readiness"]
+    assert readiness["candidate_restore_coverage"] is True
+    assert readiness["candidate_stability"] is False
+    assert readiness["candidate_guarded"] is False
+    assert "candidate_restore_coverage_missing" not in readiness["blocking_reason_codes"]
+    assert "no_guarded_background_candidate" in readiness["blocking_reason_codes"]
 
 
 def test_profile_cli_aggregate_requires_restore_snapshot_for_guarded_affinity_plan(

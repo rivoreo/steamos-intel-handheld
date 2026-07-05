@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import subprocess
 from collections import defaultdict
 from dataclasses import asdict, dataclass
@@ -38,6 +39,7 @@ BACKGROUND_SHAPING_WRITE_VARIANTS = {
     "cpu-weight-80": ("cpu.weight", "80"),
     "uclamp-max-85": ("cpu.uclamp.max", "85.00"),
 }
+FOREGROUND_AFFINITY_WRITE_VARIANTS = {"foreground-role-compact"}
 AB_EVIDENCE_INCOMPLETE_PREFIX = "A/B evidence incomplete:"
 AB_EXPLORATORY_SUFFIX = "exploratory only; cannot support a BETTER claim"
 BETTER_CLAIM_BOUNDARY = (
@@ -223,6 +225,13 @@ class RunSummary:
     restore_affinity_files: list[str] | None = None
     restore_affinity_cgroup_files: dict[str, list[str]] | None = None
     restore_affinity_cgroup_file_values: dict[str, dict[str, str]] | None = None
+    foreground_affinity_write_count: int | None = None
+    foreground_affinity_failed_count: int | None = None
+    foreground_affinity_matched_thread_count: int | None = None
+    foreground_affinity_role_key: str | None = None
+    foreground_affinity_preferred_cpus: str | None = None
+    foreground_affinity_restore_restored: bool | None = None
+    foreground_affinity_valid_evidence: bool | None = None
     actions: dict[str, int] | None = None
     restored: bool = False
     ab_order_strategy: str | None = None
@@ -355,6 +364,12 @@ class PolicyAggregate:
     restore_affinity_files: list[str] | None = None
     restore_affinity_cgroup_files: dict[str, list[str]] | None = None
     restore_affinity_cgroup_file_values: dict[str, dict[str, list[str]]] | None = None
+    foreground_affinity_valid_count: int = 0
+    foreground_affinity_write_count_median: float | None = None
+    foreground_affinity_failed_count_median: float | None = None
+    foreground_affinity_matched_thread_count_median: float | None = None
+    foreground_affinity_role_key: str | None = None
+    foreground_affinity_preferred_cpus: str | None = None
     ab_order_strategy: str | None = None
     ab_run_orders: list[str] | None = None
     ab_order_valid_count: int = 0
@@ -1068,6 +1083,7 @@ def merge_run_summary(
     thread_affinity: ThreadAffinitySummary | None = None,
     thread_schedstat: ThreadSchedstatSummary | None = None,
     restore_affinity: RestoreAffinitySummary | None = None,
+    foreground_affinity: dict[str, object] | None = None,
     epp: str | None = None,
     pcore_max_mhz: int | None = None,
     ecore_max_mhz: int | None = None,
@@ -1083,6 +1099,7 @@ def merge_run_summary(
     restored: bool,
 ) -> RunSummary:
     pressure = pressure or {}
+    foreground_affinity = foreground_affinity or {}
     ab_evidence = ab_evidence or AbEvidence()
     return RunSummary(
         appid=appid,
@@ -1145,6 +1162,25 @@ def merge_run_summary(
         ),
         restore_affinity_cgroup_file_values=(
             restore_affinity.cgroup_file_values if restore_affinity else None
+        ),
+        foreground_affinity_write_count=_optional_int(
+            foreground_affinity.get("written_count")
+        ),
+        foreground_affinity_failed_count=_optional_int(
+            foreground_affinity.get("failed_count")
+        ),
+        foreground_affinity_matched_thread_count=_optional_int(
+            foreground_affinity.get("matched_thread_count")
+        ),
+        foreground_affinity_role_key=_optional_str(foreground_affinity.get("role_key")),
+        foreground_affinity_preferred_cpus=_optional_str(
+            foreground_affinity.get("preferred_cpus")
+        ),
+        foreground_affinity_restore_restored=_optional_bool(
+            foreground_affinity.get("restore_restored")
+        ),
+        foreground_affinity_valid_evidence=_optional_bool(
+            foreground_affinity.get("valid_evidence")
         ),
         actions=power.actions if power else None,
         classification_primary=power.classification_primary if power else None,
@@ -1577,6 +1613,24 @@ def aggregate_run_summaries(runs: list[RunSummary]) -> PolicyAggregate:
         restore_affinity_cgroup_file_values=_aggregate_restore_affinity_cgroup_file_values(
             runs
         ),
+        foreground_affinity_valid_count=sum(
+            1 for run in runs if run.foreground_affinity_valid_evidence is True
+        ),
+        foreground_affinity_write_count_median=_median(
+            [run.foreground_affinity_write_count for run in runs]
+        ),
+        foreground_affinity_failed_count_median=_median(
+            [run.foreground_affinity_failed_count for run in runs]
+        ),
+        foreground_affinity_matched_thread_count_median=_median(
+            [run.foreground_affinity_matched_thread_count for run in runs]
+        ),
+        foreground_affinity_role_key=_single_present(
+            [run.foreground_affinity_role_key for run in runs]
+        ),
+        foreground_affinity_preferred_cpus=_single_present(
+            [run.foreground_affinity_preferred_cpus for run in runs]
+        ),
         ab_order_strategy=_single_present([run.ab_order_strategy for run in runs]),
         ab_run_orders=ab_run_orders,
         ab_order_valid_count=sum(1 for run in runs if run.ab_order_valid),
@@ -1929,6 +1983,16 @@ def compare_policy_aggregates(
             PolicyVerdict.REJECTED,
             "restore verification did not pass for every aggregated run",
         )
+    if (
+        candidate.policy == "gpu-priority-affinity"
+        and candidate.foreground_affinity_valid_count != candidate.sample_count
+    ):
+        return PolicyComparison(
+            baseline.policy,
+            candidate.policy,
+            PolicyVerdict.REJECTED,
+            "foreground affinity evidence did not pass for every candidate run",
+        )
 
     ab_reason, ab_diagnostics = _ab_pairwise_gate(baseline, candidate)
     if ab_reason is not None:
@@ -2185,6 +2249,8 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--cpu-topology-json")
     summarize.add_argument("--process-cgroups-jsonl")
     summarize.add_argument("--restore-affinity-json")
+    summarize.add_argument("--foreground-affinity-writes-json")
+    summarize.add_argument("--foreground-affinity-restore-json")
     summarize.add_argument("--epp")
     summarize.add_argument("--pcore-max-mhz", type=int)
     summarize.add_argument("--ecore-max-mhz", type=int)
@@ -2280,6 +2346,24 @@ def build_parser() -> argparse.ArgumentParser:
     restore_background.add_argument("--writes-json", required=True)
     restore_background.add_argument("--output", required=True)
 
+    apply_foreground = subcommands.add_parser("apply-foreground-affinity")
+    apply_foreground.add_argument("--restore-affinity-json", required=True)
+    apply_foreground.add_argument("--output", required=True)
+    apply_foreground.add_argument("--role-key", required=True)
+    apply_foreground.add_argument("--preferred-cpus", required=True)
+    apply_foreground.add_argument(
+        "--variant",
+        choices=sorted(FOREGROUND_AFFINITY_WRITE_VARIANTS),
+        required=True,
+    )
+
+    restore_foreground = subcommands.add_parser("restore-foreground-affinity")
+    restore_foreground.add_argument("--writes-json", required=True)
+    restore_foreground.add_argument("--output", required=True)
+
+    resolve_foreground = subcommands.add_parser("resolve-foreground-affinity")
+    resolve_foreground.add_argument("--plan-json", required=True)
+
     validate_runtime = subcommands.add_parser("validate-runtime-telemetry")
     validate_runtime.add_argument("--game-power-jsonl", required=True)
     validate_runtime.add_argument("--summary-json")
@@ -2333,6 +2417,10 @@ def run_summarize(args: argparse.Namespace) -> Path:
         summarize_restore_affinity_json(args.restore_affinity_json)
         if args.restore_affinity_json
         else None
+    )
+    foreground_affinity = summarize_foreground_affinity_artifacts(
+        args.foreground_affinity_writes_json,
+        args.foreground_affinity_restore_json,
     )
     ab_evidence = AbEvidence(
         order_strategy=args.ab_order_strategy,
@@ -2392,6 +2480,8 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "process_cgroups_jsonl": bool(args.process_cgroups_jsonl),
         "background_shaping_json": bool(process_cgroups),
         "restore_affinity_json": bool(args.restore_affinity_json),
+        "foreground_affinity_writes_json": bool(args.foreground_affinity_writes_json),
+        "foreground_affinity_restore_json": bool(args.foreground_affinity_restore_json),
         "ab_order_strategy": ab_evidence.order_strategy,
         "ab_run_order": ab_evidence.run_order,
         "ab_order_valid": ab_evidence.order_valid,
@@ -2430,6 +2520,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         thread_affinity=thread_affinity,
         thread_schedstat=thread_schedstat,
         restore_affinity=restore_affinity,
+        foreground_affinity=foreground_affinity,
         epp=args.epp,
         pcore_max_mhz=args.pcore_max_mhz,
         ecore_max_mhz=args.ecore_max_mhz,
@@ -2748,12 +2839,13 @@ def _guarded_affinity_role_candidate(role: dict[str, object]) -> dict[str, objec
         "role_key": role.get("role_key"),
         "comm": role.get("comm"),
         "control_scope": "foreground-game-role",
-        "candidate_control": "soft-compact-preferred-cpus",
-        "guarded_variant": "foreground-role-soft-compact",
+        "candidate_control": "guarded-hard-compact-affinity",
+        "guarded_variant": "foreground-role-compact",
         "preferred_cpus": role.get("preferred_cpu_overlap") or [],
         "fallback": "restore-original-affinity-and-cgroup-state",
         "observed_run_count": role.get("observed_run_count"),
         "run_coverage": role.get("run_coverage"),
+        "thread_count_median": role.get("thread_count_median"),
         "classification": role.get("classification"),
         "runqueue_wait_ms_delta_median": role.get("runqueue_wait_ms_delta_median"),
         "runqueue_wait_per_slice_ms_max_median": role.get(
@@ -2779,35 +2871,44 @@ def build_background_shaping_experiment_plan(
         "plan output is advisory and does not write cgroup controller state",
     ]
     ready = True
+    comparison_better = comparison.verdict == PolicyVerdict.BETTER
+    controlled_repeats = (
+        baseline.sample_count >= min_runs and candidate.sample_count >= min_runs
+    )
+    baseline_controlled = baseline.capture_mode == CaptureMode.CONTROLLED
+    candidate_controlled = candidate.capture_mode == CaptureMode.CONTROLLED
+    baseline_restored = baseline.restored_count == baseline.sample_count
+    candidate_restored = candidate.restored_count == candidate.sample_count
+    restore_coverage = (
+        baseline.restore_affinity_snapshot_count == baseline.sample_count
+        and candidate.restore_affinity_snapshot_count == candidate.sample_count
+        and _aggregate_has_cgroup_cpu_controller_restore(baseline)
+        and _aggregate_has_cgroup_cpu_controller_restore(candidate)
+    )
 
-    if comparison.verdict == PolicyVerdict.BETTER:
+    if comparison_better:
         reasons.append("candidate policy comparison is better")
     else:
         ready = False
         reasons.append(f"candidate policy comparison is {comparison.verdict.value}")
 
-    if baseline.sample_count < min_runs or candidate.sample_count < min_runs:
+    if not controlled_repeats:
         ready = False
         reasons.append("controlled repeated min-runs gate is not met")
-    if baseline.capture_mode != CaptureMode.CONTROLLED:
+    if not baseline_controlled:
         ready = False
         reasons.append("baseline capture is not controlled")
-    if candidate.capture_mode != CaptureMode.CONTROLLED:
+    if not candidate_controlled:
         ready = False
         reasons.append("candidate capture is not controlled")
-    if baseline.restored_count != baseline.sample_count:
+    if not baseline_restored:
         ready = False
         reasons.append("baseline restore verification is incomplete")
-    if candidate.restored_count != candidate.sample_count:
+    if not candidate_restored:
         ready = False
         reasons.append("candidate restore verification is incomplete")
 
-    if (
-        baseline.restore_affinity_snapshot_count == baseline.sample_count
-        and candidate.restore_affinity_snapshot_count == candidate.sample_count
-        and _aggregate_has_cgroup_cpu_controller_restore(baseline)
-        and _aggregate_has_cgroup_cpu_controller_restore(candidate)
-    ):
+    if restore_coverage:
         reasons.append("cgroup CPU controller restore snapshots are available")
     else:
         ready = False
@@ -2821,6 +2922,22 @@ def build_background_shaping_experiment_plan(
         for item in candidate_candidates
         if _background_candidate_is_ready_for_guarded_experiment(item)
     ]
+    candidate_restore_coverage = any(
+        _background_candidate_has_restore_coverage(item)
+        for item in candidate_candidates
+    )
+    candidate_stability = any(
+        (_optional_int(item.get("observed_run_count")) or 0)
+        >= BACKGROUND_SHAPING_MIN_OBSERVED_RUNS
+        and (_float(item.get("run_coverage")) or 0.0)
+        >= BACKGROUND_SHAPING_MIN_RUN_COVERAGE
+        and (_float(item.get("cpu_time_s_delta_median")) or 0.0)
+        >= BACKGROUND_SHAPING_MIN_CPU_TIME_S
+        and item.get("suggested_action")
+        in {"future-cpu-weight-candidate", "future-uclamp-max-candidate"}
+        for item in candidate_candidates
+    )
+    candidate_guarded = bool(guarded_candidates)
     if guarded_candidates:
         reasons.append(
             "background/helper cgroup candidate is stable across candidate runs"
@@ -2835,12 +2952,46 @@ def build_background_shaping_experiment_plan(
                 "candidate background cgroups are missing from restore-affinity snapshots"
             )
         reasons.append("no background/helper cgroup passed guarded-shaping gates")
+    blocking_reason_codes = []
+    if not comparison_better:
+        blocking_reason_codes.append("candidate_policy_not_better")
+    if not controlled_repeats:
+        blocking_reason_codes.append("controlled_repeats_missing")
+    if not baseline_controlled:
+        blocking_reason_codes.append("baseline_capture_not_controlled")
+    if not candidate_controlled:
+        blocking_reason_codes.append("candidate_capture_not_controlled")
+    if not baseline_restored:
+        blocking_reason_codes.append("baseline_restore_incomplete")
+    if not candidate_restored:
+        blocking_reason_codes.append("candidate_restore_incomplete")
+    if not restore_coverage:
+        blocking_reason_codes.append("cgroup_restore_snapshot_missing")
+    if not candidate_restore_coverage:
+        blocking_reason_codes.append("candidate_restore_coverage_missing")
+    if not candidate_guarded:
+        blocking_reason_codes.append("no_guarded_background_candidate")
 
     return {
         "mode": "ready-for-guarded-experiment" if ready else "observe-only",
         "write_policy": "disabled",
         "strategy": "background-helper-soft-cap",
         "candidates": guarded_candidates,
+        "readiness": {
+            "comparison_better": comparison_better,
+            "controlled_repeats": controlled_repeats,
+            "baseline_controlled": baseline_controlled,
+            "candidate_controlled": candidate_controlled,
+            "baseline_restored": baseline_restored,
+            "candidate_restored": candidate_restored,
+            "restore_coverage": restore_coverage,
+            "candidate_restore_coverage": candidate_restore_coverage,
+            "candidate_stability": candidate_stability,
+            "candidate_guarded": candidate_guarded,
+            "write_policy_disabled": True,
+            "ready_for_guarded_experiment": ready,
+            "blocking_reason_codes": blocking_reason_codes,
+        },
         "reasons": reasons,
     }
 
@@ -3293,6 +3444,409 @@ def _sequence_delta_count(left: list[str], right: list[str]) -> int:
         if left_item != right_item
     )
     return count
+
+
+def resolve_foreground_affinity_candidate(plan_json: str | Path) -> dict[str, object]:
+    payload = json.loads(Path(plan_json).read_text())
+    plans: list[dict[str, object]] = []
+    if isinstance(payload, dict) and isinstance(payload.get("comparisons"), list):
+        for comparison in payload["comparisons"]:
+            if not isinstance(comparison, dict):
+                continue
+            plan = comparison.get("affinity_experiment_plan")
+            if isinstance(plan, dict):
+                plans.append(plan)
+    elif isinstance(payload, dict):
+        plans.append(payload)
+
+    for plan in plans:
+        if plan.get("mode") != "ready-for-guarded-experiment":
+            continue
+        for item in plan.get("candidates") or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("guarded_variant") != "foreground-role-compact":
+                continue
+            role_key = _optional_str(item.get("role_key"))
+            if not role_key or not role_key.startswith("foreground-game:"):
+                continue
+            return {
+                "role_key": role_key,
+                "preferred_cpus": _plan_compact_affinity_mask(item),
+                "guarded_variant": "foreground-role-compact",
+            }
+    raise ValueError("no ready foreground affinity candidate found")
+
+
+def apply_foreground_affinity_writes(
+    restore_affinity_json: str | Path,
+    output: str | Path,
+    *,
+    role_key: str,
+    preferred_cpus: str,
+    variant: str,
+    command_runner: Any | None = None,
+    proc_root: str | Path | None = Path("/proc"),
+) -> dict[str, object]:
+    if variant not in FOREGROUND_AFFINITY_WRITE_VARIANTS:
+        raise ValueError(f"unsupported foreground affinity variant: {variant}")
+    if not role_key.startswith("foreground-game:"):
+        raise ValueError("foreground affinity writes only support foreground-game roles")
+    cpu_list = _format_cpu_list(_parse_cpu_list(preferred_cpus))
+    payload = json.loads(Path(restore_affinity_json).read_text())
+    writes: list[dict[str, object]] = []
+    matched = 0
+    written = 0
+    failed = 0
+    partial_failure = False
+
+    for item in payload.get("threads") or []:
+        if not isinstance(item, dict):
+            continue
+        current_role_key = _thread_role_key_from_restore_item(item)
+        if current_role_key != role_key:
+            continue
+        matched += 1
+        write = _foreground_affinity_write_base(item, role_key=role_key, proposed_cpus=cpu_list)
+        stale_reason = _foreground_task_stale_reason(item, proc_root=proc_root)
+        if stale_reason is not None:
+            failed += 1
+            write["status"] = stale_reason
+            writes.append(write)
+            continue
+        tid = _optional_int(item.get("tid"))
+        if tid is None:
+            failed += 1
+            write["status"] = "missing-tid"
+            writes.append(write)
+            continue
+        result = _run_completed_command(
+            ["taskset", "-pc", cpu_list, str(tid)],
+            command_runner=command_runner,
+        )
+        write.update(
+            {
+                "returncode": result["returncode"],
+                "stdout": result["stdout"],
+                "stderr": result["stderr"],
+            }
+        )
+        if result["status"] != "ok":
+            failed += 1
+            partial_failure = partial_failure or written > 0
+            write["status"] = result["status"]
+            writes.append(write)
+            continue
+        written += 1
+        write["status"] = "written"
+        writes.append(write)
+
+    report = {
+        "mode": "foreground-affinity-writes",
+        "write_policy": "guarded-foreground-affinity",
+        "role_key": role_key,
+        "variant": variant,
+        "preferred_cpus": cpu_list,
+        "matched_thread_count": matched,
+        "written_count": written,
+        "failed_count": failed,
+        "partial_failure": partial_failure,
+        "valid": matched > 0 and written > 0 and failed == 0,
+        "writes": writes,
+    }
+    Path(output).write_text(json.dumps(_json_ready(report), indent=2, sort_keys=True) + "\n")
+    return report
+
+
+def restore_foreground_affinity_writes(
+    writes_json: str | Path,
+    output: str | Path,
+    *,
+    command_runner: Any | None = None,
+    proc_root: str | Path | None = Path("/proc"),
+) -> dict[str, object]:
+    payload = json.loads(Path(writes_json).read_text())
+    restores: list[dict[str, object]] = []
+    restored = True
+    for item in payload.get("writes") or []:
+        if not isinstance(item, dict) or item.get("status") != "written":
+            continue
+        tid = _optional_int(item.get("tid"))
+        original = _optional_str(item.get("original_cpus_allowed_list"))
+        restore_item = {
+            "tid": tid,
+            "pid": item.get("pid"),
+            "comm": item.get("comm"),
+            "role_key": item.get("role_key"),
+            "restored_cpus": original,
+        }
+        if tid is None:
+            restored = False
+            restore_item["status"] = "missing-tid"
+            restores.append(restore_item)
+            continue
+        if not original:
+            restored = False
+            restore_item["status"] = "restore-missing-original-mask"
+            restores.append(restore_item)
+            continue
+        stale_reason = _foreground_task_stale_reason(item, proc_root=proc_root)
+        if stale_reason is not None:
+            restored = False
+            restore_item["status"] = stale_reason
+            restores.append(restore_item)
+            continue
+        result = _run_completed_command(
+            ["taskset", "-pc", original, str(tid)],
+            command_runner=command_runner,
+        )
+        restore_item.update(
+            {
+                "returncode": result["returncode"],
+                "stdout": result["stdout"],
+                "stderr": result["stderr"],
+            }
+        )
+        if result["status"] != "ok":
+            restored = False
+            restore_item["status"] = (
+                "restore-taskset-missing"
+                if result["status"] == "taskset-missing"
+                else "restore-failed"
+            )
+            restores.append(restore_item)
+            continue
+        current_mask = _taskset_stdout_affinity(_optional_str(result["stdout"]) or "")
+        if current_mask is not None and _parse_cpu_list(current_mask) != _parse_cpu_list(original):
+            restored = False
+            restore_item["status"] = "restore-mismatch"
+            restore_item["current_cpus"] = current_mask
+            restores.append(restore_item)
+            continue
+        restore_item["status"] = "restored"
+        restore_item["current_cpus"] = current_mask or original
+        restores.append(restore_item)
+
+    report = {
+        "mode": "foreground-affinity-restore",
+        "write_policy": "restore-foreground-affinity",
+        "restored": restored,
+        "restores": restores,
+    }
+    Path(output).write_text(json.dumps(_json_ready(report), indent=2, sort_keys=True) + "\n")
+    return report
+
+
+def summarize_foreground_affinity_artifacts(
+    writes_json: str | Path | None,
+    restore_json: str | Path | None,
+) -> dict[str, object] | None:
+    if not writes_json:
+        return None
+    writes = json.loads(Path(writes_json).read_text())
+    restore = json.loads(Path(restore_json).read_text()) if restore_json else None
+    restore_restored = restore.get("restored") if isinstance(restore, dict) else None
+    written = _optional_int(writes.get("written_count")) or 0
+    failed = _optional_int(writes.get("failed_count")) or 0
+    matched = _optional_int(writes.get("matched_thread_count")) or 0
+    return {
+        "role_key": _optional_str(writes.get("role_key")),
+        "preferred_cpus": _optional_str(writes.get("preferred_cpus")),
+        "matched_thread_count": matched,
+        "written_count": written,
+        "failed_count": failed,
+        "restore_restored": restore_restored,
+        "valid_evidence": written > 0 and failed == 0 and restore_restored is True,
+    }
+
+
+def _parse_cpu_list(value: str) -> list[int]:
+    cpus: set[int] = set()
+    for part in value.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if "-" in item:
+            bounds = item.split("-", 1)
+            if len(bounds) != 2 or not bounds[0].isdigit() or not bounds[1].isdigit():
+                raise ValueError(f"invalid CPU list: {value!r}")
+            start = int(bounds[0])
+            end = int(bounds[1])
+            if end < start:
+                raise ValueError(f"invalid CPU range: {item!r}")
+            cpus.update(range(start, end + 1))
+        else:
+            if not item.isdigit():
+                raise ValueError(f"invalid CPU list: {value!r}")
+            cpus.add(int(item))
+    if not cpus:
+        raise ValueError("CPU list must not be empty")
+    return sorted(cpus)
+
+
+def _format_cpu_list(cpus: list[int]) -> str:
+    if not cpus:
+        raise ValueError("CPU list must not be empty")
+    return ",".join(str(cpu) for cpu in sorted(set(cpus)))
+
+
+def _plan_compact_affinity_mask(candidate: dict[str, object]) -> str:
+    raw_cpus = candidate.get("preferred_cpus")
+    if raw_cpus is None:
+        raw_cpus = candidate.get("preferred_cpu_overlap")
+    if isinstance(raw_cpus, str):
+        cpus = _parse_cpu_list(raw_cpus)
+    elif isinstance(raw_cpus, list):
+        cpus = sorted(
+            {
+                cpu
+                for item in raw_cpus
+                if (cpu := _optional_int(item)) is not None and cpu >= 0
+            }
+        )
+        if not cpus:
+            raise ValueError("foreground affinity candidate has no preferred CPUs")
+    else:
+        raise ValueError("foreground affinity candidate has no preferred CPUs")
+    thread_count = (
+        _float(candidate.get("thread_count_median"))
+        or _float(candidate.get("thread_count"))
+        or 1.0
+    )
+    if thread_count > 1.0 and len(cpus) < 2:
+        raise ValueError("foreground affinity mask is too narrow for a multi-thread role")
+    return _format_cpu_list(cpus)
+
+
+def _thread_role_key_from_restore_item(item: dict[str, object]) -> str | None:
+    cgroup_role = _thread_cgroup_role(item.get("cgroup"))
+    comm = item.get("comm")
+    if cgroup_role != "foreground-game":
+        return None
+    return f"{cgroup_role}:{_normalize_role_part(comm)}"
+
+
+def _foreground_affinity_write_base(
+    item: dict[str, object],
+    *,
+    role_key: str,
+    proposed_cpus: str,
+) -> dict[str, object]:
+    return {
+        "tid": item.get("tid"),
+        "pid": item.get("pid"),
+        "comm": item.get("comm"),
+        "role_key": role_key,
+        "original_cpus_allowed_list": item.get("cpus_allowed_list"),
+        "proposed_cpus": proposed_cpus,
+    }
+
+
+def _foreground_task_stale_reason(
+    item: dict[str, object],
+    *,
+    proc_root: str | Path | None,
+) -> str | None:
+    if proc_root is None:
+        return None
+    pid = _optional_int(item.get("pid"))
+    tid = _optional_int(item.get("tid"))
+    if pid is None or tid is None:
+        return "missing-task-identity"
+    task_dir = Path(proc_root) / str(pid) / "task" / str(tid)
+    status = _parse_proc_status(_read_optional_text(task_dir / "status") or "")
+    current_comm = status.get("Name")
+    expected_comm = _optional_str(item.get("comm"))
+    if expected_comm and current_comm and current_comm != expected_comm:
+        return "stale-thread"
+    current_cgroup = _normalize_proc_cgroup(
+        _read_optional_text(Path(proc_root) / str(pid) / "cgroup") or ""
+    )
+    expected_cgroup = _optional_str(item.get("cgroup"))
+    if expected_cgroup and current_cgroup and current_cgroup != expected_cgroup:
+        return "stale-thread"
+    expected_start = _optional_int(item.get("start_time_ticks"))
+    if expected_start is not None:
+        current_start = _parse_proc_stat_start_time(_read_optional_text(task_dir / "stat") or "")
+        if current_start != expected_start:
+            return "stale-thread"
+    if not task_dir.exists():
+        return "stale-thread"
+    return None
+
+
+def _run_completed_command(
+    command: list[str],
+    *,
+    command_runner: Any | None,
+) -> dict[str, object]:
+    try:
+        if command_runner is None:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            result = command_runner(command, check=False, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        return {
+            "status": "taskset-missing",
+            "returncode": None,
+            "stdout": "",
+            "stderr": str(exc),
+        }
+    if isinstance(result, str):
+        return {"status": "ok", "returncode": 0, "stdout": result, "stderr": ""}
+    returncode = int(getattr(result, "returncode", 1))
+    return {
+        "status": "ok" if returncode == 0 else "write-failed",
+        "returncode": returncode,
+        "stdout": getattr(result, "stdout", "") or "",
+        "stderr": getattr(result, "stderr", "") or "",
+    }
+
+
+def _taskset_stdout_affinity(stdout: str) -> str | None:
+    new_matches = re.findall(r"new affinity list:\s*([0-9,\\-]+)", stdout)
+    if new_matches:
+        return new_matches[-1]
+    matches = re.findall(r"affinity list:\s*([0-9,\\-]+)", stdout)
+    return matches[-1] if matches else None
+
+
+def _parse_proc_status(text: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        parsed[key] = value.strip()
+    return parsed
+
+
+def _normalize_proc_cgroup(text: str) -> str:
+    return text.strip().replace("\n", ";")
+
+
+def _parse_proc_stat_start_time(text: str) -> int | None:
+    end = text.rfind(")")
+    if end < 0:
+        return None
+    fields = text[end + 2 :].split()
+    try:
+        return int(fields[19])
+    except (IndexError, ValueError):
+        return None
+
+
+def _read_optional_text(path: Path) -> str | None:
+    try:
+        value = path.read_text().strip()
+    except OSError:
+        return None
+    return value or None
 
 
 def apply_background_shaping_writes(
@@ -4134,10 +4688,14 @@ def _single_counter_key(value: dict[str, int] | None) -> str | None:
     return next(iter(value))
 
 
-def _optional_bool(value: str | None) -> bool | None:
+def _optional_bool(value: object) -> bool | None:
     if value is None:
         return None
-    return value == "true"
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value == "true"
+    return None
 
 
 def _csv_values(value: str | None) -> list[str] | None:
@@ -4746,6 +5304,28 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "restore-background-shaping":
         report = restore_background_shaping_writes(args.writes_json, args.output)
+        print(json.dumps(_json_ready(report), sort_keys=True))
+        return
+    if args.command == "apply-foreground-affinity":
+        report = apply_foreground_affinity_writes(
+            args.restore_affinity_json,
+            args.output,
+            role_key=args.role_key,
+            preferred_cpus=args.preferred_cpus,
+            variant=args.variant,
+        )
+        print(json.dumps(_json_ready(report), sort_keys=True))
+        if not report.get("valid"):
+            raise SystemExit(1)
+        return
+    if args.command == "restore-foreground-affinity":
+        report = restore_foreground_affinity_writes(args.writes_json, args.output)
+        print(json.dumps(_json_ready(report), sort_keys=True))
+        if report.get("restored") is not True:
+            raise SystemExit(1)
+        return
+    if args.command == "resolve-foreground-affinity":
+        report = resolve_foreground_affinity_candidate(args.plan_json)
         print(json.dumps(_json_ready(report), sort_keys=True))
         return
     if args.command == "validate-runtime-telemetry":

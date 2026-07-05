@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import json
+import math
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -326,6 +327,184 @@ def test_game_power_backend_status_includes_authoritative_runtime_snapshot(
     assert result["runtime"]["sample_source"] == "governor"
     assert result["runtime"]["fps_target"]["status"] == "unknown"
     assert result["runtime"]["frame_source"]["status"] == "missing"
+
+
+def ready_evidence_readiness() -> dict:
+    return {
+        "status": "target-aware-live",
+        "target_ready": True,
+        "frame_ready": True,
+        "learning_ready": False,
+        "claim_ready": True,
+        "control_ready": True,
+        "write_policy": "epp-only",
+        "reasons": ["control ready", "fps target known", "frame data ready"],
+    }
+
+
+def runtime_snapshot_row(**updates) -> dict:
+    row = {
+        "schema_version": "game-power-runtime-snapshot-v1",
+        "timestamp_monotonic_s": 100.0,
+        "source": "daemon",
+        "mode": "automatic",
+        "control_active": True,
+        "sample_source": "governor",
+        "appid": "1091500",
+        "last_action": "gpu-priority-epp",
+        "last_reason": "package limited with GPU activity",
+        "classification_primary": "gpu-package-bound",
+        "classification_confidence": "high",
+        "fps_target": {
+            "status": "known",
+            "source": "manual",
+            "confidence": "high",
+            "fps": 40.0,
+            "target_frame_ms": 25.0,
+            "raw": None,
+        },
+        "frame_source": {
+            "status": "live",
+            "source": "mangohud-csv",
+            "confidence": "high",
+            "avg_fps": 44.0,
+            "p95_ms": 24.0,
+            "p99_ms": None,
+            "sample_count": 12,
+            "window_s": 6.0,
+        },
+        "package_w": 24.0,
+        "core_w": 7.0,
+        "uncore_w": 10.0,
+        "pl1_w": 30,
+        "render_busy": 0.91,
+        "learning": {
+            "status": "unknown",
+            "session_samples": None,
+            "positive_samples": None,
+            "required_samples": None,
+            "required_sessions": None,
+            "reusable_next_launch": False,
+            "skip_reason": "unavailable",
+            "hint_key": None,
+        },
+        "evidence_readiness": ready_evidence_readiness(),
+        "stale": False,
+        "error": None,
+    }
+    row.update(updates)
+    return row
+
+
+def test_game_power_backend_runtime_snapshot_defaults_evidence_readiness():
+    backend = load_game_power_backend()
+
+    result = backend._runtime_snapshot_unavailable("missing-runtime-snapshot")
+
+    assert result["evidence_readiness"]["status"] == "unavailable"
+    assert result["evidence_readiness"]["claim_ready"] is False
+    assert result["evidence_readiness"]["write_policy"] == "disabled"
+
+
+def test_game_power_backend_public_runtime_snapshot_passes_through_readiness(
+    monkeypatch,
+):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+
+    result = backend._public_runtime_snapshot(runtime_snapshot_row())
+
+    assert result["stale"] is False
+    assert result["evidence_readiness"]["status"] == "target-aware-live"
+    assert result["evidence_readiness"]["claim_ready"] is True
+
+
+def test_game_power_backend_public_runtime_snapshot_overrides_stale_and_error_readiness(
+    monkeypatch,
+):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 120.1)
+
+    stale = backend._public_runtime_snapshot(runtime_snapshot_row())
+    errored = backend._public_runtime_snapshot(
+        runtime_snapshot_row(timestamp_monotonic_s=119.0, error="daemon-error")
+    )
+
+    assert stale["stale"] is True
+    assert stale["evidence_readiness"]["status"] == "unavailable"
+    assert stale["evidence_readiness"]["claim_ready"] is False
+    assert stale["fps_target"]["status"] == "unknown"
+    assert stale["frame_source"]["status"] == "missing"
+    assert errored["evidence_readiness"]["status"] == "unavailable"
+    assert errored["evidence_readiness"]["claim_ready"] is False
+    assert errored["fps_target"]["status"] == "unknown"
+    assert errored["frame_source"]["status"] == "missing"
+
+
+def test_game_power_backend_public_runtime_snapshot_sanitizes_malformed_readiness(
+    monkeypatch,
+):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+    invalid_rows = (
+        runtime_snapshot_row(evidence_readiness=None),
+        runtime_snapshot_row(evidence_readiness=[]),
+        runtime_snapshot_row(evidence_readiness={"status": "target-aware-live"}),
+        runtime_snapshot_row(
+            evidence_readiness={
+                **ready_evidence_readiness(),
+                "status": "unknown-ready-state",
+            }
+        ),
+        runtime_snapshot_row(
+            evidence_readiness={**ready_evidence_readiness(), "claim_ready": "yes"}
+        ),
+        runtime_snapshot_row(
+            evidence_readiness={
+                **ready_evidence_readiness(),
+                "status": "power-signals-only",
+            }
+        ),
+        runtime_snapshot_row(mode="off"),
+        runtime_snapshot_row(mode="observe"),
+        runtime_snapshot_row(
+            evidence_readiness={
+                **ready_evidence_readiness(),
+                "status": "control-invalid",
+            }
+        ),
+        runtime_snapshot_row(
+            evidence_readiness={**ready_evidence_readiness(), "target_ready": False}
+        ),
+        runtime_snapshot_row(
+            evidence_readiness={**ready_evidence_readiness(), "frame_ready": False}
+        ),
+        runtime_snapshot_row(
+            evidence_readiness={**ready_evidence_readiness(), "control_ready": False}
+        ),
+    )
+
+    for row in invalid_rows:
+        result = backend._public_runtime_snapshot(row)
+        assert result["evidence_readiness"]["status"] == "unavailable"
+        assert result["evidence_readiness"]["claim_ready"] is False
+
+
+def test_game_power_backend_public_runtime_snapshot_rejects_invalid_timestamps(
+    monkeypatch,
+):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+
+    for timestamp in (None, "100.0", math.nan, math.inf):
+        result = backend._public_runtime_snapshot(
+            runtime_snapshot_row(timestamp_monotonic_s=timestamp)
+        )
+
+        assert result["evidence_readiness"]["status"] == "unavailable"
+        assert result["evidence_readiness"]["claim_ready"] is False
+        assert result["fps_target"]["status"] == "unknown"
+        assert result["frame_source"]["status"] == "missing"
 
 
 def test_game_power_backend_sample_once_returns_public_subset(monkeypatch):

@@ -162,6 +162,17 @@ def target_state_from_telemetry(
             source=source,
             confidence=confidence,
         )
+    if (
+        not math.isfinite(frame_target.fps_target)
+        or frame_target.fps_target <= 0
+        or frame_target.target_frame_ms is None
+    ):
+        return GamePowerTargetState(
+            status="unknown",
+            source=source,
+            confidence="low",
+            raw=str(frame_target.fps_target),
+        )
 
     return GamePowerTargetState(
         status="known",
@@ -188,6 +199,8 @@ def frame_source_state_from_telemetry(
         frame_performance.sample_count <= 0
         or frame_performance.avg_fps is None
         or frame_performance.p95_frame_ms is None
+        or not math.isfinite(frame_performance.avg_fps)
+        or not math.isfinite(frame_performance.p95_frame_ms)
     )
     return GamePowerFrameSourceState(
         status="malformed" if malformed else "live",
@@ -630,6 +643,7 @@ class GamePowerConfig:
     fps_target_satisfied_headroom_ratio: float = 1.05
     fps_target_satisfied_p95_ratio: float = 1.15
     frame_performance_min_samples: int = 12
+    runtime_control_health: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -2023,6 +2037,7 @@ def runtime_snapshot_payload(
 ) -> dict[str, object]:
     rapl = sample.rapl
     classification = decision.classification
+    learning_state = learning or _default_learning_state()
     return {
         "schema_version": RUNTIME_SNAPSHOT_SCHEMA_VERSION,
         "timestamp_monotonic_s": round(elapsed_s, 3),
@@ -2048,7 +2063,14 @@ def runtime_snapshot_payload(
         "uncore_w": _round_or_none(rapl.uncore_w if rapl else None),
         "pl1_w": sample.pl1_w,
         "render_busy": _round_or_none(sample.fdinfo_busy.get("render")),
-        "learning": learning or _default_learning_state(),
+        "learning": learning_state,
+        "evidence_readiness": evidence_readiness_from_runtime(
+            config,
+            sample,
+            stale=stale,
+            error=error,
+            learning=learning_state,
+        ),
         "stale": stale,
         "error": error,
     }
@@ -2063,6 +2085,151 @@ def _default_learning_state() -> dict[str, object]:
         "reusable_next_launch": False,
         "skip_reason": "unavailable",
     }
+
+
+def evidence_readiness_from_runtime(
+    config: GamePowerConfig,
+    sample: GamePowerSample,
+    *,
+    stale: bool = False,
+    error: str | None = None,
+    learning: dict[str, object] | None = None,
+) -> dict[str, object]:
+    if stale or error:
+        return _evidence_readiness(
+            status="unavailable",
+            target_ready=False,
+            frame_ready=False,
+            learning_ready=False,
+            claim_ready=False,
+            control_ready=False,
+            write_policy="disabled",
+            reasons=["runtime unavailable"],
+        )
+
+    control_health = config.runtime_control_health or {"status": "ready"}
+    control_ready = control_health.get("status") != "invalid"
+    if not control_ready:
+        return _evidence_readiness(
+            status="control-invalid",
+            target_ready=False,
+            frame_ready=False,
+            learning_ready=False,
+            claim_ready=False,
+            control_ready=False,
+            write_policy="disabled",
+            reasons=[
+                str(control_health.get("reason") or "runtime control invalid")
+            ],
+        )
+
+    if config.mode == GamePowerMode.OFF:
+        return _evidence_readiness(
+            status="stopped",
+            target_ready=False,
+            frame_ready=False,
+            learning_ready=False,
+            claim_ready=False,
+            control_ready=True,
+            write_policy="disabled",
+            reasons=["game power stopped"],
+        )
+
+    if config.mode == GamePowerMode.OBSERVE:
+        return _evidence_readiness(
+            status="view-data-only",
+            target_ready=False,
+            frame_ready=False,
+            learning_ready=False,
+            claim_ready=False,
+            control_ready=True,
+            write_policy="disabled",
+            reasons=["view data only"],
+        )
+
+    target_state = target_state_from_telemetry(sample.frame_target)
+    frame_state = frame_source_state_from_telemetry(sample.frame_performance)
+    target_ready = _target_state_is_ready(target_state)
+    frame_ready = _frame_source_state_is_ready(config, frame_state)
+    learning_state = learning or _default_learning_state()
+    learning_ready = (
+        learning_state.get("status") == "ready"
+        and learning_state.get("reusable_next_launch") is True
+    )
+    claim_ready = target_ready and frame_ready
+    status = "target-aware-live" if claim_ready else "power-signals-only"
+    write_policy = (
+        "epp-plus-cpu-cap-explicit" if config.cpu_cap_enabled else "epp-only"
+    )
+    reasons = ["control ready"]
+    reasons.append("fps target known" if target_ready else "fps target unknown")
+    reasons.append("frame data ready" if frame_ready else _frame_not_ready_reason(frame_state))
+    return _evidence_readiness(
+        status=status,
+        target_ready=target_ready,
+        frame_ready=frame_ready,
+        learning_ready=learning_ready,
+        claim_ready=claim_ready,
+        control_ready=True,
+        write_policy=write_policy,
+        reasons=reasons,
+    )
+
+
+def _evidence_readiness(
+    *,
+    status: str,
+    target_ready: bool,
+    frame_ready: bool,
+    learning_ready: bool,
+    claim_ready: bool,
+    control_ready: bool,
+    write_policy: str,
+    reasons: list[str],
+) -> dict[str, object]:
+    return {
+        "status": status,
+        "target_ready": target_ready,
+        "frame_ready": frame_ready,
+        "learning_ready": learning_ready,
+        "claim_ready": claim_ready,
+        "control_ready": control_ready,
+        "write_policy": write_policy,
+        "reasons": reasons,
+    }
+
+
+def _target_state_is_ready(target: GamePowerTargetState) -> bool:
+    return (
+        target.status == "known"
+        and target.confidence != "low"
+        and target.fps is not None
+        and target.fps > 0
+        and target.target_frame_ms is not None
+        and target.target_frame_ms > 0
+    )
+
+
+def _frame_source_state_is_ready(
+    config: GamePowerConfig,
+    frame: GamePowerFrameSourceState,
+) -> bool:
+    return (
+        frame.status == "live"
+        and frame.confidence == "high"
+        and frame.avg_fps is not None
+        and frame.p95_ms is not None
+        and frame.sample_count is not None
+        and frame.sample_count >= config.frame_performance_min_samples
+    )
+
+
+def _frame_not_ready_reason(frame: GamePowerFrameSourceState) -> str:
+    if frame.status == "missing":
+        return "frame data missing"
+    if frame.status == "malformed":
+        return "frame data invalid"
+    return "frame data not ready"
 
 
 def format_runtime_snapshot_json(
@@ -2106,7 +2273,11 @@ def _fmt_w(value: float | None) -> str:
 
 
 def _round_or_none(value: float | None) -> float | None:
-    return round(value, 3) if value is not None else None
+    if value is None:
+        return None
+    if not math.isfinite(value):
+        return None
+    return round(value, 3)
 
 
 def _classification_json(

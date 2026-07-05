@@ -39,6 +39,17 @@ type LearningState = {
   hint_key?: string | null;
 };
 
+type EvidenceReadiness = {
+  status: string;
+  target_ready: boolean;
+  frame_ready: boolean;
+  learning_ready: boolean;
+  claim_ready: boolean;
+  control_ready: boolean;
+  write_policy: string;
+  reasons: string[];
+};
+
 type RuntimeSnapshot = {
   schema_version: string;
   timestamp_monotonic_s: number | null;
@@ -59,6 +70,7 @@ type RuntimeSnapshot = {
   pl1_w: number | null;
   render_busy: number | null;
   learning: LearningState;
+  evidence_readiness: EvidenceReadiness;
   stale: boolean;
   error: string | null;
 };
@@ -153,6 +165,8 @@ type Copy = {
   restore: string;
   applying: string;
   restored: string;
+  evidenceLabel: string;
+  evidenceStates: Record<string, string>;
   modes: Record<string, string>;
   modeDescriptions: Record<string, string>;
   telemetryLabels: Record<string, string>;
@@ -197,6 +211,15 @@ const COPY: Record<LocaleKey, Copy> = {
     restore: "Use service default",
     applying: "Applying...",
     restored: "Using the service default.",
+    evidenceLabel: "Local evidence",
+    evidenceStates: {
+      "target-aware-live": "Local target/frame evidence ready",
+      "power-signals-only": "Local evidence: power signals only",
+      "view-data-only": "View data only",
+      stopped: "Game Power stopped",
+      "control-invalid": "Local evidence unavailable",
+      unavailable: "Local evidence unavailable",
+    },
     modes: {
       automatic: "Balance to FPS target",
       observe: "Watch data only",
@@ -290,6 +313,15 @@ const COPY: Record<LocaleKey, Copy> = {
     restore: "使用服務預設",
     applying: "正在套用...",
     restored: "已切回服務預設。",
+    evidenceLabel: "本機證據",
+    evidenceStates: {
+      "target-aware-live": "本機 FPS 目標與影格資料可用",
+      "power-signals-only": "本機證據：僅有功耗訊號",
+      "view-data-only": "只看數據",
+      stopped: "遊戲電力已停止",
+      "control-invalid": "本機證據不可用",
+      unavailable: "本機證據不可用",
+    },
     modes: {
       automatic: "依 FPS 目標自動平衡",
       observe: "只看數據，不調整功耗",
@@ -445,18 +477,26 @@ function modeKey(mode: string | null | undefined): string {
   return "unknown";
 }
 
+function isTargetAwareReady(readiness: EvidenceReadiness | null | undefined): boolean {
+  return readiness?.status === "target-aware-live" && readiness?.claim_ready === true;
+}
+
+function evidenceText(t: Copy, readiness: EvidenceReadiness | null | undefined): string {
+  if (!readiness) {
+    return t.evidenceStates.unavailable;
+  }
+  if (!isTargetAwareReady(readiness) && readiness.status === "target-aware-live") {
+    return t.evidenceStates.unavailable;
+  }
+  return t.evidenceStates[readiness.status] ?? t.evidenceStates.unavailable;
+}
+
 function modeLabel(
   t: Copy,
   mode: string | null | undefined,
   runtime: RuntimeSnapshot | null,
 ): string {
-  if (
-    mode === "automatic" &&
-    !runtime?.stale &&
-    !runtime?.error &&
-    runtime?.fps_target?.status === "known" &&
-    runtime?.frame_source?.status === "live"
-  ) {
+  if (mode === "automatic" && isTargetAwareReady(runtime?.evidence_readiness)) {
     return t.telemetryLabels.targetAware;
   }
   return t.modes[modeKey(mode)] ?? t.modes.unknown;
@@ -519,7 +559,7 @@ function runtimeHeadline(
   if (runtime.stale) {
     return t.telemetryLabels.stale;
   }
-  if (runtime.fps_target.status === "known" && runtime.frame_source.status === "live") {
+  if (isTargetAwareReady(runtime?.evidence_readiness)) {
     return t.telemetryLabels.targetAware;
   }
   if (runtime.frame_source.status !== "live") {
@@ -684,6 +724,9 @@ const GamePowerPanel: FC = () => {
                 <div style={detailStyle}>{mappedText(t.policyLabels, status.policy_label)}</div>
                 <div style={detailStyle}>{modeDescription(t, status.mode)}</div>
                 <div style={detailStyle}>{runtimeHeadline(t, status.mode, runtime)}</div>
+                <div style={detailStyle}>
+                  {t.evidenceLabel}: {evidenceText(t, runtime?.evidence_readiness)}
+                </div>
                 <div style={detailStyle}>{targetText(t, runtime?.fps_target)}</div>
                 <div style={detailStyle}>{frameText(t, runtime?.frame_source)}</div>
                 <div style={detailStyle}>

@@ -143,7 +143,7 @@ def test_runtime_control_manual_fps_target_overlays_base_frame_target(tmp_path):
     )
 
 
-def test_runtime_control_ignores_corrupt_file_and_falls_back_to_base(tmp_path):
+def test_runtime_control_fails_closed_for_corrupt_file(tmp_path):
     path = tmp_path / "game-power-control.json"
     path.write_text("{not-json")
     base = GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY)
@@ -151,6 +151,93 @@ def test_runtime_control_ignores_corrupt_file_and_falls_back_to_base(tmp_path):
     effective = game_power_control.effective_config_from_runtime_file(base, path)
     status = game_power_control.read_runtime_status(path)
 
-    assert effective == base
+    assert effective.mode == GamePowerMode.OFF
     assert status.mode == "invalid"
     assert status.override_active is True
+
+
+def test_runtime_control_fails_closed_for_invalid_mode(tmp_path):
+    path = tmp_path / "game-power-control.json"
+    path.write_text(json.dumps({"schema_version": 1, "mode": "uclamp"}))
+    base = GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY)
+
+    effective = game_power_control.effective_config_from_runtime_file(base, path)
+    status = game_power_control.read_runtime_status(path)
+
+    assert effective.mode == GamePowerMode.OFF
+    assert status.mode == "invalid"
+    assert status.override_active is True
+
+
+def test_runtime_control_fails_closed_for_invalid_fps_target_override(tmp_path):
+    path = tmp_path / "game-power-control.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "mode": "automatic",
+                "fps_target_override": {"fps": 37, "source": "decky"},
+            }
+        )
+    )
+    base = GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY)
+
+    effective = game_power_control.effective_config_from_runtime_file(base, path)
+    status = game_power_control.read_runtime_status(path)
+
+    assert effective.mode == GamePowerMode.OFF
+    assert status.mode == "automatic"
+    assert status.fps_target_override.status == "invalid"
+    assert effective.runtime_control_health == {
+        "status": "invalid",
+        "mode": "automatic",
+        "override_active": True,
+        "fps_target_override_status": "invalid",
+        "reason": "invalid-fps-target-override",
+    }
+
+
+def test_runtime_control_fails_closed_for_unsupported_schema_version(tmp_path):
+    path = tmp_path / "game-power-control.json"
+    path.write_text(json.dumps({"schema_version": 99, "mode": "automatic"}))
+    base = GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY)
+
+    effective = game_power_control.effective_config_from_runtime_file(base, path)
+    status = game_power_control.read_runtime_status(path)
+
+    assert effective.mode == GamePowerMode.OFF
+    assert status.mode == "invalid"
+    assert status.fps_target_override.status == "invalid"
+
+
+def test_runtime_control_fails_closed_for_non_object_json(tmp_path):
+    path = tmp_path / "game-power-control.json"
+    path.write_text(json.dumps(["automatic"]))
+    base = GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY)
+
+    effective = game_power_control.effective_config_from_runtime_file(base, path)
+    status = game_power_control.read_runtime_status(path)
+
+    assert effective.mode == GamePowerMode.OFF
+    assert status.mode == "invalid"
+    assert status.fps_target_override.status == "invalid"
+
+
+def test_set_runtime_mode_drops_invalid_saved_fps_target_override(tmp_path):
+    path = tmp_path / "game-power-control.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "mode": "observe",
+                "fps_target_override": {"fps": 37, "source": "decky"},
+            }
+        )
+    )
+
+    status = game_power_control.set_runtime_mode(path, "automatic", source="decky")
+    raw = json.loads(path.read_text())
+
+    assert status.mode == "automatic"
+    assert status.fps_target_override.status == "auto"
+    assert "fps_target_override" not in raw

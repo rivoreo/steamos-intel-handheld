@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -180,6 +181,19 @@ def _default_learning_state() -> dict:
     }
 
 
+def _default_evidence_readiness(reason: str = "runtime-unavailable") -> dict:
+    return {
+        "status": "unavailable",
+        "target_ready": False,
+        "frame_ready": False,
+        "learning_ready": False,
+        "claim_ready": False,
+        "control_ready": False,
+        "write_policy": "disabled",
+        "reasons": [reason],
+    }
+
+
 def _runtime_snapshot_unavailable(reason: str) -> dict:
     return {
         "schema_version": RUNTIME_SNAPSHOT_SCHEMA,
@@ -201,6 +215,7 @@ def _runtime_snapshot_unavailable(reason: str) -> dict:
         "pl1_w": None,
         "render_busy": None,
         "learning": _default_learning_state(),
+        "evidence_readiness": _default_evidence_readiness(reason),
         "stale": True,
         "error": reason,
     }
@@ -210,11 +225,121 @@ def _dict_or_default(value, default: dict) -> dict:
     return value if isinstance(value, dict) else default
 
 
+def _valid_timestamp(value) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _public_evidence_readiness(
+    row: dict,
+    *,
+    stale: bool,
+    error,
+    timestamp_valid: bool,
+) -> dict:
+    if not timestamp_valid:
+        return _default_evidence_readiness("runtime-timestamp-invalid")
+    if stale:
+        return _default_evidence_readiness("runtime-stale")
+    if error:
+        return _default_evidence_readiness("runtime-error")
+
+    readiness = row.get("evidence_readiness")
+    if not isinstance(readiness, dict):
+        return _default_evidence_readiness("runtime-readiness-invalid")
+
+    status = readiness.get("status")
+    write_policy = readiness.get("write_policy")
+    reasons = readiness.get("reasons")
+    allowed_statuses = {
+        "unavailable",
+        "control-invalid",
+        "stopped",
+        "view-data-only",
+        "target-aware-live",
+        "power-signals-only",
+    }
+    if status not in allowed_statuses or not isinstance(write_policy, str):
+        return _default_evidence_readiness("runtime-readiness-invalid")
+    if not isinstance(reasons, list):
+        return _default_evidence_readiness("runtime-readiness-invalid")
+
+    bool_fields = (
+        "target_ready",
+        "frame_ready",
+        "learning_ready",
+        "claim_ready",
+        "control_ready",
+    )
+    if any(not isinstance(readiness.get(field), bool) for field in bool_fields):
+        return _default_evidence_readiness("runtime-readiness-invalid")
+
+    mode = row.get("mode")
+    claim_ready = readiness["claim_ready"]
+    if claim_ready and status != "target-aware-live":
+        return _default_evidence_readiness("runtime-readiness-invalid")
+    if claim_ready and mode in {"off", "observe"}:
+        return _default_evidence_readiness("runtime-readiness-invalid")
+    if (
+        status == "target-aware-live"
+        and claim_ready
+        and (
+            mode != "automatic"
+            or not readiness["target_ready"]
+            or not readiness["frame_ready"]
+            or not readiness["control_ready"]
+        )
+    ):
+        return _default_evidence_readiness("runtime-readiness-invalid")
+    if status == "control-invalid" and (
+        readiness["control_ready"] or readiness["claim_ready"]
+    ):
+        return _default_evidence_readiness("runtime-readiness-invalid")
+
+    return {
+        "status": status,
+        "target_ready": readiness["target_ready"],
+        "frame_ready": readiness["frame_ready"],
+        "learning_ready": readiness["learning_ready"],
+        "claim_ready": readiness["claim_ready"],
+        "control_ready": readiness["control_ready"],
+        "write_policy": write_policy,
+        "reasons": [item for item in reasons if isinstance(item, str)],
+    }
+
+
 def _public_runtime_snapshot(row: dict) -> dict:
     timestamp = row.get("timestamp_monotonic_s")
+    timestamp_valid = _valid_timestamp(timestamp)
     stale = bool(row.get("stale"))
-    if isinstance(timestamp, (int, float)):
+    if timestamp_valid:
         stale = stale or (time.monotonic() - float(timestamp)) > RUNTIME_SNAPSHOT_STALE_AFTER_S
+    else:
+        stale = True
+    error = row.get("error")
+    evidence_readiness = _public_evidence_readiness(
+        row,
+        stale=stale,
+        error=error,
+        timestamp_valid=timestamp_valid,
+    )
+    if evidence_readiness.get("status") in {
+        "unavailable",
+        "control-invalid",
+        "stopped",
+        "view-data-only",
+    }:
+        fps_target = _default_target_state()
+        frame_source = _default_frame_source_state()
+    else:
+        fps_target = _dict_or_default(row.get("fps_target"), _default_target_state())
+        frame_source = _dict_or_default(
+            row.get("frame_source"),
+            _default_frame_source_state(),
+        )
     return {
         "schema_version": row.get("schema_version", RUNTIME_SNAPSHOT_SCHEMA),
         "timestamp_monotonic_s": timestamp,
@@ -227,19 +352,17 @@ def _public_runtime_snapshot(row: dict) -> dict:
         "last_reason": row.get("last_reason"),
         "classification_primary": row.get("classification_primary"),
         "classification_confidence": row.get("classification_confidence"),
-        "fps_target": _dict_or_default(row.get("fps_target"), _default_target_state()),
-        "frame_source": _dict_or_default(
-            row.get("frame_source"),
-            _default_frame_source_state(),
-        ),
+        "fps_target": fps_target,
+        "frame_source": frame_source,
         "package_w": row.get("package_w"),
         "core_w": row.get("core_w"),
         "uncore_w": row.get("uncore_w"),
         "pl1_w": row.get("pl1_w"),
         "render_busy": row.get("render_busy"),
         "learning": _dict_or_default(row.get("learning"), _default_learning_state()),
+        "evidence_readiness": evidence_readiness,
         "stale": stale,
-        "error": row.get("error"),
+        "error": error,
     }
 
 

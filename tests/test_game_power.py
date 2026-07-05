@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 
 from steamos_intel_handheld import game_power
@@ -1274,6 +1275,249 @@ def test_runtime_snapshot_schema_reports_known_target_and_live_frame_source():
         "sample_count": 20,
         "window_s": 2.0,
     }
+
+
+def _runtime_readiness_payload(
+    *,
+    config: GamePowerConfig | None = None,
+    sample: GamePowerSample | None = None,
+    learning: dict[str, object] | None = None,
+    stale: bool = False,
+    error: str | None = None,
+) -> dict[str, object]:
+    return game_power.runtime_snapshot_payload(
+        config
+        or GamePowerConfig(
+            mode=GamePowerMode.GPU_PRIORITY,
+            runtime_control_health={"status": "ready", "reason": "control-ready"},
+        ),
+        sample
+        or make_sample(
+            frame_target=FrameTargetTelemetry(
+                fps_target=40.0,
+                source="manual",
+                confidence="high",
+            ),
+            frame_performance=frame_performance(avg_fps=44.0, p95_frame_ms=24.0),
+        ),
+        game_power.GamePowerDecision(GamePowerAction.GPU_PRIORITY_EPP, "package limited"),
+        elapsed_s=1.0,
+        learning=learning,
+        stale=stale,
+        error=error,
+    )
+
+
+def test_runtime_snapshot_schema_reports_local_target_frame_evidence_ready():
+    row = _runtime_readiness_payload()
+
+    readiness = row["evidence_readiness"]
+    assert readiness["status"] == "target-aware-live"
+    assert readiness["target_ready"] is True
+    assert readiness["frame_ready"] is True
+    assert readiness["learning_ready"] is False
+    assert readiness["claim_ready"] is True
+    assert readiness["control_ready"] is True
+    assert readiness["write_policy"] == "epp-only"
+    assert readiness["reasons"] == [
+        "control ready",
+        "fps target known",
+        "frame data ready",
+    ]
+
+
+def test_runtime_snapshot_schema_reports_power_signals_only_for_missing_frame_data():
+    row = _runtime_readiness_payload(
+        sample=make_sample(
+            frame_target=None,
+            frame_performance=None,
+        )
+    )
+
+    readiness = row["evidence_readiness"]
+    assert readiness["status"] == "power-signals-only"
+    assert readiness["target_ready"] is False
+    assert readiness["frame_ready"] is False
+    assert readiness["claim_ready"] is False
+    assert readiness["control_ready"] is True
+    assert readiness["write_policy"] == "epp-only"
+    assert readiness["reasons"] == [
+        "control ready",
+        "fps target unknown",
+        "frame data missing",
+    ]
+
+
+def test_runtime_snapshot_schema_rejects_non_finite_or_non_positive_targets():
+    for fps_target in (math.nan, math.inf, 0.0, -40.0):
+        row = _runtime_readiness_payload(
+            sample=make_sample(
+                frame_target=FrameTargetTelemetry(
+                    fps_target=fps_target,
+                    source="manual",
+                    confidence="high",
+                ),
+                frame_performance=frame_performance(avg_fps=44.0, p95_frame_ms=24.0),
+            )
+        )
+
+        readiness = row["evidence_readiness"]
+        assert readiness["status"] == "power-signals-only"
+        assert readiness["target_ready"] is False
+        assert readiness["claim_ready"] is False
+        json.dumps(row, allow_nan=False)
+
+
+def test_runtime_snapshot_schema_rejects_low_confidence_or_undersampled_frame_data():
+    cases = (
+        (
+            FrameTargetTelemetry(fps_target=40.0, source="manual", confidence="low"),
+            frame_performance(avg_fps=44.0, p95_frame_ms=24.0),
+        ),
+        (
+            FrameTargetTelemetry(fps_target=40.0, source="manual", confidence="high"),
+            frame_performance(avg_fps=44.0, p95_frame_ms=24.0, sample_count=11),
+        ),
+        (
+            FrameTargetTelemetry(fps_target=40.0, source="manual", confidence="high"),
+            FramePerformanceTelemetry(
+                avg_fps=44.0,
+                p95_frame_ms=24.0,
+                sample_count=12,
+                window_s=2.0,
+                source="mangohud-csv",
+                confidence="low",
+            ),
+        ),
+    )
+    for target, performance in cases:
+        row = _runtime_readiness_payload(
+            sample=make_sample(frame_target=target, frame_performance=performance)
+        )
+
+        readiness = row["evidence_readiness"]
+        assert readiness["status"] == "power-signals-only"
+        assert readiness["claim_ready"] is False
+
+
+def test_runtime_snapshot_schema_rejects_non_finite_frame_data():
+    cases = (
+        {"avg_fps": math.nan, "p95_frame_ms": 24.0},
+        {"avg_fps": math.inf, "p95_frame_ms": 24.0},
+        {"avg_fps": 44.0, "p95_frame_ms": math.nan},
+        {"avg_fps": 44.0, "p95_frame_ms": math.inf},
+    )
+    for kwargs in cases:
+        row = _runtime_readiness_payload(
+            sample=make_sample(
+                frame_target=FrameTargetTelemetry(
+                    fps_target=40.0,
+                    source="manual",
+                    confidence="high",
+                ),
+                frame_performance=frame_performance(**kwargs),
+            )
+        )
+
+        readiness = row["evidence_readiness"]
+        assert readiness["status"] == "power-signals-only"
+        assert readiness["frame_ready"] is False
+        assert readiness["claim_ready"] is False
+        json.dumps(row, allow_nan=False)
+
+
+def test_runtime_snapshot_schema_reports_control_invalid_readiness():
+    row = _runtime_readiness_payload(
+        config=GamePowerConfig(
+            mode=GamePowerMode.OFF,
+            runtime_control_health={
+                "status": "invalid",
+                "reason": "invalid-fps-target-override",
+            },
+        )
+    )
+
+    readiness = row["evidence_readiness"]
+    assert readiness["status"] == "control-invalid"
+    assert readiness["control_ready"] is False
+    assert readiness["claim_ready"] is False
+    assert readiness["write_policy"] == "disabled"
+
+
+def test_runtime_snapshot_schema_reports_cpu_cap_explicit_write_policy():
+    row = _runtime_readiness_payload(
+        config=GamePowerConfig(
+            mode=GamePowerMode.GPU_PRIORITY,
+            cpu_cap_enabled=True,
+            runtime_control_health={"status": "ready", "reason": "control-ready"},
+        )
+    )
+
+    readiness = row["evidence_readiness"]
+    assert readiness["status"] == "target-aware-live"
+    assert readiness["claim_ready"] is True
+    assert readiness["write_policy"] == "epp-plus-cpu-cap-explicit"
+
+
+def test_runtime_snapshot_schema_reports_learning_ready_only_when_reusable():
+    ready = _runtime_readiness_payload(
+        learning={
+            "status": "ready",
+            "session_samples": 20,
+            "required_samples": 20,
+            "reusable_next_launch": True,
+            "skip_reason": None,
+        }
+    )
+    waiting = _runtime_readiness_payload(
+        learning={
+            "status": "waiting-for-fps-target",
+            "session_samples": 2,
+            "required_samples": 20,
+            "reusable_next_launch": False,
+            "skip_reason": "fps_target_unknown",
+        }
+    )
+
+    assert ready["evidence_readiness"]["learning_ready"] is True
+    assert waiting["evidence_readiness"]["learning_ready"] is False
+
+
+def test_runtime_snapshot_schema_reports_unavailable_readiness_for_stale_or_error():
+    stale = _runtime_readiness_payload(stale=True)
+    errored = _runtime_readiness_payload(error="invalid-runtime-snapshot")
+
+    for row in (stale, errored):
+        readiness = row["evidence_readiness"]
+        assert readiness["status"] == "unavailable"
+        assert readiness["target_ready"] is False
+        assert readiness["frame_ready"] is False
+        assert readiness["learning_ready"] is False
+        assert readiness["claim_ready"] is False
+        assert readiness["control_ready"] is False
+        assert readiness["write_policy"] == "disabled"
+
+
+def test_runtime_snapshot_schema_reports_stopped_and_view_data_only_readiness():
+    stopped = _runtime_readiness_payload(
+        config=GamePowerConfig(
+            mode=GamePowerMode.OFF,
+            runtime_control_health={"status": "ready", "reason": "control-ready"},
+        )
+    )
+    view_data = _runtime_readiness_payload(
+        config=GamePowerConfig(
+            mode=GamePowerMode.OBSERVE,
+            runtime_control_health={"status": "ready", "reason": "control-ready"},
+        )
+    )
+
+    assert stopped["evidence_readiness"]["status"] == "stopped"
+    assert stopped["evidence_readiness"]["claim_ready"] is False
+    assert stopped["evidence_readiness"]["write_policy"] == "disabled"
+    assert view_data["evidence_readiness"]["status"] == "view-data-only"
+    assert view_data["evidence_readiness"]["claim_ready"] is False
+    assert view_data["evidence_readiness"]["write_policy"] == "disabled"
 
 
 def test_runtime_snapshot_schema_can_represent_unlimited_fps_target():

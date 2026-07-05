@@ -28,11 +28,17 @@ frame_performance_window_samples="${PROFILE_GAME_POWER_FRAME_PERFORMANCE_WINDOW_
 frame_performance_min_samples="${PROFILE_GAME_POWER_FRAME_PERFORMANCE_MIN_SAMPLES:-12}"
 frame_performance_live_timeout_s="${PROFILE_GAME_POWER_FRAME_PERFORMANCE_LIVE_TIMEOUT_S:-15}"
 target_satisfied_tdps="${PROFILE_GAME_POWER_TARGET_SATISFIED_TDPS:-22}"
+affinity_plan_json="${PROFILE_GAME_POWER_AFFINITY_PLAN_JSON:-}"
 local_root="${PROFILE_GAME_POWER_OUTPUT_ROOT:-.cache/game-power/profiles}"
 mkdir -p "$local_root"
 
 remote_root="$(ssh "$target" "mktemp -d /tmp/game-power-profile.XXXXXX")"
 failure_marker="${remote_root##*/}.failed"
+remote_affinity_plan_json=""
+if [ -n "$affinity_plan_json" ]; then
+  remote_affinity_plan_json="$remote_root/affinity-experiment-plan.json"
+  scp "$affinity_plan_json" "$target:$remote_affinity_plan_json"
+fi
 
 ssh "$target" \
   "APPID='$appid' TDP_LEVELS='$tdp_levels' POLICIES='$policies' \
@@ -48,6 +54,7 @@ FRAME_PERFORMANCE_WINDOW_SAMPLES='$frame_performance_window_samples' \
 FRAME_PERFORMANCE_MIN_SAMPLES='$frame_performance_min_samples' \
 FRAME_PERFORMANCE_LIVE_TIMEOUT_S='$frame_performance_live_timeout_s' \
 TARGET_SATISFIED_TDPS='$target_satisfied_tdps' \
+AFFINITY_PLAN_JSON='$remote_affinity_plan_json' \
 FAILURE_MARKER='$failure_marker' \
 REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
 set -euo pipefail
@@ -1003,6 +1010,19 @@ def parse_status(text):
     return parsed
 
 
+def parse_stat_start_time(text):
+    if not text:
+        return None
+    end = text.rfind(")")
+    if end < 0:
+        return None
+    fields = text[end + 2 :].split()
+    try:
+        return int(fields[19])
+    except (IndexError, ValueError):
+        return None
+
+
 def normalize_cgroup(text):
     return text.strip().replace("\n", ";")
 
@@ -1075,6 +1095,7 @@ for cgroup_file in proc.glob("[0-9]*/cgroup"):
                 "cgroup": normalized,
                 "cpus_allowed": status.get("Cpus_allowed"),
                 "cpus_allowed_list": status.get("Cpus_allowed_list"),
+                "start_time_ticks": parse_stat_start_time(read_text(task_dir / "stat")),
             }
         )
 
@@ -1133,6 +1154,62 @@ import sys
 payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
 raise SystemExit(0 if payload.get("restored") is True else 1)
 PY
+}
+
+resolve_foreground_affinity_candidate() {
+  local run_dir="$1"
+  [ -n "${AFFINITY_PLAN_JSON:-}" ] || {
+    echo "gpu-priority-affinity requires PROFILE_GAME_POWER_AFFINITY_PLAN_JSON" >&2
+    return 2
+  }
+  /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile \
+    resolve-foreground-affinity \
+    --plan-json "$AFFINITY_PLAN_JSON" \
+    >"$run_dir/foreground-affinity-candidate.json"
+}
+
+foreground_affinity_candidate_field() {
+  local candidate_json="$1"
+  local field="$2"
+  python3 - "$candidate_json" "$field" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+value = payload.get(sys.argv[2])
+if not isinstance(value, str) or not value:
+    raise SystemExit(1)
+print(value)
+PY
+}
+
+apply_foreground_affinity_variant() {
+  local run_dir="$1"
+  local variant="$2"
+  local role_key preferred_cpus
+  [ -n "$variant" ] || return 0
+  resolve_foreground_affinity_candidate "$run_dir"
+  role_key="$(foreground_affinity_candidate_field "$run_dir/foreground-affinity-candidate.json" role_key)"
+  preferred_cpus="$(foreground_affinity_candidate_field "$run_dir/foreground-affinity-candidate.json" preferred_cpus)"
+  /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile \
+    apply-foreground-affinity \
+    --restore-affinity-json "$run_dir/restore-affinity.json" \
+    --role-key "$role_key" \
+    --preferred-cpus "$preferred_cpus" \
+    --variant "$variant" \
+    --output "$run_dir/foreground-affinity-writes.json" \
+    >"$run_dir/foreground-affinity-apply.stdout"
+}
+
+restore_foreground_affinity_variant() {
+  local run_dir="$1"
+  [ -f "$run_dir/foreground-affinity-writes.json" ] || return 0
+  /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile \
+    restore-foreground-affinity \
+    --writes-json "$run_dir/foreground-affinity-writes.json" \
+    --output "$run_dir/foreground-affinity-restore.json" \
+    >"$run_dir/foreground-affinity-restore.stdout"
 }
 
 collect_cpu_topology() {
@@ -1321,6 +1398,7 @@ for repeat in $(seq 1 "$REPEATS"); do
         provider_tdp >"$run_dir/tdp.before"
 
         background_shaping_variant=""
+        foreground_affinity_variant=""
         case "$policy" in
           off)
             mode="observe"
@@ -1353,6 +1431,12 @@ for repeat in $(seq 1 "$REPEATS"); do
             mode="gpu-priority"
             cpu_cap_enabled=false
             background_shaping_variant="uclamp-max-85"
+            policy_args=(--epp "$EPP")
+          ;;
+          gpu-priority-affinity)
+            mode="gpu-priority"
+            cpu_cap_enabled=false
+            foreground_affinity_variant="foreground-role-compact"
             policy_args=(--epp "$EPP")
           ;;
           *)
@@ -1398,6 +1482,11 @@ for repeat in $(seq 1 "$REPEATS"); do
           if [ -n "$thermal_start_c" ] && [ "$thermal_source_kind" != "unknown" ]; then
             thermal_unavailable=false
           fi
+        fi
+        if ! apply_foreground_affinity_variant "$run_dir" "$foreground_affinity_variant"; then
+          restore_foreground_affinity_variant "$run_dir" || true
+          restore_background_shaping_variant "$run_dir" || true
+          exit 1
         fi
         start_mangohud_capture "$run_dir"
         live_frame_performance_csv=""
@@ -1453,6 +1542,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           wait "$thread_affinity_pid" || true
           wait "$thread_schedstat_pid" || true
           wait "$process_cgroups_pid" || true
+          restore_foreground_affinity_variant "$run_dir" || true
           restore_background_shaping_variant "$run_dir" || true
           exit 1
         fi
@@ -1462,6 +1552,7 @@ for repeat in $(seq 1 "$REPEATS"); do
         wait "$thread_affinity_pid" || true
         wait "$thread_schedstat_pid" || true
         wait "$process_cgroups_pid" || true
+        restore_foreground_affinity_variant "$run_dir" || restored=false
         restore_background_shaping_variant "$run_dir" || restored=false
         if [ "$CAPTURE_MODE" = "controlled" ]; then
           power_source_end_state="$(read_power_source_state)"
@@ -1536,6 +1627,17 @@ for repeat in $(seq 1 "$REPEATS"); do
         fi
         fps_target_source_args=(--fps-target-source "$FPS_TARGET_SOURCE")
         fps_target_confidence_args=(--fps-target-confidence "$FPS_TARGET_CONFIDENCE")
+        foreground_affinity_summary_args=()
+        if [ -f "$run_dir/foreground-affinity-writes.json" ]; then
+          foreground_affinity_summary_args+=(
+            --foreground-affinity-writes-json "$run_dir/foreground-affinity-writes.json"
+          )
+        fi
+        if [ -f "$run_dir/foreground-affinity-restore.json" ]; then
+          foreground_affinity_summary_args+=(
+            --foreground-affinity-restore-json "$run_dir/foreground-affinity-restore.json"
+          )
+        fi
 
         /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile summarize \
           --appid "$APPID" \
@@ -1553,6 +1655,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           --cpu-topology-json "$run_dir/cpu-topology.json" \
           --process-cgroups-jsonl "$run_dir/process-cgroups.jsonl" \
           --restore-affinity-json "$run_dir/restore-affinity.json" \
+          "${foreground_affinity_summary_args[@]}" \
           --epp "$EPP" \
           --pcore-max-mhz "$variant_pcore_max_mhz" \
           --ecore-max-mhz "$variant_ecore_max_mhz" \
