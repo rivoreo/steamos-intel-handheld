@@ -128,6 +128,73 @@ def test_game_power_backend_calls_control_cli_for_mode_changes(monkeypatch):
     ]
 
 
+def test_game_power_backend_calls_control_cli_for_manual_fps_target(monkeypatch):
+    backend = load_game_power_backend()
+    calls = []
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return FakeCommandProcess(
+            stdout=(
+                b'{"fps_target_override": {"status": "manual", "fps": 45}, '
+                b'"mode": "default"}'
+            )
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = asyncio.run(backend.Plugin().set_fps_target(45))
+
+    assert result["fps_target_override"]["fps"] == 45
+    assert [call[0] for call in calls] == [
+        (
+            backend.GAME_POWER_CONTROL,
+            "set-fps-target",
+            "45",
+            "--source",
+            "decky",
+            "--json",
+        )
+    ]
+
+
+def test_game_power_backend_clears_manual_fps_target(monkeypatch):
+    backend = load_game_power_backend()
+    calls = []
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return FakeCommandProcess(
+            stdout=b'{"fps_target_override": {"status": "auto"}, "mode": "default"}'
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = asyncio.run(backend.Plugin().set_fps_target(None))
+
+    assert result["fps_target_override"]["status"] == "auto"
+    assert [call[0] for call in calls] == [
+        (backend.GAME_POWER_CONTROL, "clear-fps-target", "--json")
+    ]
+
+
+def test_game_power_backend_rejects_invalid_fps_target_without_spawning(monkeypatch):
+    backend = load_game_power_backend()
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        raise AssertionError(f"unexpected spawn: {cmd}")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    for fps in (0, 29, 37, 121, "45"):
+        try:
+            asyncio.run(backend.Plugin().set_fps_target(fps))
+        except ValueError as exc:
+            assert "unsupported FPS target" in str(exc)
+        else:
+            raise AssertionError(f"{fps!r} unexpectedly accepted")
+
+
 def test_game_power_backend_restore_calls_control_cli_without_service_restart(monkeypatch):
     backend = load_game_power_backend()
     calls = []
@@ -175,6 +242,8 @@ def test_game_power_backend_status_combines_service_and_runtime_control(monkeypa
     assert result["service"]["active_state"] == "active"
     assert result["service"]["mode"] == "automatic"
     assert result["service"]["override_active"] is True
+    assert result["control"]["mode"] == "automatic"
+    assert result["control"]["policy_label"] == "Balanced automatic policy"
     assert [call[0] for call in calls] == [
         (
             "systemctl",

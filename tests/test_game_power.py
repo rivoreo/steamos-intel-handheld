@@ -819,6 +819,38 @@ def test_hint_store_records_contradiction_count_against_existing_hint(tmp_path):
     assert store.get_hint(context) is None
 
 
+def test_hint_store_does_not_reuse_legacy_targetless_hint_entries(tmp_path):
+    legacy_context = make_hint_context(fps_target="none-configured", complete=True)
+    legacy_key = game_power.canonical_hint_key(legacy_context)
+    path = tmp_path / "hints.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": game_power.GAME_POWER_HINT_SCHEMA_VERSION,
+                "policy_version": game_power.DEFAULT_GAME_POWER_POLICY_VERSION,
+                "aggregates": {},
+                "entries": {
+                    legacy_key: {
+                        "context": game_power._context_json(legacy_context),
+                        "preferred_mode": "gpu-priority",
+                        "confidence": "medium",
+                        "observed_sessions": 2,
+                        "total_samples": 40,
+                        "positive_ratio": 0.8,
+                        "cpu_cap_ratio": 0.0,
+                        "last_validated_at": 100.0,
+                        "runtime_unaware": True,
+                    },
+                },
+            }
+        )
+    )
+
+    store = game_power.GamePowerHintStore(path, now=lambda: 200.0)
+
+    assert store.get_hint(legacy_context) is None
+
+
 def test_context_change_restores_before_aggregate_update(tmp_path):
     context_a = make_hint_context(appid="1091500")
     context_b = make_hint_context(appid="222")
@@ -855,6 +887,46 @@ def test_context_change_restores_before_aggregate_update(tmp_path):
 
     assert ("restore-failed", actuator.snapshot_value) in actuator.events
     assert store.get_hint(context_a) is None
+
+
+def test_incomplete_context_session_close_is_visible_but_not_learned(tmp_path, capsys):
+    context = make_hint_context(fps_target="unknown", complete=False)
+    store = game_power.GamePowerHintStore(
+        tmp_path / "hints.json",
+        policy=game_power.GamePowerHintPolicy(
+            min_hint_sessions=1,
+            min_hint_samples=1,
+            min_hint_positive_ratio=0.50,
+        ),
+    )
+    observer = FakeObserver([make_sample(), make_sample(appid=None)])
+    governor = GamePowerGovernor(
+        config=GamePowerConfig(
+            mode=GamePowerMode.GPU_PRIORITY,
+            activate_samples=1,
+            rolling_window_samples=1,
+        ),
+        observer=observer,
+        actuator=RecordingActuator(),
+        output_format="jsonl",
+        hint_store=store,
+        hint_context_provider=lambda sample: context if sample.appid else None,
+    )
+
+    import asyncio
+
+    asyncio.run(governor.run_iterations(2))
+
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    close_rows = [row for row in rows if row.get("event") == "game-power-session-close"]
+
+    assert len(close_rows) == 1
+    assert close_rows[0]["appid"] == "1091500"
+    assert close_rows[0]["hint_key"] is None
+    assert close_rows[0]["aggregate_updated"] is False
+    assert close_rows[0]["promotion_skip_reason"] == "context_incomplete"
+    assert close_rows[0]["cache_write_result"] == "not_eligible"
+    assert store.get_hint(context) is None
 
 
 def test_session_close_jsonl_emits_bounded_persistence_outcome(tmp_path, capsys):
@@ -1046,6 +1118,36 @@ def test_format_decision_jsonl_emits_frame_performance_schema():
     assert row["frame_performance_confidence"] == "high"
 
 
+def test_runtime_snapshot_schema_includes_learning_state_for_incomplete_target():
+    sample = make_sample(frame_target=None, frame_performance=None)
+    decision = game_power.GamePowerDecision(GamePowerAction.OBSERVE_ONLY, "sample")
+
+    row = json.loads(
+        game_power.format_runtime_snapshot_json(
+            GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY),
+            sample,
+            decision,
+            elapsed_s=2.0,
+            sample_source="governor",
+            learning={
+                "status": "waiting-for-fps-target",
+                "session_samples": 3,
+                "required_samples": 20,
+                "reusable_next_launch": False,
+                "skip_reason": "fps_target_unknown",
+            },
+        )
+    )
+
+    assert row["learning"] == {
+        "status": "waiting-for-fps-target",
+        "session_samples": 3,
+        "required_samples": 20,
+        "reusable_next_launch": False,
+        "skip_reason": "fps_target_unknown",
+    }
+
+
 def test_runtime_snapshot_schema_reports_unknown_target_and_missing_frame_source():
     sample = make_sample(frame_target=None, frame_performance=None)
     decision = game_power.GamePowerDecision(
@@ -1099,6 +1201,40 @@ def test_runtime_snapshot_schema_reports_unknown_target_and_missing_frame_source
     assert row["uncore_w"] == 7.4
     assert row["pl1_w"] == 22
     assert row["render_busy"] == 0.75
+
+
+def test_system_observer_reads_frame_target_provider_each_sample(tmp_path):
+    class FakeRapl:
+        def __init__(self):
+            self.sysfs_root = tmp_path / "sys"
+            self.samples = [
+                EnergyReading(timestamp_s=1.0, energy_uj={"package": 100}),
+                EnergyReading(timestamp_s=2.0, energy_uj={"package": 200}),
+            ]
+
+        def read(self):
+            return self.samples.pop(0)
+
+    targets = [
+        FrameTargetTelemetry(fps_target=40.0, source="manual", confidence="high")
+    ]
+    observer = game_power.SystemGamePowerObserver(
+        sysfs_root=tmp_path / "sys",
+        proc_root=tmp_path / "proc",
+        poll_s=0,
+        frame_target_provider=lambda: targets.pop(0),
+    )
+    observer.rapl = FakeRapl()
+
+    import asyncio
+
+    sample = asyncio.run(observer.sample())
+
+    assert sample.frame_target == FrameTargetTelemetry(
+        fps_target=40.0,
+        source="manual",
+        confidence="high",
+    )
 
 
 def test_runtime_snapshot_schema_reports_known_target_and_live_frame_source():

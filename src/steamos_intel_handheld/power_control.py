@@ -23,6 +23,7 @@ from steamos_intel_handheld import game_power_control
 from steamos_intel_handheld.game_power import (
     DEFAULT_RUNTIME_SNAPSHOT_FILE,
     CpuPolicyActuator,
+    FrameTargetTelemetry,
     GamePowerConfig,
     GamePowerGovernor,
     GamePowerHintContext,
@@ -1134,6 +1135,7 @@ def build_game_power_governor(
         sysfs_root=args.sysfs_root,
         proc_root="/proc",
         poll_s=config.poll_s,
+        frame_target_provider=_build_frame_target_provider(control_file),
     )
     actuator = CpuPolicyActuator(discover_cpu_policies(args.sysfs_root))
     hint_store = (
@@ -1163,16 +1165,15 @@ def _build_game_power_hint_context_provider(
         if sample.appid is None:
             return None
         power_source = backend.current_power_source().value
-        fps_target = (
-            str(int(sample.frame_target.fps_target))
-            if sample.frame_target is not None and sample.frame_target.fps_target is not None
-            else "none-configured"
+        fps_target_known = (
+            sample.frame_target is not None and sample.frame_target.fps_target is not None
         )
+        fps_target = str(int(sample.frame_target.fps_target)) if fps_target_known else "unknown"
         complete = (
             bool(sample.appid)
             and sample.pl1_w is not None
             and power_source in {PowerSource.AC.value, PowerSource.BATTERY.value}
-            and fps_target != "unknown"
+            and fps_target_known
             and topology_signature != "unknown"
             and os_signature != "unknown"
         )
@@ -1189,6 +1190,90 @@ def _build_game_power_hint_context_provider(
         )
 
     return provider
+
+
+def _build_frame_target_provider(
+    control_file: Path | None,
+    *,
+    proc_root: str | Path = "/proc",
+) -> Callable[[], FrameTargetTelemetry | None]:
+    def provider() -> FrameTargetTelemetry | None:
+        if control_file is not None:
+            status = game_power_control.read_runtime_status(control_file)
+            override = status.fps_target_override
+            if override.status == "manual" and override.fps is not None:
+                return FrameTargetTelemetry(
+                    fps_target=float(override.fps),
+                    source="manual",
+                    confidence="high",
+                )
+        return discover_gamescope_frame_target(proc_root)
+
+    return provider
+
+
+def discover_gamescope_frame_target(
+    proc_root: str | Path = "/proc",
+) -> FrameTargetTelemetry | None:
+    proc_root = Path(proc_root)
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return None
+    for entry in sorted(entries, key=lambda path: path.name):
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        args = [part.decode(errors="replace") for part in raw.split(b"\0") if part]
+        if not args or not any("gamescope" in Path(arg).name for arg in args[:1]):
+            continue
+        target = frame_target_from_gamescope_args(args)
+        if target is not None:
+            return target
+    return None
+
+
+def frame_target_from_gamescope_args(args: Iterable[str]) -> FrameTargetTelemetry | None:
+    values = list(args)
+    flags = {
+        "-r",
+        "--refresh-rate",
+        "--nested-refresh",
+        "--framerate-limit",
+        "--fps-limit",
+        "--frame-rate-limit",
+    }
+    for index, arg in enumerate(values):
+        value: str | None = None
+        if arg in flags and index + 1 < len(values):
+            value = values[index + 1]
+        else:
+            for flag in flags:
+                prefix = f"{flag}="
+                if arg.startswith(prefix):
+                    value = arg.removeprefix(prefix)
+                    break
+        if value is None:
+            continue
+        try:
+            fps = float(value)
+        except ValueError:
+            continue
+        if fps <= 0:
+            return FrameTargetTelemetry(
+                fps_target=None,
+                source="gamescope-unlimited",
+                confidence="medium",
+            )
+        return FrameTargetTelemetry(
+            fps_target=round(fps, 3),
+            source="gamescope",
+            confidence="medium",
+        )
+    return None
 
 
 def _game_power_topology_signature(sysfs_root: str | Path) -> str:

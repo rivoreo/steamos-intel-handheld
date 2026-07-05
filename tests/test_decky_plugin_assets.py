@@ -100,17 +100,26 @@ def test_game_power_decky_frontend_exposes_intent_not_raw_policy_knobs():
     assert '"get_status"' in frontend
     assert '"sample_once"' in frontend
     assert '"set_mode"' in frontend
+    assert '"set_fps_target"' in frontend
     assert '"restore_defaults"' in frontend
-    assert "Balancing from power signals - FPS target unknown" in frontend
-    assert "View data only - no power changes" in frontend
-    assert "Turn scheduler off" in frontend
+    assert "Balance to FPS target" in frontend
+    assert "Watch data only" in frontend
+    assert "Stop Game Power" in frontend
+    assert "Manual FPS target" in frontend
+    assert "Use SteamOS limit" in frontend
+    assert "Learning status" in frontend
     assert "遊戲電力" in frontend
-    assert "依功耗訊號平衡 - FPS 目標未知" in frontend
-    assert "只看數據 - 不改動功耗" in frontend
-    assert "完全停用" in frontend
-    assert "依功耗訊號平衡 - FPS 目標未知" in bundled
-    assert "只看數據 - 不改動功耗" in bundled
-    assert "完全停用" in bundled
+    assert "依 FPS 目標自動平衡" in frontend
+    assert "只看數據，不調整功耗" in frontend
+    assert "停止遊戲電力" in frontend
+    assert "手動 FPS 目標" in frontend
+    assert "使用 SteamOS 限制" in frontend
+    assert "學習狀態" in frontend
+    assert "依 FPS 目標自動平衡" in bundled
+    assert "只看數據，不調整功耗" in bundled
+    assert "停止遊戲電力" in bundled
+    assert "手動 FPS 目標" in bundled
+    assert "使用 SteamOS 限制" in bundled
     assert "模式: automatic" not in frontend
     assert "動作: observe-only" not in frontend
     assert "模式: automatic" not in bundled
@@ -139,22 +148,30 @@ def test_game_power_decky_mode_copy_explains_control_state_differences():
     bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
 
     required_copy = (
-        "Balancing from power signals - FPS target unknown",
+        "Balance to FPS target",
         "Target-aware balancing",
-        "Collecting data before changing power",
-        "View data only - no power changes",
-        "Scheduler off - no sampling or power changes",
+        "Learning before reuse",
+        "Watch data only",
+        "Sampling is stopped",
         "Frame data missing",
         "Frame data live",
         "FPS target unknown",
-        "依功耗訊號平衡 - FPS 目標未知",
+        "Manual FPS target",
+        "Use SteamOS limit",
+        "Learning status",
+        "Needs stable FPS target",
+        "依 FPS 目標自動平衡",
         "依 FPS 目標平衡",
-        "正在累積資料，暫不改動功耗",
-        "只看數據 - 不改動功耗",
-        "已完全停用 - 不採樣、不改動功耗",
+        "學習中，暫不復用",
+        "只看數據，不調整功耗",
+        "已停止採樣",
         "缺少影格資料",
         "影格資料即時可用",
         "FPS 目標未知",
+        "手動 FPS 目標",
+        "使用 SteamOS 限制",
+        "學習狀態",
+        "需要穩定 FPS 目標",
     )
     ambiguous_copy = (
         "Monitor only",
@@ -211,6 +228,7 @@ def test_game_power_decky_backend_exposes_safe_mode_api():
     assert "async def get_status" in backend
     assert "async def sample_once" in backend
     assert "async def set_mode" in backend
+    assert "async def set_fps_target" in backend
     assert "async def restore_defaults" in backend
     assert "RUNTIME_SNAPSHOT" in backend
     assert "steamos-intel-handheld-game-power-control" in backend
@@ -222,3 +240,22 @@ def test_game_power_decky_backend_exposes_safe_mode_api():
     assert "--game-power-ecore-max-mhz" not in backend
     assert "/usr/bin/python3" not in backend
     assert "LD_LIBRARY_PATH" not in backend
+
+
+def test_game_power_decky_frontend_exposes_safe_fps_slider_not_raw_policy_knobs():
+    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
+    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
+
+    required = (
+        'type="range"',
+        "min={30}",
+        "max={120}",
+        "step={5}",
+        "set_fps_target",
+        "Manual FPS target",
+        "手動 FPS 目標",
+    )
+    for text in required:
+        assert text in frontend
+    assert "手動 FPS 目標" in bundled
+    assert "set_fps_target" in bundled

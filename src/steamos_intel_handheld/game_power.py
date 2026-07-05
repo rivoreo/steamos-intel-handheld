@@ -652,6 +652,7 @@ class GamePowerDecision:
 
 DEFAULT_GAME_POWER_POLICY_VERSION = "game-power-sampling-v1"
 GAME_POWER_HINT_SCHEMA_VERSION = 1
+NON_REUSABLE_FPS_TARGETS = frozenset({"", "unknown", "none-configured", "unlimited"})
 
 
 @dataclass(frozen=True)
@@ -793,7 +794,17 @@ def _context_from_json(value: object) -> GamePowerHintContext | None:
         )
     except (KeyError, TypeError, ValueError):
         return None
+    return _normalize_hint_context(context)
+
+
+def _normalize_hint_context(context: GamePowerHintContext) -> GamePowerHintContext:
+    if not _context_has_reusable_target(context):
+        return replace(context, complete=False)
     return context
+
+
+def _context_has_reusable_target(context: GamePowerHintContext) -> bool:
+    return context.fps_target.strip().lower() not in NON_REUSABLE_FPS_TARGETS
 
 
 def _session_eligible(summary: GamePowerSessionSummary) -> bool:
@@ -828,6 +839,8 @@ class GamePowerHintStore:
 
     def get_hint(self, context: GamePowerHintContext) -> GamePowerHintEntry | None:
         if not context.complete:
+            return None
+        if not _context_has_reusable_target(context):
             return None
         entry = self._entries.get(canonical_hint_key(context))
         if entry is None or entry.stale:
@@ -1668,6 +1681,7 @@ class GamePowerGovernor:
             sample,
             decision,
             elapsed_s=time.monotonic(),
+            learning=self._runtime_learning_state(),
         )
         try:
             write_runtime_snapshot(self.runtime_snapshot_path, payload)
@@ -1731,7 +1745,7 @@ class GamePowerGovernor:
 
     def _prepare_context(self, sample: GamePowerSample) -> None:
         context = self._sample_context(sample)
-        next_key = canonical_hint_key(context) if context is not None and context.complete else None
+        next_key = canonical_hint_key(context) if context is not None else None
         if next_key == self._active_context_key:
             return
         self._close_current_session()
@@ -1865,7 +1879,72 @@ class GamePowerGovernor:
             "write_failed": summary.write_failed,
             "cache_write_result": result.cache_write_result,
         }
-        return json.dumps(_compact_evidence(payload), sort_keys=True)
+        compact = _compact_evidence(payload)
+        if not summary.context.complete:
+            compact["hint_key"] = None
+        return json.dumps(compact, sort_keys=True)
+
+    def _runtime_learning_state(self) -> dict[str, object]:
+        policy = self.hint_store.policy if self.hint_store is not None else GamePowerHintPolicy()
+        if self.config.mode == GamePowerMode.OFF:
+            return {
+                "status": "stopped",
+                "session_samples": 0,
+                "required_samples": policy.min_hint_samples,
+                "required_sessions": policy.min_hint_sessions,
+                "reusable_next_launch": False,
+                "skip_reason": "mode_off",
+            }
+        if self.config.mode == GamePowerMode.OBSERVE:
+            return {
+                "status": "view-data-only",
+                "session_samples": 0,
+                "required_samples": policy.min_hint_samples,
+                "required_sessions": policy.min_hint_sessions,
+                "reusable_next_launch": False,
+                "skip_reason": "mode_observe",
+            }
+        if self._session is None:
+            return {
+                "status": "waiting-for-game",
+                "session_samples": 0,
+                "required_samples": policy.min_hint_samples,
+                "required_sessions": policy.min_hint_sessions,
+                "reusable_next_launch": False,
+                "skip_reason": "no_foreground_game",
+            }
+        context = self._session.context
+        if not context.complete:
+            skip_reason = (
+                "fps_target_unknown"
+                if not _context_has_reusable_target(context)
+                else "context_incomplete"
+            )
+            return {
+                "status": (
+                    "waiting-for-fps-target"
+                    if skip_reason == "fps_target_unknown"
+                    else "waiting-for-context"
+                ),
+                "session_samples": self._session.samples,
+                "positive_samples": self._session.positive_samples,
+                "required_samples": policy.min_hint_samples,
+                "required_sessions": policy.min_hint_sessions,
+                "reusable_next_launch": False,
+                "skip_reason": skip_reason,
+                "hint_key": None,
+            }
+        hint = self.hint_store.get_hint(context) if self.hint_store is not None else None
+        return {
+            "status": "ready" if hint is not None else "learning",
+            "session_samples": self._session.samples,
+            "positive_samples": self._session.positive_samples,
+            "required_samples": policy.min_hint_samples,
+            "required_sessions": policy.min_hint_sessions,
+            "reusable_next_launch": hint is not None,
+            "skip_reason": None if hint is not None else "not_enough_samples",
+            "hint_key": canonical_hint_key(context),
+        }
 
 
 def _format_decision(sample: GamePowerSample, decision: GamePowerDecision) -> str:
@@ -1940,6 +2019,7 @@ def runtime_snapshot_payload(
     sample_source: str = "governor",
     stale: bool = False,
     error: str | None = None,
+    learning: dict[str, object] | None = None,
 ) -> dict[str, object]:
     rapl = sample.rapl
     classification = decision.classification
@@ -1968,8 +2048,20 @@ def runtime_snapshot_payload(
         "uncore_w": _round_or_none(rapl.uncore_w if rapl else None),
         "pl1_w": sample.pl1_w,
         "render_busy": _round_or_none(sample.fdinfo_busy.get("render")),
+        "learning": learning or _default_learning_state(),
         "stale": stale,
         "error": error,
+    }
+
+
+def _default_learning_state() -> dict[str, object]:
+    return {
+        "status": "unknown",
+        "session_samples": None,
+        "required_samples": None,
+        "required_sessions": None,
+        "reusable_next_launch": False,
+        "skip_reason": "unavailable",
     }
 
 
@@ -1983,6 +2075,7 @@ def format_runtime_snapshot_json(
     sample_source: str = "governor",
     stale: bool = False,
     error: str | None = None,
+    learning: dict[str, object] | None = None,
 ) -> str:
     return json.dumps(
         runtime_snapshot_payload(
@@ -1994,6 +2087,7 @@ def format_runtime_snapshot_json(
             sample_source=sample_source,
             stale=stale,
             error=error,
+            learning=learning,
         ),
         sort_keys=True,
     )
@@ -2127,6 +2221,7 @@ class SystemGamePowerObserver:
         cgroup_root: str | Path = "/sys/fs/cgroup",
         poll_s: float = 2.0,
         frame_target: FrameTargetTelemetry | None = None,
+        frame_target_provider: Callable[[], FrameTargetTelemetry | None] | None = None,
         frame_performance_reader: object | None = None,
     ) -> None:
         self.rapl = RaplObserver(sysfs_root=sysfs_root)
@@ -2134,6 +2229,7 @@ class SystemGamePowerObserver:
         self.cgroup_root = Path(cgroup_root)
         self.poll_s = poll_s
         self.frame_target = frame_target
+        self.frame_target_provider = frame_target_provider
         self.frame_performance_reader = frame_performance_reader
         self._previous_rapl: EnergyReading | None = None
 
@@ -2161,10 +2257,15 @@ class SystemGamePowerObserver:
             rapl=rapl,
             pl1_w=_read_current_pl1_w(self.rapl.sysfs_root),
             fdinfo_busy=busy,
-            frame_target=self.frame_target,
+            frame_target=self._read_frame_target(),
             frame_performance=self._read_frame_performance(),
             pressure=self._read_pressure(process),
         )
+
+    def _read_frame_target(self) -> FrameTargetTelemetry | None:
+        if self.frame_target_provider is not None:
+            return self.frame_target_provider()
+        return self.frame_target
 
     def _read_frame_performance(self) -> FramePerformanceTelemetry | None:
         if self.frame_performance_reader is None:

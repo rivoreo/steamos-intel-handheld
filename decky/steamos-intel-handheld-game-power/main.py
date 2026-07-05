@@ -13,6 +13,9 @@ RUNTIME_SNAPSHOT_SCHEMA = "game-power-runtime-snapshot-v1"
 RUNTIME_SNAPSHOT_STALE_AFTER_S = 10.0
 POLICY_LABEL = "Balanced automatic policy"
 VALID_MODES = {"automatic", "observe", "off"}
+FPS_TARGET_MIN = 30
+FPS_TARGET_MAX = 120
+FPS_TARGET_STEP = 5
 
 
 def _clean_env() -> dict[str, str]:
@@ -43,6 +46,25 @@ def validate_mode(mode: str) -> str:
     if mode in VALID_MODES:
         return mode
     raise ValueError(f"unsupported game-power mode: {mode}")
+
+
+def validate_fps_target(fps) -> int:
+    if not isinstance(fps, int) or isinstance(fps, bool):
+        raise ValueError(
+            "unsupported FPS target: expected an integer between "
+            f"{FPS_TARGET_MIN} and {FPS_TARGET_MAX} in {FPS_TARGET_STEP} FPS steps"
+        )
+    if fps < FPS_TARGET_MIN or fps > FPS_TARGET_MAX:
+        raise ValueError(
+            "unsupported FPS target: expected an integer between "
+            f"{FPS_TARGET_MIN} and {FPS_TARGET_MAX} in {FPS_TARGET_STEP} FPS steps"
+        )
+    if (fps - FPS_TARGET_MIN) % FPS_TARGET_STEP != 0:
+        raise ValueError(
+            "unsupported FPS target: expected an integer between "
+            f"{FPS_TARGET_MIN} and {FPS_TARGET_MAX} in {FPS_TARGET_STEP} FPS steps"
+        )
+    return fps
 
 
 def _parse_systemctl_show(output: str) -> dict[str, str]:
@@ -82,6 +104,10 @@ async def _service_status() -> dict:
         "--no-pager",
     )
     runtime = await _runtime_status()
+    return _service_status_from(output, runtime)
+
+
+def _service_status_from(output: str, runtime: dict) -> dict:
     values = _parse_systemctl_show(output)
     execstart = values.get("ExecStart", "")
     runtime_mode = runtime.get("mode")
@@ -93,6 +119,23 @@ async def _service_status() -> dict:
         "override_active": bool(runtime.get("override_active")),
         "policy_label": runtime.get("policy_label", POLICY_LABEL),
     }
+
+
+async def _service_and_runtime_status() -> tuple[dict, dict]:
+    output = await _run_command(
+        "systemctl",
+        "show",
+        SERVICE,
+        "-p",
+        "ActiveState",
+        "-p",
+        "SubState",
+        "-p",
+        "ExecStart",
+        "--no-pager",
+    )
+    runtime = await _runtime_status()
+    return _service_status_from(output, runtime), runtime
 
 
 async def _runtime_status() -> dict:
@@ -124,6 +167,19 @@ def _default_frame_source_state() -> dict:
     }
 
 
+def _default_learning_state() -> dict:
+    return {
+        "status": "unknown",
+        "session_samples": None,
+        "positive_samples": None,
+        "required_samples": None,
+        "required_sessions": None,
+        "reusable_next_launch": False,
+        "skip_reason": "unavailable",
+        "hint_key": None,
+    }
+
+
 def _runtime_snapshot_unavailable(reason: str) -> dict:
     return {
         "schema_version": RUNTIME_SNAPSHOT_SCHEMA,
@@ -144,6 +200,7 @@ def _runtime_snapshot_unavailable(reason: str) -> dict:
         "uncore_w": None,
         "pl1_w": None,
         "render_busy": None,
+        "learning": _default_learning_state(),
         "stale": True,
         "error": reason,
     }
@@ -180,6 +237,7 @@ def _public_runtime_snapshot(row: dict) -> dict:
         "uncore_w": row.get("uncore_w"),
         "pl1_w": row.get("pl1_w"),
         "render_busy": row.get("render_busy"),
+        "learning": _dict_or_default(row.get("learning"), _default_learning_state()),
         "stale": stale,
         "error": row.get("error"),
     }
@@ -291,9 +349,11 @@ class Plugin:
         pass
 
     async def get_status(self) -> dict:
+        service, control = await _service_and_runtime_status()
         return {
-            "service": await _service_status(),
+            "service": service,
             "runtime": _read_runtime_snapshot(),
+            "control": control,
         }
 
     async def sample_once(self) -> dict:
@@ -305,6 +365,21 @@ class Plugin:
             GAME_POWER_CONTROL,
             "set-mode",
             mode,
+            "--source",
+            "decky",
+            "--json",
+        )
+        return json.loads(output)
+
+    async def set_fps_target(self, fps) -> dict:
+        if fps is None:
+            output = await _run_command(GAME_POWER_CONTROL, "clear-fps-target", "--json")
+            return json.loads(output)
+        fps = validate_fps_target(fps)
+        output = await _run_command(
+            GAME_POWER_CONTROL,
+            "set-fps-target",
+            str(fps),
             "--source",
             "decky",
             "--json",

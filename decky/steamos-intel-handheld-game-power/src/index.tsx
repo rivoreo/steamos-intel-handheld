@@ -28,6 +28,17 @@ type FrameSourceState = {
   window_s: number | null;
 };
 
+type LearningState = {
+  status: string;
+  session_samples: number | null;
+  positive_samples?: number | null;
+  required_samples: number | null;
+  required_sessions?: number | null;
+  reusable_next_launch: boolean;
+  skip_reason: string | null;
+  hint_key?: string | null;
+};
+
 type RuntimeSnapshot = {
   schema_version: string;
   timestamp_monotonic_s: number | null;
@@ -47,6 +58,7 @@ type RuntimeSnapshot = {
   uncore_w: number | null;
   pl1_w: number | null;
   render_busy: number | null;
+  learning: LearningState;
   stale: boolean;
   error: string | null;
 };
@@ -59,9 +71,29 @@ type ServiceStatus = {
   policy_label: string;
 };
 
+type FpsTargetOverride = {
+  status: string;
+  fps: number | null;
+  source: string | null;
+  supported_min: number;
+  supported_max: number;
+  supported_step: number;
+};
+
+type ControlStatus = {
+  mode: string;
+  effective_mode: string | null;
+  override_active: boolean;
+  policy_label: string;
+  source: string | null;
+  supported_modes: string[];
+  fps_target_override: FpsTargetOverride;
+};
+
 type StatusPayload = {
   service: ServiceStatus;
   runtime: RuntimeSnapshot;
+  control: ControlStatus;
 };
 
 type SamplePayload = {
@@ -83,6 +115,7 @@ type Mode = "automatic" | "observe" | "off";
 const getStatus = callable<[], StatusPayload>("get_status");
 const sampleOnce = callable<[], SamplePayload>("sample_once");
 const setMode = callable<[mode: Mode], { mode: Mode; policy_label: string }>("set_mode");
+const setFpsTarget = callable<[fps: number | null], ControlStatus>("set_fps_target");
 const restoreDefaults = callable<[], { restored: boolean; policy_label: string }>(
   "restore_defaults",
 );
@@ -98,6 +131,15 @@ type Copy = {
   serviceState: string;
   telemetry: string;
   control: string;
+  fpsTarget: string;
+  targetAuto: string;
+  targetManual: string;
+  targetApply: string;
+  learning: string;
+  learningBeforeReuse: string;
+  learningReady: string;
+  learningNeedsTarget: string;
+  learningStopped: string;
   manualProbe: string;
   probeNotice: string;
   action: string;
@@ -133,6 +175,15 @@ const COPY: Record<LocaleKey, Copy> = {
     serviceState: "Background service",
     telemetry: "Runtime telemetry",
     control: "Control",
+    fpsTarget: "FPS target",
+    targetAuto: "Use SteamOS limit",
+    targetManual: "Manual FPS target",
+    targetApply: "Set FPS target",
+    learning: "Learning status",
+    learningBeforeReuse: "Learning before reuse",
+    learningReady: "Can reuse next launch",
+    learningNeedsTarget: "Needs stable FPS target",
+    learningStopped: "Sampling is stopped",
     manualProbe: "Manual sample",
     probeNotice: "Probe sample - not daemon control",
     action: "Action",
@@ -147,23 +198,23 @@ const COPY: Record<LocaleKey, Copy> = {
     applying: "Applying...",
     restored: "Using the service default.",
     modes: {
-      automatic: "Balancing from power signals - FPS target unknown",
-      observe: "View data only - no power changes",
-      off: "Turn scheduler off",
+      automatic: "Balance to FPS target",
+      observe: "Watch data only",
+      off: "Stop Game Power",
       default: "Service default",
       unknown: "Unknown",
     },
     modeDescriptions: {
-      automatic: "Collecting data before changing power",
-      observe: "View data only - no power changes",
-      off: "Scheduler off - no sampling or power changes",
+      automatic: "Adjusts CPU/GPU shared power while the game is below its FPS target.",
+      observe: "Shows live samples without changing power.",
+      off: "Sampling is stopped",
       default: "Uses the packaged default power policy.",
       unknown: "The active game-power mode could not be identified.",
     },
     telemetryLabels: {
       targetAware: "Target-aware balancing",
-      powerSignals: "Balancing from power signals - FPS target unknown",
-      collecting: "Collecting data before changing power",
+      powerSignals: "Learning before reuse",
+      collecting: "Learning before reuse",
       stale: "Runtime data is stale",
       unavailable: "Daemon runtime data is unavailable",
     },
@@ -189,16 +240,16 @@ const COPY: Record<LocaleKey, Copy> = {
     },
     reasons: {
       "mode is observe": "Data-only mode is active; no power settings are changed.",
-      "mode is off": "The scheduler is off; sampling and power changes are stopped.",
+      "mode is off": "Game Power is stopped; sampling and power changes are stopped.",
       "package limited with GPU activity": "GPU activity is high, so power is being held for graphics.",
       "package limited with high core pressure": "CPU pressure is high, so CPU power is capped to protect GPU power.",
     },
     classifications: {
       "control-disabled": "Scheduler off",
-      "observe-only": "View data only - no power changes",
+      "observe-only": "Watch data only",
       "no-foreground-game": "No foreground game sample",
       "fps-target-satisfied": "FPS target already satisfied",
-      "insufficient-power-evidence": "Collecting data before changing power",
+      "insufficient-power-evidence": "Learning before reuse",
       "not-package-bound": "Package power is not the limit",
       "gpu-package-bound": "GPU-side package pressure detected",
       "gpu-package-bound-cpu-contention": "CPU/GPU power contention detected",
@@ -217,6 +268,15 @@ const COPY: Record<LocaleKey, Copy> = {
     serviceState: "背景服務",
     telemetry: "執行中資料",
     control: "控制",
+    fpsTarget: "FPS 目標",
+    targetAuto: "使用 SteamOS 限制",
+    targetManual: "手動 FPS 目標",
+    targetApply: "設定 FPS 目標",
+    learning: "學習狀態",
+    learningBeforeReuse: "學習中，暫不復用",
+    learningReady: "下次可直接套用",
+    learningNeedsTarget: "需要穩定 FPS 目標",
+    learningStopped: "已停止採樣",
     manualProbe: "手動採樣",
     probeNotice: "手動採樣 - 不代表 daemon 正在控制",
     action: "動作",
@@ -231,23 +291,23 @@ const COPY: Record<LocaleKey, Copy> = {
     applying: "正在套用...",
     restored: "已切回服務預設。",
     modes: {
-      automatic: "依功耗訊號平衡 - FPS 目標未知",
-      observe: "只看數據 - 不改動功耗",
-      off: "完全停用",
+      automatic: "依 FPS 目標自動平衡",
+      observe: "只看數據，不調整功耗",
+      off: "停止遊戲電力",
       default: "服務預設",
       unknown: "未知",
     },
     modeDescriptions: {
-      automatic: "正在累積資料，暫不改動功耗",
-      observe: "只看數據 - 不改動功耗",
-      off: "已完全停用 - 不採樣、不改動功耗",
+      automatic: "低於 FPS 目標時，才會調整 CPU/GPU 的共用功耗。",
+      observe: "只顯示即時採樣，不改動功耗。",
+      off: "已停止採樣",
       default: "使用套件內建的預設電力策略。",
       unknown: "無法辨識目前的遊戲電力模式。",
     },
     telemetryLabels: {
       targetAware: "依 FPS 目標平衡",
-      powerSignals: "依功耗訊號平衡 - FPS 目標未知",
-      collecting: "正在累積資料，暫不改動功耗",
+      powerSignals: "學習中，暫不復用",
+      collecting: "學習中，暫不復用",
       stale: "執行中資料已過期",
       unavailable: "缺少 daemon 執行中資料",
     },
@@ -273,16 +333,16 @@ const COPY: Record<LocaleKey, Copy> = {
     },
     reasons: {
       "mode is observe": "目前只看數據，不會改動功耗設定。",
-      "mode is off": "目前已完全停用，停止採樣與調度。",
+      "mode is off": "目前已停止遊戲電力，停止採樣與功耗調整。",
       "package limited with GPU activity": "GPU 負載偏高，正在把功耗留給顯示核心。",
       "package limited with high core pressure": "CPU 壓力偏高，正在限制 CPU 搶功耗。",
     },
     classifications: {
-      "control-disabled": "已完全停用 - 不採樣、不改動功耗",
-      "observe-only": "只看數據 - 不改動功耗",
+      "control-disabled": "已停止採樣",
+      "observe-only": "只看數據，不調整功耗",
       "no-foreground-game": "目前沒有前景遊戲樣本",
       "fps-target-satisfied": "FPS 目標已達成",
-      "insufficient-power-evidence": "正在累積資料，暫不改動功耗",
+      "insufficient-power-evidence": "學習中，暫不復用",
       "not-package-bound": "封包功耗尚未成為限制",
       "gpu-package-bound": "偵測到 GPU 側封包功耗壓力",
       "gpu-package-bound-cpu-contention": "偵測到 CPU/GPU 搶功耗",
@@ -312,6 +372,11 @@ const detailStyle = {
   marginTop: "4px",
   whiteSpace: "normal",
   overflowWrap: "anywhere",
+} as const;
+
+const sliderStyle = {
+  width: "100%",
+  marginTop: "8px",
 } as const;
 
 function localeFromLanguage(language: string | undefined): LocaleKey {
@@ -417,6 +482,26 @@ function frameText(t: Copy, frame: FrameSourceState | null | undefined): string 
   return frame.avg_fps ? `${label}: ${frame.avg_fps.toFixed(1)} FPS` : label;
 }
 
+function learningText(t: Copy, learning: LearningState | null | undefined): string {
+  if (!learning) {
+    return t.learningBeforeReuse;
+  }
+  if (learning.reusable_next_launch) {
+    return t.learningReady;
+  }
+  if (learning.skip_reason === "fps_target_unknown" || learning.status === "waiting-for-fps-target") {
+    return t.learningNeedsTarget;
+  }
+  if (learning.status === "stopped" || learning.status === "view-data-only") {
+    return t.learningStopped;
+  }
+  const samples = learning.session_samples ?? 0;
+  const required = learning.required_samples ?? 0;
+  return required > 0
+    ? `${t.learningBeforeReuse}: ${samples}/${required}`
+    : t.learningBeforeReuse;
+}
+
 function runtimeHeadline(
   t: Copy,
   mode: string | null | undefined,
@@ -451,8 +536,10 @@ const PluginTitle: FC = () => {
 const GamePowerPanel: FC = () => {
   const t = COPY[useLocale()];
   const [status, setStatus] = useState<ServiceStatus | null>(null);
+  const [control, setControl] = useState<ControlStatus | null>(null);
   const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [sample, setSample] = useState<SamplePayload | null>(null);
+  const [manualFps, setManualFps] = useState(40);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -464,7 +551,13 @@ const GamePowerPanel: FC = () => {
     try {
       const statusResult = await getStatus();
       setStatus(statusResult.service);
+      setControl(statusResult.control);
       setRuntime(statusResult.runtime);
+      if (statusResult.control.fps_target_override.fps) {
+        setManualFps(statusResult.control.fps_target_override.fps);
+      } else if (statusResult.runtime.fps_target.fps) {
+        setManualFps(statusResult.runtime.fps_target.fps);
+      }
     } catch (error) {
       setError(errorText(error));
     } finally {
@@ -499,6 +592,7 @@ const GamePowerPanel: FC = () => {
       await setMode(mode);
       const statusResult = await getStatus();
       setStatus(statusResult.service);
+      setControl(statusResult.control);
       setRuntime(statusResult.runtime);
       setNotice(null);
     } catch (error) {
@@ -520,8 +614,34 @@ const GamePowerPanel: FC = () => {
       await restoreDefaults();
       const statusResult = await getStatus();
       setStatus(statusResult.service);
+      setControl(statusResult.control);
       setRuntime(statusResult.runtime);
       setNotice(t.restored);
+    } catch (error) {
+      setError(errorText(error));
+      setNotice(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyFpsTarget = async (fps: number | null) => {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setNotice(t.applying);
+    setError(null);
+    try {
+      await setFpsTarget(fps);
+      const statusResult = await getStatus();
+      setStatus(statusResult.service);
+      setControl(statusResult.control);
+      setRuntime(statusResult.runtime);
+      if (statusResult.control.fps_target_override.fps) {
+        setManualFps(statusResult.control.fps_target_override.fps);
+      }
+      setNotice(null);
     } catch (error) {
       setError(errorText(error));
       setNotice(null);
@@ -536,6 +656,13 @@ const GamePowerPanel: FC = () => {
 
   const runtimeTitle = runtime?.appid ? `${t.game}: ${runtime.appid}` : t.noSample;
   const probeTitle = sample?.appid ? `${t.game}: ${sample.appid}` : t.noSample;
+  const supportedMin = control?.fps_target_override.supported_min ?? 30;
+  const supportedMax = control?.fps_target_override.supported_max ?? 120;
+  const supportedStep = control?.fps_target_override.supported_step ?? 5;
+  const targetMode =
+    control?.fps_target_override.status === "manual"
+      ? `${t.targetManual}: ${control.fps_target_override.fps} FPS`
+      : t.targetAuto;
 
   return (
     <>
@@ -559,6 +686,9 @@ const GamePowerPanel: FC = () => {
                 <div style={detailStyle}>{runtimeHeadline(t, status.mode, runtime)}</div>
                 <div style={detailStyle}>{targetText(t, runtime?.fps_target)}</div>
                 <div style={detailStyle}>{frameText(t, runtime?.frame_source)}</div>
+                <div style={detailStyle}>
+                  {t.learning}: {learningText(t, runtime?.learning)}
+                </div>
               </>
             ) : null}
             {notice ? <div style={detailStyle}>{notice}</div> : null}
@@ -585,6 +715,37 @@ const GamePowerPanel: FC = () => {
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => applyMode("off")}>
             {busy ? t.applying : t.modes.off}
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <div style={blockStyle}>
+            <div className={staticClasses.Title} style={titleStyle}>
+              {t.fpsTarget}: {manualFps} FPS
+            </div>
+            <div style={detailStyle}>{targetMode}</div>
+            <div style={detailStyle}>
+              {supportedMin}-{supportedMax} FPS / {supportedStep}
+            </div>
+            <input
+              aria-label={t.targetManual}
+              type="range"
+              min={30}
+              max={120}
+              step={5}
+              value={manualFps}
+              style={sliderStyle}
+              onChange={(event) => setManualFps(Number(event.currentTarget.value))}
+            />
+          </div>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => applyFpsTarget(manualFps)}>
+            {busy ? t.applying : t.targetApply}
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => applyFpsTarget(null)}>
+            {busy ? t.applying : t.targetAuto}
           </ButtonItem>
         </PanelSectionRow>
       </PanelSection>
@@ -614,6 +775,9 @@ const GamePowerPanel: FC = () => {
                 </div>
                 <div style={detailStyle}>{mappedText(t.reasons, runtime.last_reason)}</div>
                 <div style={detailStyle}>Render: {fmtPercent(runtime.render_busy)}</div>
+                <div style={detailStyle}>
+                  {t.learning}: {learningText(t, runtime.learning)}
+                </div>
               </>
             ) : (
               <div style={detailStyle}>{busy ? t.loading : t.noSample}</div>
