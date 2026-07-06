@@ -1,5 +1,7 @@
+import asyncio
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 from steamos_intel_handheld import game_power
@@ -11,24 +13,31 @@ from steamos_intel_handheld.game_power import (
     FramePerformanceTelemetry,
     FrameTargetTelemetry,
     GamePowerAction,
+    GamePowerActuation,
     GamePowerClassification,
     GamePowerConfig,
     GamePowerController,
     GamePowerGovernor,
     GamePowerMode,
+    GamePowerPhase,
     GamePowerSample,
     GameProcess,
     PressureSignal,
     PressureTelemetry,
     RaplObserver,
     RaplPowerWindow,
+    classify_game_power_phase,
     classify_game_power_sample,
     compute_fdinfo_busy,
+    compute_foreground_runqueue_wait_ms_per_s,
     compute_rapl_power_window,
     discover_cpu_policies,
     find_steam_game_processes,
     parse_fdinfo_engine_times,
     parse_pressure_signal,
+    parse_proc_stat_starttime_ticks,
+    parse_thread_schedstat,
+    read_process_age_s,
     resolve_cgroup_v2_path,
 )
 
@@ -81,7 +90,12 @@ def test_compute_rapl_power_window_rejects_non_positive_duration():
 
 
 def test_game_power_mode_values_are_stable_for_cli_and_service_config():
-    assert [mode.value for mode in GamePowerMode] == ["off", "observe", "gpu-priority"]
+    assert [mode.value for mode in GamePowerMode] == [
+        "off",
+        "observe",
+        "gpu-priority",
+        "target-balance",
+    ]
 
 
 def make_cpu_policy(
@@ -108,6 +122,42 @@ def make_cpu_policy(
     cpu_root.mkdir(parents=True)
     (cpu_root / "cpu_capacity").write_text(str(capacity))
     return policy
+
+
+def test_f1_discover_classifies_real_lunar_lake_capacities(tmp_path):
+    # MSI Claw 8 AI+ measured capacities: cpu0/1=1005, cpu2/3=1024, cpu4-7=676.
+    # 1005/1024 = 0.98 >= PCORE_CAPACITY_RATIO -> PCORE (not ECORE).
+    sysfs_root = tmp_path / "sys"
+    capacities = [1005, 1005, 1024, 1024, 676, 676, 676, 676]
+    for cpu, capacity in enumerate(capacities):
+        make_cpu_policy(sysfs_root, cpu, cpu=cpu, capacity=capacity)
+
+    policies = discover_cpu_policies(sysfs_root)
+
+    classes = [policy.policy_class for policy in policies]
+    assert classes[:4] == [CpuPolicyClass.PCORE] * 4
+    assert classes[4:] == [CpuPolicyClass.ECORE] * 4
+
+
+def test_f1_discover_homogeneous_capacity_is_all_pcore(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    for cpu in range(4):
+        make_cpu_policy(sysfs_root, cpu, cpu=cpu, capacity=1024)
+
+    policies = discover_cpu_policies(sysfs_root)
+
+    assert [policy.policy_class for policy in policies] == [CpuPolicyClass.PCORE] * 4
+
+
+def test_f1_discover_two_tier_classic_split(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    make_cpu_policy(sysfs_root, 0, cpu=0, capacity=1024)
+    make_cpu_policy(sysfs_root, 1, cpu=1, capacity=676, max_freq=3_700_000)
+
+    policies = discover_cpu_policies(sysfs_root)
+
+    assert policies[0].policy_class == CpuPolicyClass.PCORE
+    assert policies[1].policy_class == CpuPolicyClass.ECORE
 
 
 def test_discover_cpu_policies_classifies_highest_capacity_as_pcore(tmp_path):
@@ -150,6 +200,124 @@ def test_cpu_policy_actuator_applies_and_restores_epp_and_frequency_caps(tmp_pat
     ).read_text() == "balance_performance"
     assert (policies[0].path / "scaling_max_freq").read_text() == "4800000"
     assert (policies[1].path / "scaling_max_freq").read_text() == "3700000"
+
+
+class _StickyControlFile:
+    """Simulates a sysfs control file whose write silently does not persist."""
+
+    def __init__(self, value, sticky=False):
+        self.value = value
+        self.sticky = sticky
+        self.writes = 0
+
+    def read_text(self):
+        return self.value
+
+    def write_text(self, value):
+        self.writes += 1
+        if not self.sticky:
+            self.value = value
+
+    def __str__(self):
+        return f"sticky:{id(self)}"
+
+
+class _FakeControlDir:
+    def __init__(self, files):
+        self.files = files
+
+    def __truediv__(self, name):
+        return self.files[name]
+
+
+def _fake_policy(name, files, policy_class=CpuPolicyClass.PCORE):
+    return game_power.CpuPolicy(
+        name=name,
+        path=_FakeControlDir(files),
+        affected_cpus=(0,),
+        capacity=1024,
+        policy_class=policy_class,
+        available_epp=("performance", "balance_performance", "balance_power"),
+        current_epp="balance_performance",
+        scaling_min_freq=400_000,
+        scaling_max_freq=4_800_000,
+    )
+
+
+def test_f2_actuator_restore_verifies_readback_retries_and_reports(tmp_path):
+    sticky_freq = _StickyControlFile("3000000", sticky=True)
+    good_epp = _StickyControlFile("balance_power")
+    policy = _fake_policy(
+        "policy0",
+        {
+            "scaling_max_freq": sticky_freq,
+            "energy_performance_preference": good_epp,
+        },
+    )
+    actuator = CpuPolicyActuator([policy])
+    snapshot = CpuPolicySnapshot(
+        values={"policy0": ("balance_performance", 4_800_000)}
+    )
+
+    failed = actuator.restore(snapshot)
+
+    # The sticky freq write was retried once, then reported as failed.
+    assert sticky_freq.writes == 2
+    assert failed == [str(sticky_freq)]
+    # The EPP write next to it still restored.
+    assert good_epp.value == "balance_performance"
+
+
+def test_f2_actuator_restore_writes_freq_before_epp_and_skips_matching(tmp_path):
+    order = []
+
+    class OrderedFile(_StickyControlFile):
+        def __init__(self, value, label):
+            super().__init__(value)
+            self.label = label
+
+        def write_text(self, value):
+            order.append(self.label)
+            super().write_text(value)
+
+    freq = OrderedFile("3000000", "freq")
+    epp = OrderedFile("balance_power", "epp")
+    matching = OrderedFile("4800000", "freq-match")
+    policy0 = _fake_policy(
+        "policy0", {"scaling_max_freq": freq, "energy_performance_preference": epp}
+    )
+    policy1 = _fake_policy(
+        "policy1",
+        {
+            "scaling_max_freq": matching,
+            "energy_performance_preference": OrderedFile("balance_performance", "epp-match"),
+        },
+    )
+    actuator = CpuPolicyActuator([policy0, policy1])
+    snapshot = CpuPolicySnapshot(
+        values={
+            "policy0": ("balance_performance", 4_800_000),
+            "policy1": ("balance_performance", 4_800_000),
+        }
+    )
+
+    failed = actuator.restore(snapshot)
+
+    assert failed == []
+    # F2.3: freq restored before EPP within a policy; pre-matching values skipped.
+    assert order == ["freq", "epp"]
+
+
+def test_f2_actuator_restore_clean_returns_no_failures(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    make_cpu_policy(sysfs_root, 0, cpu=0, capacity=1024, max_freq=4_800_000)
+    policies = discover_cpu_policies(sysfs_root)
+    actuator = CpuPolicyActuator(policies)
+    snapshot = actuator.snapshot()
+    actuator.apply(epp="balance_power", pcore_max_khz=3_000_000)
+
+    assert actuator.restore(snapshot) == []
+    assert (policies[0].path / "scaling_max_freq").read_text() == "4800000"
 
 
 def make_rapl_domain(sysfs_root: Path, domain: str, name: str, energy_uj: int):
@@ -531,16 +699,42 @@ class RecordingActuator:
         self.events.append(("snapshot",))
         return self.snapshot_value
 
-    def apply(self, *, epp, pcore_max_khz=None, ecore_max_khz=None):
-        self.events.append(("apply", epp, pcore_max_khz, ecore_max_khz))
+    def apply(
+        self,
+        *,
+        epp=None,
+        pcore_epp=None,
+        ecore_epp=None,
+        pcore_max_khz=None,
+        ecore_max_khz=None,
+    ):
+        if pcore_epp is None and ecore_epp is None:
+            self.events.append(("apply", epp, pcore_max_khz, ecore_max_khz))
+        else:
+            self.events.append(
+                ("apply-per-class", pcore_epp, ecore_epp, pcore_max_khz, ecore_max_khz)
+            )
 
     def restore(self, snapshot):
         self.events.append(("restore", snapshot))
 
 
 class FailingActuator(RecordingActuator):
-    def apply(self, *, epp, pcore_max_khz=None, ecore_max_khz=None):
-        self.events.append(("apply-failed", epp, pcore_max_khz, ecore_max_khz))
+    def apply(
+        self,
+        *,
+        epp=None,
+        pcore_epp=None,
+        ecore_epp=None,
+        pcore_max_khz=None,
+        ecore_max_khz=None,
+    ):
+        if pcore_epp is None and ecore_epp is None:
+            self.events.append(("apply-failed", epp, pcore_max_khz, ecore_max_khz))
+        else:
+            self.events.append(
+                ("apply-failed-per-class", pcore_epp, ecore_epp, pcore_max_khz, ecore_max_khz)
+            )
         raise OSError("simulated sysfs write failure")
 
 
@@ -548,6 +742,66 @@ class RestoreFailingActuator(RecordingActuator):
     def restore(self, snapshot):
         self.events.append(("restore-failed", snapshot))
         raise OSError("simulated restore failure")
+
+
+class PartialRestoreActuator(RecordingActuator):
+    """Restore reports one silently-unrestored control file (F2)."""
+
+    def restore(self, snapshot):
+        self.events.append(("restore", snapshot))
+        return ["/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq"]
+
+
+def test_f2_governor_latches_fail_closed_on_partial_restore(capsys):
+    # Tick 1 applies the loading boost; tick 2 exhausts the boost budget and
+    # emits a None actuation, driving the _apply_cpu_intent restore branch.
+    observer = FakeObserver([phase_sample(age=5.0), phase_sample(age=5.0)])
+    actuator = PartialRestoreActuator()
+    governor = GamePowerGovernor(
+        config=tb_config(loading_boost_max_s=3.0, poll_s=2.0),
+        observer=observer,
+        actuator=actuator,
+    )
+    asyncio.run(governor.run_iterations(2))
+
+    err = capsys.readouterr().err
+    assert "game-power: restore-mismatch" in err
+    assert "policy0/scaling_max_freq" in err
+    assert governor._write_failed is True
+
+
+def test_f2_governor_restore_outcome_reports_failure(capsys):
+    actuator = PartialRestoreActuator()
+    governor = GamePowerGovernor(
+        config=tb_config(), observer=FakeObserver([]), actuator=actuator
+    )
+    governor._snapshot = actuator.snapshot()
+    governor._applied_actuation = GamePowerActuation(pcore_epp="performance")
+
+    outcome = governor.restore()
+
+    assert outcome.attempted is True
+    assert outcome.succeeded is False
+    assert "restore-mismatch" in outcome.reason
+    assert governor._write_failed is True
+    err = capsys.readouterr().err
+    assert "game-power: restore-mismatch" in err
+
+
+def test_f2_governor_clean_restore_has_no_stderr(capsys):
+    actuator = RecordingActuator()
+    governor = GamePowerGovernor(
+        config=tb_config(), observer=FakeObserver([]), actuator=actuator
+    )
+    governor._snapshot = actuator.snapshot()
+
+    outcome = governor.restore()
+
+    assert outcome.attempted is True
+    assert outcome.succeeded is True
+    assert capsys.readouterr().err == ""
+    assert governor._write_failed is False
+
 
 
 def make_hint_context(**overrides):
@@ -1823,3 +2077,911 @@ def test_find_steam_game_processes_reads_appid_from_cgroup(tmp_path):
             ),
         )
     ]
+
+
+# ---------------------------------------------------------------------------
+# V9 target-balance: helpers
+# ---------------------------------------------------------------------------
+def tb_config(**over):
+    base = dict(mode=GamePowerMode.TARGET_BALANCE, poll_s=2.0)
+    base.update(over)
+    return GamePowerConfig(**base)
+
+
+def tb_target(fps=60.0):
+    return FrameTargetTelemetry(fps_target=fps, source="manual", confidence="high")
+
+
+def tb_perf(avg, p95, n=20):
+    return FramePerformanceTelemetry(
+        avg_fps=avg,
+        p95_frame_ms=p95,
+        sample_count=n,
+        window_s=2.0,
+        source="mangohud-csv",
+        confidence="high",
+    )
+
+
+def fg_cpu_psi(avg10):
+    return PressureTelemetry(
+        cpu=(
+            PressureSignal(
+                scope="foreground_cgroup",
+                source_path="x",
+                supported=True,
+                some_avg10=avg10,
+            ),
+        )
+    )
+
+
+def phase_sample(
+    *,
+    appid="1091500",
+    package_w=22.0,
+    core_w=8.8,
+    uncore_w=7.4,
+    pl1_w=22,
+    render_busy=0.75,
+    fps=60.0,
+    avg_fps=None,
+    p95=None,
+    n=20,
+    age=None,
+    wait=None,
+    stalled=None,
+    psi=None,
+    gpu_rp0_mhz=1950,
+    gpu_rpe_mhz=800,
+    package_median_w=None,
+):
+    frame_target = tb_target(fps) if fps is not None else None
+    frame_performance = tb_perf(avg_fps, p95, n) if avg_fps is not None else None
+    sample = make_sample(
+        appid=appid,
+        package_w=package_w,
+        core_w=core_w,
+        uncore_w=uncore_w,
+        pl1_w=pl1_w,
+        render_busy=render_busy,
+        frame_target=frame_target,
+        frame_performance=frame_performance,
+    )
+    return replace(
+        sample,
+        foreground_process_age_s=age,
+        foreground_runqueue_wait_ms_per_s=wait,
+        frame_feed_stalled=stalled,
+        pressure=fg_cpu_psi(psi) if psi is not None else None,
+        gpu_rp0_mhz=gpu_rp0_mhz,
+        gpu_rpe_mhz=gpu_rpe_mhz,
+        package_median_w=package_median_w,
+    )
+
+
+def at_target_sample(**over):
+    kwargs = dict(avg_fps=63.0, p95=15.0, fps=60.0, age=100.0)
+    kwargs.update(over)
+    return phase_sample(**kwargs)
+
+
+# ---------------------------------------------------------------------------
+# S1: per-class EPP actuator
+# ---------------------------------------------------------------------------
+def test_cpu_policy_actuator_applies_per_class_epp_and_shares_one_snapshot(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    make_cpu_policy(sysfs_root, 0, cpu=0, capacity=1024, max_freq=4_800_000)
+    make_cpu_policy(sysfs_root, 1, cpu=1, capacity=676, max_freq=3_700_000)
+    policies = discover_cpu_policies(sysfs_root)
+    actuator = CpuPolicyActuator(policies)
+
+    snapshot = actuator.snapshot()
+    actuator.apply(pcore_epp="performance", ecore_epp="balance_power", pcore_max_khz=4_000_000)
+
+    assert (policies[0].path / "energy_performance_preference").read_text() == "performance"
+    assert (policies[1].path / "energy_performance_preference").read_text() == "balance_power"
+    assert (policies[0].path / "scaling_max_freq").read_text() == "4000000"
+    # E-core cap untouched by S3.
+    assert (policies[1].path / "scaling_max_freq").read_text() == "3700000"
+
+    actuator.restore(snapshot)
+    assert (
+        policies[0].path / "energy_performance_preference"
+    ).read_text() == "balance_performance"
+    assert (policies[0].path / "scaling_max_freq").read_text() == "4800000"
+
+
+def test_cpu_policy_actuator_uniform_epp_path_unchanged(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    make_cpu_policy(sysfs_root, 0, cpu=0, capacity=1024)
+    make_cpu_policy(sysfs_root, 1, cpu=1, capacity=676, max_freq=3_700_000)
+    policies = discover_cpu_policies(sysfs_root)
+    actuator = CpuPolicyActuator(policies)
+
+    actuator.apply(epp="balance_power")
+
+    assert (policies[0].path / "energy_performance_preference").read_text() == "balance_power"
+    assert (policies[1].path / "energy_performance_preference").read_text() == "balance_power"
+
+
+# ---------------------------------------------------------------------------
+# S1: phase classification (design section 4)
+# ---------------------------------------------------------------------------
+def test_classify_phase_no_game_when_no_appid():
+    phase, _ = classify_game_power_phase(tb_config(), phase_sample(appid=None))
+    assert phase == GamePowerPhase.NO_GAME
+
+
+def test_classify_phase_no_target_when_target_unknown():
+    phase, codes = classify_game_power_phase(tb_config(), phase_sample(fps=None))
+    assert phase == GamePowerPhase.NO_TARGET
+    assert codes == ("target-unknown-or-unlimited",)
+
+
+def test_classify_phase_loading_on_launch_grace():
+    phase, codes = classify_game_power_phase(tb_config(), phase_sample(age=5.0))
+    assert phase == GamePowerPhase.LOADING
+    assert "launch-grace" in codes
+
+
+def test_classify_phase_loading_on_asset_shader_burst():
+    sample = phase_sample(avg_fps=20.0, p95=40.0, render_busy=0.2, core_w=13.0, age=100.0)
+    phase, codes = classify_game_power_phase(tb_config(), sample)
+    assert phase == GamePowerPhase.LOADING
+    assert "asset-shader-burst" in codes
+
+
+def test_classify_phase_loading_on_frame_stall_with_psi():
+    sample = phase_sample(avg_fps=55.0, p95=20.0, stalled=True, psi=50.0, age=100.0)
+    phase, codes = classify_game_power_phase(tb_config(), sample)
+    assert phase == GamePowerPhase.LOADING
+    assert "frame-feed-stalled" in codes
+
+
+def test_classify_phase_at_target():
+    phase, _ = classify_game_power_phase(tb_config(), at_target_sample())
+    assert phase == GamePowerPhase.AT_TARGET
+
+
+def test_classify_phase_above_target():
+    phase, _ = classify_game_power_phase(tb_config(), at_target_sample(avg_fps=80.0))
+    assert phase == GamePowerPhase.ABOVE_TARGET
+
+
+def test_classify_phase_below_target_gpu_bound():
+    sample = phase_sample(avg_fps=50.0, p95=25.0, render_busy=0.75, age=100.0)
+    phase, _ = classify_game_power_phase(tb_config(), sample)
+    assert phase == GamePowerPhase.BELOW_TARGET_GPU_BOUND
+
+
+def test_classify_phase_below_target_cpu_bound_via_runqueue():
+    sample = phase_sample(
+        avg_fps=50.0,
+        p95=25.0,
+        render_busy=0.5,
+        uncore_w=2.0,
+        core_w=9.0,
+        wait=60.0,
+        age=100.0,
+    )
+    phase, codes = classify_game_power_phase(tb_config(), sample)
+    assert phase == GamePowerPhase.BELOW_TARGET_CPU_BOUND
+    assert codes == ("cpu-bound",)
+
+
+def test_classify_phase_unknown_when_no_bound_signal():
+    sample = phase_sample(
+        avg_fps=50.0, p95=25.0, render_busy=0.5, uncore_w=2.0, core_w=4.0, age=100.0
+    )
+    phase, _ = classify_game_power_phase(tb_config(), sample)
+    assert phase == GamePowerPhase.UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# S1: phase hysteresis (asymmetric)
+# ---------------------------------------------------------------------------
+def test_phase_commit_requires_stable_samples():
+    controller = GamePowerController(tb_config(phase_stable_samples=3))
+    for _ in range(2):
+        controller.evaluate(at_target_sample())
+        assert controller.committed_phase == GamePowerPhase.NO_GAME
+    controller.evaluate(at_target_sample())
+    assert controller.committed_phase == GamePowerPhase.AT_TARGET
+
+
+def test_loading_entry_commits_after_one_tick():
+    controller = GamePowerController(tb_config(phase_stable_samples=3))
+    decision = controller.evaluate(phase_sample(age=5.0))
+    assert controller.committed_phase == GamePowerPhase.LOADING
+    assert decision.action == GamePowerAction.LOADING_BOOST
+
+
+def test_at_target_exit_on_miss_commits_after_one_tick():
+    controller = GamePowerController(tb_config(phase_stable_samples=3))
+    for _ in range(3):
+        controller.evaluate(at_target_sample())
+    assert controller.committed_phase == GamePowerPhase.AT_TARGET
+    controller.evaluate(phase_sample(avg_fps=50.0, p95=25.0, render_busy=0.75, age=100.0))
+    assert controller.committed_phase == GamePowerPhase.BELOW_TARGET_GPU_BOUND
+
+
+def test_loading_exit_requires_five_samples():
+    controller = GamePowerController(tb_config(loading_exit_samples=5))
+    controller.evaluate(phase_sample(age=5.0))
+    assert controller.committed_phase == GamePowerPhase.LOADING
+    for _ in range(4):
+        controller.evaluate(at_target_sample())
+        assert controller.committed_phase == GamePowerPhase.LOADING
+    controller.evaluate(at_target_sample())
+    assert controller.committed_phase == GamePowerPhase.AT_TARGET
+
+
+# ---------------------------------------------------------------------------
+# S1: loading budget + per-phase actuation
+# ---------------------------------------------------------------------------
+def test_loading_boost_actuation_is_per_class_performance():
+    controller = GamePowerController(tb_config())
+    decision = controller.evaluate(phase_sample(age=5.0))
+    assert decision.action == GamePowerAction.LOADING_BOOST
+    assert decision.actuation == GamePowerActuation(
+        pcore_epp="performance", ecore_epp="balance_performance"
+    )
+    assert decision.phase == GamePowerPhase.LOADING
+
+
+def test_loading_budget_exhausted_returns_neutral():
+    controller = GamePowerController(tb_config(loading_boost_max_s=3.0, poll_s=2.0))
+    first = controller.evaluate(phase_sample(age=5.0))
+    assert first.action == GamePowerAction.LOADING_BOOST
+    second = controller.evaluate(phase_sample(age=5.0))
+    assert second.action == GamePowerAction.OBSERVE_ONLY
+    assert second.actuation is None
+    assert "loading-budget-exhausted" in second.phase_reason_codes
+
+
+def test_below_target_cpu_bound_emits_target_balance_trim_per_class():
+    controller = GamePowerController(tb_config(phase_stable_samples=1))
+    sample = phase_sample(
+        avg_fps=50.0,
+        p95=25.0,
+        render_busy=0.5,
+        uncore_w=2.0,
+        core_w=9.0,
+        wait=60.0,
+        age=100.0,
+    )
+    decision = controller.evaluate(sample)
+    assert decision.phase == GamePowerPhase.BELOW_TARGET_CPU_BOUND
+    assert decision.action == GamePowerAction.TARGET_BALANCE_TRIM
+    assert decision.actuation == GamePowerActuation(
+        pcore_epp="performance", ecore_epp="balance_power"
+    )
+
+
+def test_below_target_gpu_bound_uses_uniform_gpu_priority_epp():
+    controller = GamePowerController(tb_config(phase_stable_samples=1, epp="balance_power"))
+    sample = phase_sample(avg_fps=50.0, p95=25.0, render_busy=0.75, age=100.0)
+    decision = controller.evaluate(sample)
+    assert decision.phase == GamePowerPhase.BELOW_TARGET_GPU_BOUND
+    assert decision.action == GamePowerAction.GPU_PRIORITY_EPP
+    assert decision.actuation == GamePowerActuation(
+        pcore_epp="balance_power", ecore_epp="balance_power"
+    )
+
+
+def test_no_target_falls_back_to_v7_gpu_priority_predicate():
+    controller = GamePowerController(
+        tb_config(
+            phase_stable_samples=1,
+            activate_samples=1,
+            rolling_window_samples=1,
+            epp="balance_power",
+        )
+    )
+    decision = controller.evaluate(phase_sample(fps=None))
+    assert decision.phase == GamePowerPhase.NO_TARGET
+    assert decision.action == GamePowerAction.GPU_PRIORITY_EPP
+    assert decision.actuation == GamePowerActuation(
+        pcore_epp="balance_power", ecore_epp="balance_power"
+    )
+
+
+def test_gpu_priority_mode_decision_carries_no_phase():
+    controller = GamePowerController(
+        GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY, activate_samples=1)
+    )
+    decision = controller.evaluate(make_sample())
+    assert decision.phase is None
+
+
+# ---------------------------------------------------------------------------
+# S1: governor per-class apply + one snapshot/restore path
+# ---------------------------------------------------------------------------
+def test_governor_target_balance_applies_per_class_epp_and_restores_on_close():
+    observer = FakeObserver([phase_sample(age=5.0)])
+    actuator = RecordingActuator()
+    governor = GamePowerGovernor(
+        config=tb_config(), observer=observer, actuator=actuator
+    )
+    asyncio.run(governor.run_iterations(1))
+    assert ("snapshot",) in actuator.events
+    assert (
+        "apply-per-class",
+        "performance",
+        "balance_performance",
+        None,
+        None,
+    ) in actuator.events
+    governor.close()
+    assert ("restore", actuator.snapshot_value) in actuator.events
+
+
+def test_governor_target_balance_write_failure_latches_fail_closed():
+    observer = FakeObserver([phase_sample(age=5.0), phase_sample(age=5.0)])
+    actuator = FailingActuator()
+    governor = GamePowerGovernor(
+        config=tb_config(), observer=observer, actuator=actuator
+    )
+    asyncio.run(governor.run_iterations(2))
+    applies = [event for event in actuator.events if event[0] == "apply-failed-per-class"]
+    assert len(applies) == 1  # second tick is fail-closed (writes disabled)
+    assert ("restore", actuator.snapshot_value) in actuator.events
+
+
+# ---------------------------------------------------------------------------
+# S1: telemetry additivity
+# ---------------------------------------------------------------------------
+def test_gpu_priority_jsonl_has_no_phase_fields():
+    sample = make_sample()
+    decision = game_power.GamePowerDecision(
+        GamePowerAction.GPU_PRIORITY_EPP, "package limited with GPU activity"
+    )
+    row = json.loads(game_power.format_decision_jsonl(sample, decision, elapsed_s=2.0))
+    assert "phase" not in row
+    assert "ladder_step" not in row
+
+
+def test_target_balance_jsonl_includes_phase_and_ladder_step():
+    sample = make_sample()
+    decision = game_power.GamePowerDecision(
+        GamePowerAction.TARGET_BALANCE_TRIM,
+        "ladder step up to step 2",
+        phase=GamePowerPhase.AT_TARGET,
+        phase_reason_codes=("fps-target-satisfied",),
+        ladder_step=2,
+    )
+    row = json.loads(game_power.format_decision_jsonl(sample, decision, elapsed_s=2.0))
+    assert row["phase"] == "at-target"
+    assert row["phase_reason_codes"] == ["fps-target-satisfied"]
+    assert row["ladder_step"] == 2
+
+
+def test_runtime_snapshot_includes_phase_for_target_balance():
+    sample = make_sample()
+    decision = game_power.GamePowerDecision(
+        GamePowerAction.LOADING_BOOST,
+        "loading boost",
+        phase=GamePowerPhase.LOADING,
+        phase_reason_codes=("launch-grace",),
+        ladder_step=0,
+    )
+    payload = game_power.runtime_snapshot_payload(
+        tb_config(), sample, decision, elapsed_s=1.0
+    )
+    assert payload["phase"] == "loading"
+    assert payload["control_active"] is True
+
+
+# ---------------------------------------------------------------------------
+# S1: schedstat + process age observers
+# ---------------------------------------------------------------------------
+def test_parse_thread_schedstat_reads_cpu_and_wait():
+    assert parse_thread_schedstat("123456 7890 42") == (123456, 7890)
+
+
+def test_compute_runqueue_wait_sums_top_threads_by_cpu_delta():
+    prev = {1: (0, 0), 2: (0, 0), 3: (0, 0)}
+    curr = {1: (1000, 500), 2: (2000, 700), 3: (10, 100)}
+    # top-2 by cpu delta => tids 2 and 1 => wait = 700 + 500 = 1200 ns
+    value = compute_foreground_runqueue_wait_ms_per_s(prev, curr, elapsed_s=1.0, top_n=2)
+    assert value == round(1200 / 1_000_000, 3)
+
+
+def test_parse_proc_stat_starttime_handles_comm_with_spaces():
+    fields = ["7"] + [str(i) for i in range(3, 22)]  # state..starttime(=21)
+    text = "1234 (game with )spaces) " + " ".join(fields)
+    assert parse_proc_stat_starttime_ticks(text) == 21
+
+
+def test_read_process_age_s_from_uptime_and_stat(tmp_path):
+    proc = tmp_path / "proc"
+    (proc / "1234").mkdir(parents=True)
+    (proc / "uptime").write_text("1000.0 900.0\n")
+    fields = ["7"] + [str(i) for i in range(3, 21)] + ["50000"]  # starttime ticks
+    (proc / "1234" / "stat").write_text("1234 (game) " + " ".join(fields))
+    age = read_process_age_s(proc, 1234, clock_ticks_per_s=100)
+    assert age == 500.0  # 1000 - 50000/100
+
+
+def test_observer_carries_runqueue_wait_between_colorize_ticks(tmp_path):
+    proc = tmp_path / "proc"
+    make_proc_game(proc, 4242, "1091500")
+    task = proc / "4242" / "task"
+
+    def write_schedstat(cpu, wait):
+        for tid, values in ((1, (cpu, wait)),):
+            tdir = task / str(tid)
+            tdir.mkdir(parents=True, exist_ok=True)
+            (tdir / "schedstat").write_text(f"{values[0]} {values[1]} 1")
+
+    clock = [0.0]
+    observer = game_power.SystemGamePowerObserver(
+        proc_root=proc, poll_s=2.0, colorize_interval_s=2.0, clock=lambda: clock[0]
+    )
+    process = find_steam_game_processes(proc)[0]
+
+    write_schedstat(0, 0)
+    clock[0] = 0.0
+    assert observer._read_colorize_signals(process) is None  # baseline sample
+
+    write_schedstat(1000, 1_000_000)
+    clock[0] = 1.0
+    first = observer._read_colorize_signals(process)
+    assert first == round(1_000_000 / 1_000_000 / 1.0, 3)
+
+    # Non-colorize tick carries the last value forward unchanged.
+    carried = observer._read_colorize_signals(process)
+    assert carried == first
+
+
+def test_q2_single_proc_pass_supplies_wait_and_color_ledger(tmp_path):
+    proc = tmp_path / "proc"
+    make_proc_game(proc, 4242, "1091500")
+    task = proc / "4242" / "task"
+
+    def write_schedstat(cpu, wait):
+        tdir = task / "1"
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "schedstat").write_text(f"{cpu} {wait} 1")
+        (tdir / "comm").write_text("RenderThread\n")
+
+    # Q2: the duplicate per-tick schedstat reader is gone; one colorize pass
+    # feeds both the color ledger and the runqueue-wait aggregate.
+    assert not hasattr(game_power, "read_foreground_thread_schedstat")
+
+    clock = [0.0]
+    observer = game_power.SystemGamePowerObserver(
+        proc_root=proc, poll_s=2.0, colorize_interval_s=2.0, clock=lambda: clock[0]
+    )
+    process = find_steam_game_processes(proc)[0]
+
+    write_schedstat(0, 0)
+    clock[0] = 0.0
+    observer._read_colorize_signals(process)  # baseline
+
+    write_schedstat(200_000_000, 30_000_000)
+    clock[0] = 2.0
+    wait = observer._read_colorize_signals(process)
+
+    # Both signals come from one pass over the same rows.
+    assert wait == round(30_000_000 / 1_000_000 / 2.0, 3)
+    assert observer._last_color_entries is not None
+    entries = {e.role_key: e for e in observer._last_color_entries}
+    assert "foreground-game:renderthread" in entries
+
+
+# ---------------------------------------------------------------------------
+# S3: runtime thread color ledger
+# ---------------------------------------------------------------------------
+def _write_task(task_root, tid, comm, cpu_ns, wait_ns, slices, cpu):
+    tdir = task_root / str(tid)
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / "schedstat").write_text(f"{cpu_ns} {wait_ns} {slices}\n")
+    (tdir / "comm").write_text(f"{comm}\n")
+    fields = ["0"] * 40
+    fields[36] = str(cpu)  # processor is field 39 => index 36 in post-comm tail
+    (tdir / "stat").write_text(f"{tid} ({comm}) " + " ".join(fields) + "\n")
+
+
+def test_observer_colorizes_foreground_and_compositor_roles(tmp_path):
+    from steamos_intel_handheld.game_power_coloring import Color
+
+    proc = tmp_path / "proc"
+    make_proc_game(proc, 4242, "1091500")
+    game_task = proc / "4242" / "task"
+
+    # A compositor helper process (color C, never shaped).
+    comp = proc / "5000"
+    comp.mkdir(parents=True)
+    (comp / "cmdline").write_bytes(b"gamescope\0")
+    (comp / "cgroup").write_text(
+        "0::/user.slice/user@1000.service/gamescope-session.service\n"
+    )
+
+    clock = [0.0]
+    observer = game_power.SystemGamePowerObserver(
+        proc_root=proc, poll_s=2.0, colorize_interval_s=2.0, clock=lambda: clock[0]
+    )
+    process = find_steam_game_processes(proc)[0]
+
+    _write_task(game_task, 101, "RenderThread", 0, 0, 0, 0)
+    _write_task(comp / "task", 201, "gamescope", 0, 0, 0, 4)
+    clock[0] = 0.0
+    observer._read_colorize_signals(process)  # baseline
+    assert observer._last_color_entries is None
+
+    _write_task(game_task, 101, "RenderThread", 200_000_000, 30_000_000, 100, 1)
+    _write_task(comp / "task", 201, "gamescope", 50_000_000, 0, 10, 4)
+    clock[0] = 2.0
+    observer._read_colorize_signals(process)
+
+    entries = {e.role_key: e for e in observer._last_color_entries}
+    assert entries["foreground-game:renderthread"].color == Color.A
+    assert entries["foreground-game:renderthread"].actuator_state == "blocked"
+    compositor = entries["gamescope-helper:gamescope"]
+    assert compositor.color == Color.C
+    assert compositor.actuator == "observe-only"
+    assert compositor.actuator_state == "active"
+
+
+def test_observer_marks_truncated_when_over_tid_budget(tmp_path):
+    from steamos_intel_handheld.game_power_coloring import COLOR_LEDGER_TID_BUDGET
+
+    proc = tmp_path / "proc"
+    make_proc_game(proc, 4242, "1091500")
+    game_task = proc / "4242" / "task"
+
+    clock = [0.0]
+    observer = game_power.SystemGamePowerObserver(
+        proc_root=proc, poll_s=2.0, colorize_interval_s=2.0, clock=lambda: clock[0]
+    )
+    process = find_steam_game_processes(proc)[0]
+
+    count = COLOR_LEDGER_TID_BUDGET + 10
+    for tid in range(count):
+        _write_task(game_task, tid, "worker", 0, 0, 0, 0)
+    clock[0] = 0.0
+    observer._read_colorize_signals(process)
+    for tid in range(count):
+        _write_task(game_task, tid, "worker", (tid + 1) * 1_000_000, 0, 1, 0)
+    clock[0] = 2.0
+    observer._read_colorize_signals(process)
+
+    assert observer._last_color_truncated is True
+
+
+def test_target_balance_jsonl_includes_color_ledger():
+    from steamos_intel_handheld.game_power_coloring import Color, ColorLedgerEntry
+
+    entry = ColorLedgerEntry(
+        role_key="foreground-game:renderthread",
+        color=Color.A,
+        tid_count=1,
+        cpu_time_ms_per_s=64.0,
+        runqueue_wait_ms_per_s=3.0,
+        cpus_seen=(0, 1),
+        actuator="uclamp-min",
+        actuator_state="blocked",
+        blocking_reason_codes=("no-verdict-for-context",),
+    )
+    controller = GamePowerController(tb_config(activate_samples=1, rolling_window_samples=1))
+    sample = replace(
+        at_target_sample(),
+        color_ledger_entries=(entry,),
+        color_ledger_truncated=False,
+    )
+    decision = controller.evaluate(sample)
+
+    assert decision.color_ledger is not None
+    row = json.loads(game_power.format_decision_jsonl(sample, decision, elapsed_s=2.0))
+    assert row["color_ledger"]["entries"][0]["color"] == "A"
+    assert row["color_ledger"]["entries"][0]["actuator_state"] == "blocked"
+    assert row["verdict_ledger_health"]["status"] == "unavailable"
+
+
+def test_gpu_priority_jsonl_has_no_v9_color_fields():
+    controller = GamePowerController(
+        GamePowerConfig(mode=GamePowerMode.GPU_PRIORITY, activate_samples=1)
+    )
+    sample = make_sample()
+    decision = controller.evaluate(sample)
+    row = json.loads(game_power.format_decision_jsonl(sample, decision, elapsed_s=2.0))
+    assert "color_ledger" not in row
+    assert "verdict_ledger_health" not in row
+    assert "gated_lanes" not in row
+    assert "phase" not in row
+
+
+# ---------------------------------------------------------------------------
+# S2: convergence ladder
+# ---------------------------------------------------------------------------
+def _drive_to_step(controller, steps, sample_factory=at_target_sample):
+    decisions = []
+    for _ in range(steps):
+        decisions.append(controller.evaluate(sample_factory()))
+    return decisions
+
+
+def test_ladder_steps_up_after_hold_samples():
+    controller = GamePowerController(
+        tb_config(phase_stable_samples=1, ladder_hold_samples=2)
+    )
+    # tick1 commit AT + hold(1); tick2 hold(2) -> step up to 1
+    controller.evaluate(at_target_sample())
+    assert controller.ladder_step == 0
+    decision = controller.evaluate(at_target_sample())
+    assert controller.ladder_step == 1
+    assert decision.action == GamePowerAction.TARGET_BALANCE_TRIM
+    # V10 battery rung 1 is G1: GPU max_freq capped to rp0 * (1 - 0.12). D6: the
+    # actuation carries the ratio; the actuator derives the per-GT absolute cap.
+    assert decision.actuation == GamePowerActuation(gpu_max_ratio=0.12)
+
+
+def test_above_target_halves_ladder_hold_requirement():
+    controller = GamePowerController(
+        tb_config(phase_stable_samples=1, ladder_hold_samples=4)
+    )
+    controller.evaluate(at_target_sample(avg_fps=80.0))  # commit ABOVE + hold(1)
+    decision = controller.evaluate(
+        at_target_sample(avg_fps=80.0)
+    )  # hold(2) == 4//2 -> step up
+    assert controller.ladder_step == 1
+    assert decision.action == GamePowerAction.TARGET_BALANCE_TRIM
+
+
+def test_ladder_actuation_folds_battery_rung_sequence():
+    # V10: battery sequence G1 G2 G3 P1 P2 P3 C1 C2 (the V9 S3/S4 CPU caps are
+    # NOT in this sequence; they are verdict-gated deep rungs only).
+    controller = GamePowerController(
+        tb_config(phase_stable_samples=1, ladder_hold_samples=1)
+    )
+    steps = {}
+    for _ in range(8):
+        decision = controller.evaluate(at_target_sample())
+        steps[controller.ladder_step] = decision.actuation
+    # G rungs cap GPU max_freq at rp0 * (1 - ratio); deepest G wins cumulatively.
+    # D6: the fold carries the ratio (G3 -> 0.30); the actuator derives per-GT.
+    assert steps[3] == GamePowerActuation(gpu_max_ratio=0.30)
+    # P1 adds the soft-PL1 overlay = min(slider 22 - 1, ceil(median 22) + 1.5) =
+    # min(21, 23.5) = 21 (D2: always below the slider) while the deepest G rung
+    # (G3 -> 0.30) stays applied.
+    assert steps[4] == GamePowerActuation(gpu_max_ratio=0.30, soft_pl1_w=21)
+    assert steps[6] == GamePowerActuation(gpu_max_ratio=0.30, soft_pl1_w=19)  # P3
+    # C1 then C2 fold ecore then pcore EPP on top.
+    assert steps[7] == GamePowerActuation(
+        gpu_max_ratio=0.30, soft_pl1_w=19, ecore_epp="balance_power"
+    )
+    assert steps[8] == GamePowerActuation(
+        gpu_max_ratio=0.30,
+        soft_pl1_w=19,
+        ecore_epp="balance_power",
+        pcore_epp="balance_power",
+    )
+
+
+def test_ladder_verdict_gated_deep_cpu_caps():
+    # The V9 S3/S4 CPU-frequency caps stay available only as verdict-gated deep
+    # rungs (S3CAP/S4CAP), appended after C2 when unlocked via the profiler flag.
+    controller = GamePowerController(
+        tb_config(phase_stable_samples=1, ladder_hold_samples=1, allow_ladder_step_5=True)
+    )
+    steps = {}
+    for _ in range(10):
+        decision = controller.evaluate(at_target_sample())
+        steps[controller.ladder_step] = decision.actuation
+    assert steps[9].pcore_max_khz == 4_000_000  # S3CAP
+    assert steps[10].pcore_max_khz == 3_000_000  # S4CAP
+    assert steps[10].ecore_max_khz == 2_400_000
+
+
+def test_ladder_fast_release_drops_all_rungs_on_p95_breach():
+    # V10 contract 1.4: fast release drops ALL rungs at once (to step 0).
+    controller = GamePowerController(
+        tb_config(phase_stable_samples=1, ladder_hold_samples=1)
+    )
+    _drive_to_step(controller, 3)  # step up to 3
+    assert controller.ladder_step == 3
+    # p95 breach but still fps-target-satisfied (guard 1.10 < ratio <= 1.15)
+    breach = at_target_sample(avg_fps=63.0, p95=19.0)
+    decision = controller.evaluate(breach)
+    assert controller.ladder_step == 0
+    assert decision.action == GamePowerAction.TARGET_BALANCE_RELEASE
+    assert "ladder-p95-breach" in decision.phase_reason_codes
+
+
+def test_ladder_backoff_blocks_reentry_of_failed_step():
+    controller = GamePowerController(
+        tb_config(phase_stable_samples=1, ladder_hold_samples=1, ladder_backoff_s=1000.0)
+    )
+    _drive_to_step(controller, 3)
+    controller.evaluate(at_target_sample(avg_fps=63.0, p95=19.0))  # fast release 3 -> 0
+    assert controller.ladder_step == 0
+    # Climb: 0 -> 1 -> 2, then blocked at 2 because step 3 is in backoff.
+    controller.evaluate(at_target_sample())
+    controller.evaluate(at_target_sample())
+    assert controller.ladder_step == 2
+    decision = controller.evaluate(at_target_sample())
+    assert controller.ladder_step == 2
+    assert "ladder-backoff-active" in decision.phase_reason_codes
+
+
+def test_ladder_top_of_sequence_is_locked_with_no_verdict_reason():
+    # Battery base sequence is 8 rungs; beyond C2 the deep CPU-cap rungs stay
+    # locked until a verdict entry exists.
+    controller = GamePowerController(
+        tb_config(phase_stable_samples=1, ladder_hold_samples=1)
+    )
+    _drive_to_step(controller, 8)
+    assert controller.ladder_step == 8
+    decision = controller.evaluate(at_target_sample())
+    assert controller.ladder_step == 8
+    assert "no-verdict-for-context" in decision.phase_reason_codes
+
+
+def test_governor_ladder_transition_restores_then_applies_absolute():
+    samples = [at_target_sample() for _ in range(3)]
+    observer = FakeObserver(samples)
+    actuator = RecordingActuator()
+    governor = GamePowerGovernor(
+        config=tb_config(phase_stable_samples=1, ladder_hold_samples=1),
+        observer=observer,
+        actuator=actuator,
+    )
+    asyncio.run(governor.run_iterations(3))
+    kinds = [event[0] for event in actuator.events]
+    # First trim: snapshot then apply. Second trim: restore-to-baseline then apply.
+    # V10 battery rungs 1-3 (G1/G2/G3) carry only GPU intent, so the CPU actuator
+    # is invoked via the uniform "apply" path; the restore-to-baseline discipline
+    # between differing absolute states is what this proves.
+    assert "snapshot" in kinds
+    assert "restore" in kinds
+    applies = [event for event in actuator.events if event[0] in {"apply", "apply-per-class"}]
+    assert len(applies) >= 2
+
+
+# ---------------------------------------------------------------------------
+# V9 defect fixes: target-balance control loop (C1..C7)
+# ---------------------------------------------------------------------------
+def test_c1_non_target_appid_restores_and_releases_lanes():
+    controller = GamePowerController(
+        tb_config(
+            phase_stable_samples=1, ladder_hold_samples=1, target_appid="1091500"
+        )
+    )
+    _drive_to_step(controller, 3)
+    assert controller.ladder_step == 3
+    decision = controller.evaluate(at_target_sample(appid="999999"))
+    assert decision.phase == GamePowerPhase.NO_GAME
+    assert "non-target-game" in decision.phase_reason_codes
+    assert decision.action == GamePowerAction.RESTORE
+    assert decision.actuation is None
+    assert controller.ladder_step == 0
+    assert decision.gated_lanes["background_shaping"]["state"] == "released"
+
+
+def test_c2_refresh_config_restores_target_balance_snapshot_on_mode_change():
+    tb = tb_config(phase_stable_samples=1, ladder_hold_samples=1)
+    observe = GamePowerConfig(mode=GamePowerMode.OBSERVE)
+    seq = [tb, tb, tb, observe]
+    calls = {"i": 0}
+
+    def provider(_base):
+        cfg = seq[min(calls["i"], len(seq) - 1)]
+        calls["i"] += 1
+        return cfg
+
+    observer = FakeObserver([at_target_sample() for _ in range(4)])
+    actuator = RecordingActuator()
+    governor = GamePowerGovernor(
+        config=tb, observer=observer, actuator=actuator, config_provider=provider
+    )
+    asyncio.run(governor.run_iterations(3))
+    assert governor._applied_actuation is not None
+    restores_before = sum(1 for e in actuator.events if e[0] == "restore")
+    asyncio.run(governor.run_iterations(1))
+    assert governor._applied_actuation is None
+    assert governor._snapshot is None
+    restores_after = sum(1 for e in actuator.events if e[0] == "restore")
+    assert restores_after > restores_before
+
+
+def test_c3_ladder_records_backoff_on_real_target_miss():
+    controller = GamePowerController(
+        tb_config(
+            phase_stable_samples=1, ladder_hold_samples=1, ladder_backoff_s=1000.0
+        )
+    )
+    _drive_to_step(controller, 3)
+    assert controller.ladder_step == 3
+    miss = phase_sample(avg_fps=50.0, p95=25.0, render_busy=0.75, age=100.0)
+    decision = controller.evaluate(miss)
+    assert decision.phase == GamePowerPhase.BELOW_TARGET_GPU_BOUND
+    assert "ladder-target-miss" in decision.phase_reason_codes
+    assert controller.ladder_step == 0
+    controller.evaluate(at_target_sample())  # 0 -> 1
+    controller.evaluate(at_target_sample())  # 1 -> 2
+    blocked = controller.evaluate(at_target_sample())  # step 3 in backoff
+    assert controller.ladder_step == 2
+    assert "ladder-backoff-active" in blocked.phase_reason_codes
+
+
+def test_c4a_unknown_below_target_releases_ladder_and_records_backoff():
+    controller = GamePowerController(
+        tb_config(
+            phase_stable_samples=1, ladder_hold_samples=1, ladder_backoff_s=1000.0
+        )
+    )
+    _drive_to_step(controller, 4)
+    assert controller.ladder_step == 4
+    unknown = phase_sample(
+        avg_fps=50.0, p95=25.0, render_busy=0.5, uncore_w=2.0, core_w=4.0, age=100.0
+    )
+    decision = controller.evaluate(unknown)
+    assert decision.phase == GamePowerPhase.UNKNOWN
+    assert decision.action == GamePowerAction.TARGET_BALANCE_RELEASE
+    assert decision.actuation is None
+    assert "unknown-below-target-release" in decision.phase_reason_codes
+    assert controller.ladder_step == 0
+    last = None
+    for _ in range(5):
+        last = controller.evaluate(at_target_sample())
+    assert controller.ladder_step == 3
+    assert "ladder-backoff-active" in last.phase_reason_codes
+
+
+def test_c16_allow_ladder_step_5_reaches_s5_without_verdict():
+    controller = GamePowerController(
+        tb_config(
+            phase_stable_samples=1, ladder_hold_samples=1, allow_ladder_step_5=True
+        )
+    )
+    last = None
+    for _ in range(10):
+        last = controller.evaluate(at_target_sample())
+    assert controller.ladder_step == 10
+    assert last.gated_lanes["ladder_deep_step"]["state"] == "active"
+
+
+def test_c16_cli_flag_allow_ladder_step_5_default_off_and_parsed():
+    parser = game_power.build_parser()
+    off = game_power.config_from_args(parser.parse_args(["--mode", "target-balance"]))
+    assert off.allow_ladder_step_5 is False
+    on = game_power.config_from_args(
+        parser.parse_args(["--mode", "target-balance", "--allow-ladder-step-5"])
+    )
+    assert on.allow_ladder_step_5 is True
+
+
+def test_c6_frame_stall_does_not_load_when_target_satisfied():
+    sample = at_target_sample(stalled=True, core_w=13.0)
+    phase, codes = classify_game_power_phase(tb_config(), sample)
+    assert phase == GamePowerPhase.AT_TARGET
+    assert "frame-feed-stalled" not in codes
+
+
+def test_c6_frame_stall_still_loads_when_target_not_satisfied():
+    sample = phase_sample(
+        avg_fps=40.0, p95=30.0, fps=60.0, stalled=True, core_w=13.0, age=100.0
+    )
+    phase, codes = classify_game_power_phase(tb_config(), sample)
+    assert phase == GamePowerPhase.LOADING
+    assert "frame-feed-stalled" in codes
+
+
+def test_c7_loading_exit_requires_cadence_at_ratio():
+    controller = GamePowerController(
+        tb_config(loading_exit_samples=3, loading_exit_fps_ratio=0.7)
+    )
+    controller.evaluate(phase_sample(age=5.0))
+    assert controller.committed_phase == GamePowerPhase.LOADING
+    low = phase_sample(avg_fps=30.0, p95=40.0, fps=60.0, age=100.0)
+    for _ in range(5):
+        controller.evaluate(low)
+        assert controller.committed_phase == GamePowerPhase.LOADING
+    good = at_target_sample()
+    for _ in range(2):
+        controller.evaluate(good)
+        assert controller.committed_phase == GamePowerPhase.LOADING
+    controller.evaluate(good)
+    assert controller.committed_phase == GamePowerPhase.AT_TARGET

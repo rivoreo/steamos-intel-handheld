@@ -15,23 +15,34 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 
 from steamos_intel_handheld import game_power_control
 from steamos_intel_handheld.game_power import (
     DEFAULT_RUNTIME_SNAPSHOT_FILE,
+    DEFAULT_VERDICT_LEDGER_FILE,
+    DEFAULT_VERDICT_LEDGER_RUN_FALLBACK,
     CpuPolicyActuator,
+    FrameFeedReader,
     FrameTargetTelemetry,
     GamePowerConfig,
     GamePowerGovernor,
     GamePowerHintContext,
     GamePowerHintStore,
     GamePowerMode,
+    GamePowerPersona,
     GamePowerSample,
+    GamePowerVerdictEnv,
+    GamePowerVerdictLedger,
+    GpuFreqActuator,
     SystemGamePowerObserver,
     discover_cpu_policies,
+    discover_gpu_gts,
+    gpu_freq_bounds,
+    read_kernel_release,
+    topology_fingerprint,
 )
 
 BUS_NAME = "org.rivoreo.SteamOSManager.PowerControl"
@@ -497,6 +508,7 @@ class TdpBackend:
         msi_claw_ec_shift_policy: MsiClawEcShiftPolicy | str = (
             MsiClawEcShiftPolicy.TDP_THRESHOLD
         ),
+        soft_pl1_floor_w: int = 8,
     ) -> None:
         self.min_w = int(min_w)
         self.max_w = int(max_w)
@@ -520,9 +532,15 @@ class TdpBackend:
         )
         self.power_source_poll_s = max(0.0, float(power_source_poll_s))
         self.msi_claw_ec_shift_policy = MsiClawEcShiftPolicy(msi_claw_ec_shift_policy)
+        self.soft_pl1_floor_w = int(soft_pl1_floor_w)
+        self._soft_pl1_w: int | None = None
         self._last_applied_power_source: PowerSource | None = None
         if self.min_w <= 0 or self.max_w < self.min_w:
             raise ValueError(f"invalid TDP range {self.min_w}-{self.max_w}W")
+        if self.soft_pl1_floor_w <= 0:
+            raise ValueError(
+                f"invalid soft PL1 floor {self.soft_pl1_floor_w}W; expected > 0"
+            )
         if self.short_limit_max_w < self.max_w:
             raise ValueError(
                 f"invalid short-term limit {self.short_limit_max_w}W; "
@@ -576,6 +594,7 @@ class TdpBackend:
         return self.max_w
 
     def write_limit_w(self, watts: int) -> int:
+        self._soft_pl1_w = None
         watts = self._normalize_requested_watts(watts)
         if self.apply_msi_claw_ec:
             self.ec_controller.preflight()
@@ -587,12 +606,48 @@ class TdpBackend:
         return watts
 
     def restore_state_to_rapl(self) -> int | None:
+        self._soft_pl1_w = None
         watts = self._read_state_file()
         if watts is None:
             return None
         self._write_state_file(watts)
         self.apply_limit_to_rapl(watts)
         return watts
+
+    def _effective_pl1_w(self, user_pl1_w: int) -> int:
+        if self._soft_pl1_w is None:
+            return user_pl1_w
+        eff = min(user_pl1_w, self._soft_pl1_w)  # reduction toward soft
+        eff = max(eff, self.soft_pl1_floor_w)  # never below floor
+        eff = min(eff, user_pl1_w)  # REDUCTION-ONLY: never exceed user even if floor>user
+        return int(eff)
+
+    def set_soft_pl1_w(self, value_w: int | float | None) -> None:
+        """Governor-driven reduction-only soft PL1 overlay under the user slider.
+        None clears the overlay and rewrites the user slider value. In-process; the
+        game-power governor is the only caller."""
+        user_watts = self._read_state_file()
+        if value_w is None:
+            self._soft_pl1_w = None
+        else:
+            self._soft_pl1_w = max(self.soft_pl1_floor_w, int(round(float(value_w))))
+        if user_watts is not None:
+            if self.apply_rapl:
+                self.apply_limit_to_rapl(user_watts)
+            if self.apply_msi_claw_ec:
+                self.schedule_limit_to_msi_claw_ec(user_watts)
+
+    @property
+    def soft_pl1_w(self) -> int | None:
+        return self._soft_pl1_w
+
+    def soft_pl1_status(self) -> dict[str, object]:
+        user = self._read_state_file()
+        return {
+            "user_pl1_w": user,
+            "soft_pl1_w": self._soft_pl1_w,
+            "effective_pl1_w": (self._effective_pl1_w(user) if user is not None else None),
+        }
 
     def reapply_if_power_source_changed(self, *, force: bool = False) -> int | None:
         current_source = self.current_power_source()
@@ -638,7 +693,8 @@ class TdpBackend:
             if long_term is None:
                 continue
             short_term = self._constraint_by_name(domain, "short_term", fallback_index=1)
-            pl1_uw = limits.pl1_uw
+            effective_pl1_w = self._effective_pl1_w(policy.pl1_w)
+            pl1_uw = effective_pl1_w * MICROWATTS_PER_WATT
             long_term.power_limit_file.write_text(str(pl1_uw))
             if short_term is not None:
                 pl2_uw = max(pl1_uw, self._limit_for_constraint(limits.pl2_uw, short_term))
@@ -665,7 +721,7 @@ class TdpBackend:
         watts = self._normalize_requested_watts(watts)
         policy = self._compute_current_policy(watts)
         limits = WattLimits(
-            pl1_w=min(policy.pl1_w, MSI_CLAW_EC_PL1_MAX_W),
+            pl1_w=min(self._effective_pl1_w(policy.pl1_w), MSI_CLAW_EC_PL1_MAX_W),
             pl2_w=max(
                 min(policy.pl1_w, MSI_CLAW_EC_PL1_MAX_W),
                 min(policy.pl2_w, self.short_limit_max_w),
@@ -1113,7 +1169,18 @@ def build_game_power_config(args: argparse.Namespace) -> GamePowerConfig:
         cpu_cap_enabled=args.game_power_cpu_cap == "on",
         cpu_cap_core_share_threshold=args.game_power_cpu_cap_core_share_threshold,
         target_appid=args.game_power_target_appid,
+        frame_feed_file=args.game_power_frame_feed_file,
+        frame_feed_stale_s=args.game_power_frame_feed_stale_s,
     )
+
+
+def persona_for_power_source(source: "PowerSource") -> GamePowerPersona:
+    """Default persona mapping (plan section 0): battery->battery; AC->ac-performance
+    (conservative: AC behaviour is unchanged until the user opts into quiet)."""
+
+    if source == PowerSource.BATTERY:
+        return GamePowerPersona.BATTERY
+    return GamePowerPersona.AC_PERFORMANCE
 
 
 def build_game_power_governor(
@@ -1126,31 +1193,73 @@ def build_game_power_governor(
     if config.mode == GamePowerMode.OFF and control_file is None:
         return None
     backend = backend or build_backend(args)
-    config_provider = (
-        (lambda base: game_power_control.effective_config_from_runtime_file(base, control_file))
-        if control_file is not None
+
+    def config_provider(base: GamePowerConfig) -> GamePowerConfig:
+        # Resolve the persona from the current power source each tick (it changes
+        # at runtime); a valid Decky/runtime persona override then wins.
+        base_with_persona = replace(
+            base, persona=persona_for_power_source(backend.current_power_source())
+        )
+        if control_file is None:
+            return base_with_persona
+        return game_power_control.effective_config_from_runtime_file(
+            base_with_persona, control_file
+        )
+
+    frame_feed_reader = (
+        FrameFeedReader(
+            args.game_power_frame_feed_file,
+            stale_s=args.game_power_frame_feed_stale_s,
+        )
+        if args.game_power_frame_feed_file
         else None
     )
+    gts = discover_gpu_gts(args.sysfs_root)
+    gpu_rp0_mhz, gpu_rpe_mhz = gpu_freq_bounds(gts)
+    gpu_actuator = GpuFreqActuator(gts) if gts else None
     observer = SystemGamePowerObserver(
         sysfs_root=args.sysfs_root,
         proc_root="/proc",
         poll_s=config.poll_s,
         frame_target_provider=_build_frame_target_provider(control_file),
+        frame_feed_reader=frame_feed_reader,
+        gpu_rp0_mhz=gpu_rp0_mhz,
+        gpu_rpe_mhz=gpu_rpe_mhz,
+        colorize_interval_s=config.colorize_interval_s,
+        loading_frame_stall_s=config.loading_frame_stall_s,
     )
-    actuator = CpuPolicyActuator(discover_cpu_policies(args.sysfs_root))
+    policies = discover_cpu_policies(args.sysfs_root)
+    actuator = CpuPolicyActuator(policies)
     hint_store = (
         GamePowerHintStore(args.game_power_hint_cache)
         if args.game_power_hint_cache
         else None
     )
+    # Verdict ledger is the authoritative unlock for the V9 gated write lanes.
+    # Built unconditionally (read-only, fail-closed) so a runtime switch into
+    # target-balance via the control file still has it; the controller only
+    # consults it in the target-balance dispatch, so gpu-priority is unchanged.
+    verdict_ledger = GamePowerVerdictLedger(
+        DEFAULT_VERDICT_LEDGER_FILE,
+        fallback_path=DEFAULT_VERDICT_LEDGER_RUN_FALLBACK,
+    )
+    verdict_env = GamePowerVerdictEnv(
+        topology_fingerprint=topology_fingerprint(policies),
+        kernel=read_kernel_release("/proc"),
+    )
     return GamePowerGovernor(
         config=config,
         observer=observer,
         actuator=actuator,
+        gpu_actuator=gpu_actuator,
+        soft_pl1_actuator=backend,
+        frame_feed_reader=frame_feed_reader,
         config_provider=config_provider,
         hint_store=hint_store,
         hint_context_provider=_build_game_power_hint_context_provider(args, backend),
         runtime_snapshot_path=args.game_power_runtime_snapshot_file,
+        verdict_ledger=verdict_ledger,
+        verdict_env=verdict_env,
     )
 
 
@@ -1365,6 +1474,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--game-power-runtime-snapshot-file",
         default=str(DEFAULT_RUNTIME_SNAPSHOT_FILE),
     )
+    parser.add_argument("--game-power-frame-feed-file", default=None)
+    parser.add_argument("--game-power-frame-feed-stale-s", type=float, default=5.0)
     parser.add_argument("--game-power-hint-cache", default=DEFAULT_GAME_POWER_HINT_CACHE)
     parser.add_argument("--user", default="deck")
     parser.add_argument("--wait-timeout-s", type=int, default=600)

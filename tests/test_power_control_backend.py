@@ -858,6 +858,183 @@ def test_prepare_mangohud_sensors_makes_package_and_uncore_rapl_energy_readable(
     assert gpu_energy_file.read_text() == "456789"
 
 
+def _maxq_battery_backend(state_file, sysfs_root, **kwargs):
+    return TdpBackend(
+        state_file=state_file,
+        sysfs_root=sysfs_root,
+        tdp_policy_mode=TdpPolicyMode.BATTERY_MAXQ,
+        power_source_override=PowerSource.BATTERY,
+        **kwargs,
+    )
+
+
+def test_soft_pl1_no_overlay_writes_user_long_term(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
+    state_file = tmp_path / "state" / "tdp_w"
+
+    backend = _maxq_battery_backend(state_file, sysfs_root)
+    backend.write_limit_w(17)
+
+    assert backend.soft_pl1_w is None
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "17000000"
+
+
+def test_soft_pl1_reduces_long_term_but_keeps_pl2_and_tau(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(
+        sysfs_root,
+        pl1=30,
+        pl2=37,
+        pl1_tau_us=1_000_000,
+        pl2_tau_us=28_000_000,
+    )
+    state_file = tmp_path / "state" / "tdp_w"
+
+    backend = _maxq_battery_backend(state_file, sysfs_root)
+    backend.write_limit_w(17)
+
+    user_pl2_uw = (domain / "constraint_1_power_limit_uw").read_text()
+    user_tau_us = (domain / "constraint_1_time_window_us").read_text()
+
+    backend.set_soft_pl1_w(11)
+
+    # Effective PL1 dropped to the soft value (11 <= user 17).
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "11000000"
+    # PL2 and Tau stay derived from the user slider (bursts stay full).
+    assert (domain / "constraint_1_power_limit_uw").read_text() == user_pl2_uw
+    assert (domain / "constraint_1_time_window_us").read_text() == user_tau_us
+    assert backend.soft_pl1_w == 11
+
+
+def test_soft_pl1_floors_effective_at_floor(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
+    state_file = tmp_path / "state" / "tdp_w"
+
+    backend = _maxq_battery_backend(state_file, sysfs_root, soft_pl1_floor_w=8)
+    backend.write_limit_w(17)
+    backend.set_soft_pl1_w(3)
+
+    # 3 is below the floor of 8, so effective is floored to 8, not 3.
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "8000000"
+
+
+def test_soft_pl1_is_reduction_only_never_exceeds_user(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
+    state_file = tmp_path / "state" / "tdp_w"
+
+    # Low floor lets a soft value between floor and user actually apply.
+    low_floor = _maxq_battery_backend(
+        state_file, sysfs_root, soft_pl1_floor_w=1
+    )
+    low_floor.write_limit_w(8)
+    low_floor.set_soft_pl1_w(6)
+    assert low_floor._effective_pl1_w(8) == 6
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "6000000"
+
+    # user < floor: reduction-only clamp must never push PL1 up to the floor.
+    sysfs_root2 = tmp_path / "sys2"
+    domain2 = make_rapl_domain(sysfs_root2, pl1=30, pl2=37)
+    state_file2 = tmp_path / "state2" / "tdp_w"
+    low_user = _maxq_battery_backend(
+        state_file2, sysfs_root2, min_w=5, soft_pl1_floor_w=8
+    )
+    low_user.write_limit_w(5)
+    low_user.set_soft_pl1_w(6)
+    # max(min(5,8),8)=8, then min(8,5)=5 -> effective clamps down to user, never 8.
+    assert low_user._effective_pl1_w(5) == 5
+    assert (domain2 / "constraint_0_power_limit_uw").read_text() == "5000000"
+
+
+def test_soft_pl1_none_clears_overlay(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
+    state_file = tmp_path / "state" / "tdp_w"
+
+    backend = _maxq_battery_backend(state_file, sysfs_root)
+    backend.write_limit_w(17)
+    backend.set_soft_pl1_w(11)
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "11000000"
+
+    backend.set_soft_pl1_w(None)
+    assert backend.soft_pl1_w is None
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "17000000"
+
+
+def test_write_limit_clears_soft_pl1_overlay(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
+    state_file = tmp_path / "state" / "tdp_w"
+
+    backend = _maxq_battery_backend(state_file, sysfs_root)
+    backend.write_limit_w(17)
+    backend.set_soft_pl1_w(11)
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "11000000"
+
+    backend.write_limit_w(15)
+    assert backend.soft_pl1_w is None
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "15000000"
+
+
+def test_restore_state_clears_soft_pl1_overlay(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    domain = make_rapl_domain(sysfs_root, pl1=30, pl2=37)
+    state_file = tmp_path / "state" / "tdp_w"
+
+    backend = _maxq_battery_backend(state_file, sysfs_root)
+    backend.write_limit_w(17)
+    backend.set_soft_pl1_w(11)
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "11000000"
+
+    assert backend.restore_state_to_rapl() == 17
+    assert backend.soft_pl1_w is None
+    assert (domain / "constraint_0_power_limit_uw").read_text() == "17000000"
+
+
+def test_soft_pl1_ec_mirror_follows_effective_pl1(tmp_path):
+    dmi_root = make_dmi_root(tmp_path)
+    debugfs_root, io_path = make_ec_io(tmp_path)
+    state_file = tmp_path / "state" / "tdp_w"
+
+    backend = TdpBackend(
+        state_file=state_file,
+        apply_rapl=False,
+        apply_msi_claw_ec=True,
+        dmi_root=dmi_root,
+        debugfs_root=debugfs_root,
+    )
+
+    backend.write_limit_w(30)
+    ec = io_path.read_bytes()
+    assert ec[0x50] == 30
+    user_pl2 = ec[0x51]
+
+    backend.set_soft_pl1_w(20)
+    ec = io_path.read_bytes()
+    # EC PL1 mirror follows the effective (reduced) PL1.
+    assert ec[0x50] == 20
+    # EC PL2 keeps deriving from the user slider policy.
+    assert ec[0x51] == user_pl2
+
+
+def test_soft_pl1_status_reports_user_soft_and_effective(tmp_path):
+    sysfs_root = tmp_path / "sys"
+    make_rapl_domain(sysfs_root, pl1=30, pl2=37)
+    state_file = tmp_path / "state" / "tdp_w"
+
+    backend = _maxq_battery_backend(state_file, sysfs_root)
+    backend.write_limit_w(17)
+    backend.set_soft_pl1_w(11)
+
+    assert backend.soft_pl1_status() == {
+        "user_pl1_w": 17,
+        "soft_pl1_w": 11,
+        "effective_pl1_w": 11,
+    }
+
+
 def test_prepare_mangohud_sensors_keeps_unrelated_rapl_domains_private(tmp_path):
     sysfs_root = tmp_path / "sys"
     core_domain = sysfs_root / "class" / "powercap" / "intel-rapl:0:0"

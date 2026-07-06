@@ -118,6 +118,28 @@ def test_restore_manifest_manages_steamos_manager_remote_without_bridge():
     )
 
 
+def test_mangoapp_dropin_enables_game_power_frame_feed():
+    dropin = (
+        ROOT
+        / "data/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
+    ).read_text()
+
+    assert "Environment=MANGOAPP_FRAME_FEED=1" in dropin
+    # The custom mangoapp launch must survive so the frame feed exporter runs.
+    assert "ExecStart=/opt/steamos-intel-handheld/bin/mangoapp" in dropin
+    # The restore fragment (not the main manifest) still owns this drop-in, so the
+    # frame-feed env is covered by restore-etc without leaking into the main list.
+    assert (
+        "/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
+        not in (ROOT / "data/restore/manifest.toml").read_text()
+    )
+    fragment = (ROOT / "data/restore/manifest.d/10-mangoapp.toml").read_text()
+    assert (
+        "/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
+        in fragment
+    )
+
+
 def test_mangoapp_restore_fragment_owns_only_mangoapp_dropin():
     fragment = (ROOT / "data/restore/manifest.d/10-mangoapp.toml").read_text()
 
@@ -603,6 +625,168 @@ def test_game_power_profile_wrapper_records_affinity_restore_snapshot():
     assert 'snapshot_affinity_restore_state "$run_dir/restore-affinity.json"' in script
     assert "--restore-affinity-json" in script
     assert '"$run_dir/restore-affinity.json"' in script
+
+
+def test_c16_profile_wrapper_supports_uclampmin_and_ladder5_policies():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    # target-balance-uclampmin: run-scoped foreground cpu.uclamp.min floor via
+    # the shared guarded writer CLI, with apply/restore evidence artifacts.
+    assert "target-balance-uclampmin)" in script
+    assert "apply_foreground_uclamp_variant()" in script
+    assert "restore_foreground_uclamp_variant()" in script
+    assert "apply-foreground-uclamp" in script
+    assert "restore-foreground-uclamp" in script
+    assert "foreground-uclamp-writes.json" in script
+    assert "foreground-uclamp-restore.json" in script
+    assert 'foreground_uclamp_variant="foreground-uclamp-min-25"' in script
+    assert 'restore_foreground_uclamp_variant "$run_dir" || restored=false' in script
+
+    # target-balance-ladder5: run-scoped CLI flag, never set by the service.
+    assert "target-balance-ladder5)" in script
+    assert "--allow-ladder-step-5" in script
+
+
+def test_c18_exit_trap_restores_gpu_floor_and_scx_lavd():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    # The EXIT trap must idempotently restore the GPU floor from the active
+    # run's state file and stop scx_lavd if it was started.
+    assert "GPU_FLOOR_ACTIVE_RUN_DIR" in script
+    assert "SCX_LAVD_ACTIVE_RUN_DIR" in script
+    restore_body = script.split("restore_state() {", 1)[1].split("\n}", 1)[0]
+    assert "restore_gpu_floor_variant" in restore_body
+    assert "stop_scx_lavd_variant" in restore_body
+
+
+def test_c19_scx_stop_has_bounded_wait_and_sigkill_escalation():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    stop_body = script.split("stop_scx_lavd_variant() {", 1)[1].split("\n}", 1)[0]
+    # No unguarded blocking wait on the scx_lavd pid.
+    assert 'wait "$SCX_LAVD_PID" 2>/dev/null || true\n' not in stop_body + "\n"
+    assert "kill -KILL" in stop_body
+    assert "stop_escalated" in stop_body
+    # Escalation invalidates the run's sched-ext evidence.
+    assert 'payload.get("stop_escalated") is not True' in stop_body
+
+
+def test_c20_gpu_floor_missing_gt_records_skip_not_abort():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    apply_body = script.split("apply_gpu_floor_variant() {", 1)[1].split(
+        "\nrestore_gpu_floor_variant", 1
+    )[0]
+    assert "missing-gt-freq-dirs" in apply_body
+    assert '"skipped": True' in apply_body or '"skipped": true' in apply_body
+    restore_body = script.split("restore_gpu_floor_variant() {", 1)[1].split(
+        "\n# --- V9 guarded sched_ext lane", 1
+    )[0]
+    assert 'payload.get("skipped")' in restore_body
+
+
+def _extract_compare_gpu_freq_snapshots():
+    """Extract the D4 comparator function + its tolerance default from the
+    profiler so the tests exercise the real shell/python behavior."""
+
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+    tolerance_line = next(
+        line
+        for line in script.splitlines()
+        if line.startswith("GPU_MIN_FREQ_DRIFT_TOLERANCE_MHZ=")
+    )
+    body = "compare_gpu_freq_snapshots() {" + script.split(
+        "compare_gpu_freq_snapshots() {", 1
+    )[1].split("\n}", 1)[0] + "\n}"
+    return tolerance_line + "\n" + body
+
+
+def _run_gpu_freq_compare(tmp_path, before, after):
+    import subprocess
+
+    (tmp_path / "before").write_text(before)
+    (tmp_path / "after").write_text(after)
+    snippet = _extract_compare_gpu_freq_snapshots()
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'{snippet}\ncompare_gpu_freq_snapshots "$1" "$2" "$3"',
+            "compare",
+            str(tmp_path / "before"),
+            str(tmp_path / "after"),
+            str(tmp_path / "report"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode, (tmp_path / "report").read_text()
+
+
+def test_d4_gpu_freq_diff_tolerates_slpc_min_drift_on_untouched_gt(tmp_path):
+    # Autonomous SLPC drift: gt1 min_freq oscillates 500<->550 without any
+    # write from us. That must NOT invalidate the run (it aborted two device
+    # sessions as a false positive).
+    code, report = _run_gpu_freq_compare(
+        tmp_path,
+        "card0/gt0\t1950\t1950\ncard0/gt1\t500\t1950\n",
+        "card0/gt0\t1950\t1950\ncard0/gt1\t550\t1950\n",
+    )
+    assert code == 0
+    assert "TOLERATED card0/gt1" in report
+    assert "autonomous SLPC drift" in report
+
+
+def test_d4_gpu_freq_diff_hard_fails_on_max_freq_mismatch(tmp_path):
+    # max_freq is never SLPC-driven: any delta is our residue -> hard fail.
+    code, report = _run_gpu_freq_compare(
+        tmp_path,
+        "card0/gt0\t1950\t1950\ncard0/gt1\t500\t1950\n",
+        "card0/gt0\t1950\t1716\ncard0/gt1\t500\t1950\n",
+    )
+    assert code != 0
+    assert "HARD-FAIL card0/gt0" in report
+    assert "max_freq" in report
+
+
+def test_d4_gpu_freq_diff_hard_fails_on_min_drift_above_tolerance(tmp_path):
+    # A min_freq delta beyond the 100 MHz SLPC band (e.g. our unrestored 800
+    # floor vs the 1950 latch) is residue, not drift.
+    code, report = _run_gpu_freq_compare(
+        tmp_path,
+        "card0/gt0\t1950\t1950\n",
+        "card0/gt0\t800\t1950\n",
+    )
+    assert code != 0
+    assert "HARD-FAIL card0/gt0" in report
+    assert "min_freq" in report
+
+
+def test_d4_probe_and_ab_gates_use_tolerant_gpu_freq_compare():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    # Both the A/B restore gate and the probe restore path go through the
+    # tolerant comparator instead of a strict byte diff.
+    assert script.count("compare_gpu_freq_snapshots \\") >= 2
+    assert 'diff -u "$run_dir/gpu-freq.before"' not in script
+    assert 'diff -u "$probe_dir/gpu-freq.before"' not in script
+    # RAPL PL1 keeps the strict diff (no autonomous drift there).
+    assert 'diff -u "$run_dir/rapl-pl1.before"' in script
+
+
+def test_d5_gpu_cap_sweep_probe_lowers_min_alongside_max():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    sweep_body = script.split("run_probe_gpu_cap_sweep() {", 1)[1].split("\n}", 1)[0]
+    # D5: the sweep must not be confounded by the gt0 min latch -- when the
+    # swept cap sits below a GT's current min, min is lowered to min(cap, rpe)
+    # clamped to >= rpn (same rule as the daemon actuator, D1).
+    assert "min_freq" in sweep_body
+    assert "rpe_freq" in sweep_body
+    assert "rpn_freq" in sweep_body
+    assert "cur_min > step" in sweep_body
+    assert "min(step, rpe)" in sweep_body
+    assert "max(new_min, rpn)" in sweep_body
 
 
 def test_profile_wrapper_uses_paired_baseline_order_for_controlled_ab():

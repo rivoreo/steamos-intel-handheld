@@ -10,11 +10,39 @@ import math
 import re
 import subprocess
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from pathlib import Path
 from statistics import mean, median
 from typing import Any
+
+# Background-shaping guarded writers were relocated to game_power_cgroup_writers
+# so the daemon and profiler use literally the same apply/restore code (V9 S4).
+# Re-exported here to preserve the profiler's public import surface.
+from .game_power_cgroup_writers import (  # noqa: F401
+    BACKGROUND_SHAPING_WRITE_VARIANTS,
+    FOREGROUND_UCLAMP_MIN_FLOOR,
+    apply_background_shaping_writes,
+    apply_foreground_uclamp_min_writes,
+    restore_background_shaping_writes,
+    restore_foreground_uclamp_min_writes,
+)
+
+# Role normalization + background classification are single-sourced in the
+# coloring module so the daemon and profiler agree on role keys (V9 S3).
+from .game_power_coloring import (  # noqa: F401
+    build_color_ledger_from_artifacts,
+    iter_jsonl_rows,
+)
+from .game_power_coloring import (
+    classify_background_cgroup as _classify_background_cgroup,
+)
+from .game_power_coloring import (
+    normalize_role_part as _normalize_role_part,
+)
+from .game_power_coloring import (
+    thread_cgroup_role as _thread_cgroup_role,
+)
 
 
 class CaptureMode(str, Enum):
@@ -35,10 +63,6 @@ BACKGROUND_SHAPING_MIN_CPU_TIME_S = 1.0
 CGROUP_CPU_CONTROLLER_RESTORE_FILES = frozenset(
     {"cpu.uclamp.max", "cpu.uclamp.min", "cpu.weight", "cpu.max"}
 )
-BACKGROUND_SHAPING_WRITE_VARIANTS = {
-    "cpu-weight-80": ("cpu.weight", "80"),
-    "uclamp-max-85": ("cpu.uclamp.max", "85.00"),
-}
 FOREGROUND_AFFINITY_WRITE_VARIANTS = {"foreground-role-compact"}
 AB_EVIDENCE_INCOMPLETE_PREFIX = "A/B evidence incomplete:"
 AB_EXPLORATORY_SUFFIX = "exploratory only; cannot support a BETTER claim"
@@ -270,6 +294,10 @@ class RunSummary:
     classification_unknown_ratio: float | None = None
     pressure_supported_ratio: float | None = None
     pressure_unsupported_ratio: float | None = None
+    # V9 target-balance per-phase metrics (design section 9). ``None`` for
+    # gpu-priority runs and any run whose JSONL carries no ``phase`` rows, so
+    # existing summaries stay byte-identical.
+    phase_metrics: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.capture_mode, CaptureMode):
@@ -444,6 +472,13 @@ class PolicyComparison:
     thermal_pair_start_delta_max_c: float | None = None
     thermal_pair_end_delta_max_c: float | None = None
     thermal_pair_mismatch_count: int = 0
+    # D7: aggregate END-temperature median delta is REPORTED context, never a
+    # rejection reason. A power-saving candidate necessarily ends cooler, so
+    # gating on end temps would make a BETTER power verdict structurally
+    # unreachable. Start-temperature parity (the pre-run pairing confound
+    # control) is the only thermal gate; its median delta is reported too.
+    thermal_start_delta_c: float | None = None
+    thermal_end_delta_c: float | None = None
     cooldown_run_gap_s_max: float | None = None
     cooldown_interval_reuse_count: int = 0
     claim_scope: dict[str, object] | None = None
@@ -470,14 +505,37 @@ def parse_mangohud_fps_csv(
     fps_values: list[float] = []
     frametime_values: list[float] = []
     with Path(path).open(newline="") as handle:
-        rows = list(csv.DictReader(handle))
-        for row in rows:
-            fps = _float(row.get("fps"))
-            frametime = _float(row.get("frametime"))
-            if fps is not None:
-                fps_values.append(fps)
-            if frametime is not None:
-                frametime_values.append(frametime)
+        raw_rows = list(csv.reader(handle))
+    # mangoapp/MangoHud per-frame logs prepend a two-line system-info banner
+    # ("os,cpu,gpu,..." then its values) before the real "fps,frametime,..."
+    # header. Skip any preamble by locating the header row whose first cell is
+    # "fps" (case-insensitive). If no such row exists (e.g. a summary-style CSV
+    # was passed here) fall back to treating the first row as the header so the
+    # summary fallback below still applies.
+    header_index = next(
+        (
+            index
+            for index, cells in enumerate(raw_rows)
+            if cells and cells[0].strip().lower() == "fps"
+        ),
+        0,
+    )
+    if raw_rows:
+        header = raw_rows[header_index]
+        rows = [
+            dict(zip(header, cells, strict=False))
+            for cells in raw_rows[header_index + 1 :]
+            if cells
+        ]
+    else:
+        rows = []
+    for row in rows:
+        fps = _float(row.get("fps"))
+        frametime = _float(row.get("frametime"))
+        if fps is not None:
+            fps_values.append(fps)
+        if frametime is not None:
+            frametime_values.append(frametime)
     if not fps_values and not frametime_values and rows:
         summary = _parse_mangohud_summary_row(rows[0], capture_mode=capture_mode)
         if summary.avg_fps is not None or summary.one_percent_low_fps is not None:
@@ -613,6 +671,95 @@ def parse_game_power_jsonl(path: str | Path) -> GamePowerLogSummary:
             runtime_counts.foreground_pressure_signals,
         ),
     )
+
+
+def summarize_phase_metrics(
+    path: str | Path,
+    *,
+    poll_s: float | None = None,
+) -> dict[str, object] | None:
+    """Summarize per-phase metrics from a target-balance decision JSONL.
+
+    Emits seconds-per-phase, phase sample counts, loading episode count/total
+    duration, and a ladder-step histogram (design section 9). Returns ``None``
+    when the JSONL carries no ``phase`` rows (gpu-priority runs), so gpu-priority
+    ``summary.json`` stays byte-identical.
+
+    Per-phase p99 frame time is intentionally omitted: governor rows carry only
+    rolling-window frame aggregates (``frame_p95_ms``) whose window spans phase
+    boundaries, and the raw per-frame samples never reach this JSONL, so a p99
+    cannot be cleanly attributed to a phase. Faking that alignment would be
+    dishonest, so ``per_phase_p99_frame_ms`` is reported ``None`` with a note.
+    """
+
+    rows = _read_jsonl_rows(path)
+    phase_rows = [row for row in rows if _optional_str(row.get("phase")) is not None]
+    if not phase_rows:
+        return None
+
+    elapsed: list[float | None] = [_float(row.get("elapsed_s")) for row in phase_rows]
+    deltas: list[float] = []
+    for index in range(len(phase_rows) - 1):
+        left = elapsed[index]
+        right = elapsed[index + 1]
+        if left is not None and right is not None and right > left:
+            deltas.append(right - left)
+    positive_median = _median([value for value in deltas]) if deltas else None
+    fallback = poll_s if (poll_s is not None and poll_s > 0) else (positive_median or 0.0)
+
+    durations: list[float] = []
+    for index in range(len(phase_rows)):
+        left = elapsed[index]
+        if index + 1 < len(phase_rows):
+            right = elapsed[index + 1]
+            if left is not None and right is not None and right > left:
+                durations.append(right - left)
+            else:
+                durations.append(fallback)
+        else:
+            durations.append(fallback)
+
+    seconds_per_phase: dict[str, float] = {}
+    phase_sample_counts: dict[str, int] = {}
+    ladder_histogram: dict[str, int] = {}
+    loading_episode_count = 0
+    loading_total_s = 0.0
+    previous_loading = False
+    for row, duration in zip(phase_rows, durations, strict=True):
+        phase = str(row.get("phase"))
+        seconds_per_phase[phase] = seconds_per_phase.get(phase, 0.0) + duration
+        phase_sample_counts[phase] = phase_sample_counts.get(phase, 0) + 1
+        ladder_step = row.get("ladder_step")
+        if isinstance(ladder_step, int):
+            key = str(ladder_step)
+            ladder_histogram[key] = ladder_histogram.get(key, 0) + 1
+        is_loading = phase == "loading"
+        if is_loading:
+            if not previous_loading:
+                loading_episode_count += 1
+            loading_total_s += duration
+        previous_loading = is_loading
+
+    return {
+        "phase_rows": len(phase_rows),
+        "seconds_per_phase": {
+            key: round(value, 3) for key, value in sorted(seconds_per_phase.items())
+        },
+        "phase_sample_counts": dict(sorted(phase_sample_counts.items())),
+        "loading_episode_count": loading_episode_count,
+        "loading_total_s": round(loading_total_s, 3),
+        "ladder_step_histogram": {
+            key: ladder_histogram[key]
+            for key in sorted(ladder_histogram, key=lambda item: int(item))
+        },
+        "per_phase_p99_frame_ms": None,
+        "per_phase_p99_frame_ms_note": (
+            "governor rows carry rolling-window frame aggregates that span phase "
+            "boundaries and no per-frame samples reach this JSONL, so per-phase "
+            "p99 is not cleanly alignable and is intentionally omitted "
+            "(design section 9)"
+        ),
+    }
 
 
 def summarize_thread_affinity_jsonl(
@@ -1096,6 +1243,7 @@ def merge_run_summary(
     warmup_s: float | None = None,
     poll_s: float | None = None,
     ab_evidence: AbEvidence | None = None,
+    phase_metrics: dict[str, object] | None = None,
     restored: bool,
 ) -> RunSummary:
     pressure = pressure or {}
@@ -1196,6 +1344,7 @@ def merge_run_summary(
         ),
         pressure_supported_ratio=power.pressure_supported_ratio if power else None,
         pressure_unsupported_ratio=power.pressure_unsupported_ratio if power else None,
+        phase_metrics=phase_metrics,
         restored=restored,
         ab_order_strategy=ab_evidence.order_strategy,
         ab_run_order=ab_evidence.run_order,
@@ -1736,6 +1885,8 @@ def _ab_pairwise_gate(
         "thermal_pair_start_delta_max_c": None,
         "thermal_pair_end_delta_max_c": None,
         "thermal_pair_mismatch_count": 0,
+        "thermal_start_delta_c": None,
+        "thermal_end_delta_c": None,
         "cooldown_run_gap_s_max": None,
         "cooldown_interval_reuse_count": 0,
     }
@@ -1793,11 +1944,17 @@ def _ab_pairwise_gate(
     if baseline.power_source_state != candidate.power_source_state:
         return "power source state differs between baseline and candidate", diagnostics
     start_delta = _abs_delta(baseline.thermal_start_c_median, candidate.thermal_start_c_median)
+    if start_delta is None:
+        return "aggregate start thermal median is missing", diagnostics
+    diagnostics["thermal_start_delta_c"] = round(start_delta, 3)
+    # D7: END temps are reported, not gated. A -7 W candidate ends ~7 C cooler;
+    # gating on it would reject every genuine power win. Compute the end median
+    # delta for claim_scope but never reject on it.
     end_delta = _abs_delta(baseline.thermal_end_c_median, candidate.thermal_end_c_median)
-    if start_delta is None or end_delta is None:
-        return "aggregate thermal medians are missing", diagnostics
-    if start_delta > AB_THERMAL_DELTA_MAX_C or end_delta > AB_THERMAL_DELTA_MAX_C:
-        return "aggregate thermal medians differ too much", diagnostics
+    if end_delta is not None:
+        diagnostics["thermal_end_delta_c"] = round(end_delta, 3)
+    if start_delta > AB_THERMAL_DELTA_MAX_C:
+        return "aggregate start thermal medians differ too much", diagnostics
 
     baseline_thermal = baseline.thermal_pair_readings_by_id or {}
     candidate_thermal = candidate.thermal_pair_readings_by_id or {}
@@ -1816,9 +1973,13 @@ def _ab_pairwise_gate(
         after_thermal = (baseline_thermal.get(pair_id) or {}).get("baseline-after")
         if not before_thermal or not candidate_thermal_item or not after_thermal:
             return "pair-scoped thermal readings are incomplete", diagnostics
-        for key, delta_list in (
-            ("thermal_start_c", start_deltas),
-            ("thermal_end_c", end_deltas),
+        # D7: START-temperature parity is the pairing confound control and is
+        # the only thermal PARITY gate; a start mismatch still rejects. END
+        # deltas are collected for reporting (claim_scope) but never counted as
+        # a mismatch -- a power-saving candidate is expected to end cooler.
+        for key, delta_list, gated in (
+            ("thermal_start_c", start_deltas, True),
+            ("thermal_end_c", end_deltas, False),
         ):
             candidate_value = candidate_thermal_item.get(key)
             before_delta = _abs_delta(before_thermal.get(key), candidate_value)
@@ -1826,7 +1987,10 @@ def _ab_pairwise_gate(
             if before_delta is None or after_delta is None:
                 return "pair-scoped thermal readings are incomplete", diagnostics
             delta_list.extend([before_delta, after_delta])
-            if before_delta > AB_THERMAL_DELTA_MAX_C or after_delta > AB_THERMAL_DELTA_MAX_C:
+            if gated and (
+                before_delta > AB_THERMAL_DELTA_MAX_C
+                or after_delta > AB_THERMAL_DELTA_MAX_C
+            ):
                 thermal_mismatches += 1
 
         before_run = (baseline_runs.get(pair_id) or {}).get("baseline-before")
@@ -1894,7 +2058,7 @@ def _ab_pairwise_gate(
     )
     diagnostics["cooldown_interval_reuse_count"] = reused_cooldowns
     if thermal_mismatches:
-        return "pair-scoped thermal readings differ too much", diagnostics
+        return "pair-scoped start thermal readings differ too much", diagnostics
     if reused_cooldowns:
         return "pair-scoped cooldown interval was reused", diagnostics
     return None, diagnostics
@@ -2151,6 +2315,10 @@ def _claim_scope(
             "thermal_pair_start_delta_max_c"
         ),
         "thermal_pair_end_delta_max_c": diagnostics.get("thermal_pair_end_delta_max_c"),
+        # D7: START delta is the gated parity metric; END delta is reported
+        # context only (a BETTER power candidate is expected to end cooler).
+        "thermal_start_delta_c": diagnostics.get("thermal_start_delta_c"),
+        "thermal_end_delta_c": diagnostics.get("thermal_end_delta_c"),
         "cooldown_rule": baseline.cooldown_rule,
         "cooldown_elapsed_s_median": candidate.cooldown_elapsed_s_median,
         "evidence_boundary": BETTER_CLAIM_BOUNDARY,
@@ -2361,6 +2529,18 @@ def build_parser() -> argparse.ArgumentParser:
     restore_foreground.add_argument("--writes-json", required=True)
     restore_foreground.add_argument("--output", required=True)
 
+    apply_fg_uclamp = subcommands.add_parser("apply-foreground-uclamp")
+    apply_fg_uclamp.add_argument("--restore-affinity-json", required=True)
+    apply_fg_uclamp.add_argument("--output", required=True)
+    apply_fg_uclamp.add_argument("--appid", required=True)
+    apply_fg_uclamp.add_argument(
+        "--floor-value", default=FOREGROUND_UCLAMP_MIN_FLOOR
+    )
+
+    restore_fg_uclamp = subcommands.add_parser("restore-foreground-uclamp")
+    restore_fg_uclamp.add_argument("--writes-json", required=True)
+    restore_fg_uclamp.add_argument("--output", required=True)
+
     resolve_foreground = subcommands.add_parser("resolve-foreground-affinity")
     resolve_foreground.add_argument("--plan-json", required=True)
 
@@ -2373,6 +2553,10 @@ def build_parser() -> argparse.ArgumentParser:
     validate_runtime.add_argument("--require-cpu-cap-action", action="store_true")
     validate_runtime.add_argument("--require-frame-performance", action="store_true")
     validate_runtime.add_argument("--require-fps-target-satisfied", action="store_true")
+    validate_runtime.add_argument(
+        "--require-target-balance-contract", action="store_true"
+    )
+    validate_runtime.add_argument("--require-v10-contract", action="store_true")
     validate_runtime.add_argument("--expect-fps-target", type=float)
     validate_runtime.add_argument("--expect-fps-target-source")
     validate_runtime.add_argument("--expect-fps-target-confidence")
@@ -2381,6 +2565,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     replay_actions = subcommands.add_parser("replay-action-equivalence")
     replay_actions.add_argument("--output")
+
+    export_verdicts_parser = subcommands.add_parser("export-verdicts")
+    export_verdicts_parser.add_argument("--aggregate", action="append")
+    export_verdicts_parser.add_argument("--root", action="append")
+    export_verdicts_parser.add_argument("--baseline-policy", default="off")
+    export_verdicts_parser.add_argument("--candidate-policy", action="append")
+    export_verdicts_parser.add_argument("--appid")
+    export_verdicts_parser.add_argument("--tdp-w", type=int)
+    export_verdicts_parser.add_argument("--fps-target", type=float)
+    export_verdicts_parser.add_argument(
+        "--capture-mode",
+        choices=[mode.value for mode in CaptureMode],
+        default=CaptureMode.CONTROLLED.value,
+    )
+    export_verdicts_parser.add_argument("--min-runs", type=int, default=3)
+    export_verdicts_parser.add_argument("--cpu-topology-json")
+    export_verdicts_parser.add_argument("--topology-fingerprint")
+    export_verdicts_parser.add_argument("--kernel", required=True)
+    export_verdicts_parser.add_argument("--policy-version")
+    export_verdicts_parser.add_argument("--out")
     return parser
 
 
@@ -2388,12 +2592,46 @@ def run_summarize(args: argparse.Namespace) -> Path:
     capture_mode = CaptureMode(args.capture_mode)
     if args.mangohud_summary_csv:
         fps = parse_mangohud_summary_csv(args.mangohud_summary_csv, capture_mode=capture_mode)
+        # The mangoapp summary CSV carries lows/97th but no p95/p99 frametime.
+        # When the raw per-frame CSV is also present, backfill p95/p99 (and any
+        # missing avg frametime) from it while keeping the summary's lows as-is.
+        if args.mangohud_csv and (
+            fps.p95_frametime_ms is None or fps.p99_frametime_ms is None
+        ):
+            try:
+                raw = parse_mangohud_fps_csv(args.mangohud_csv, capture_mode=capture_mode)
+            except (OSError, ValueError):
+                raw = None
+            if raw is not None:
+                fps = replace(
+                    fps,
+                    p95_frametime_ms=(
+                        fps.p95_frametime_ms
+                        if fps.p95_frametime_ms is not None
+                        else raw.p95_frametime_ms
+                    ),
+                    p99_frametime_ms=(
+                        fps.p99_frametime_ms
+                        if fps.p99_frametime_ms is not None
+                        else raw.p99_frametime_ms
+                    ),
+                    avg_frametime_ms=(
+                        fps.avg_frametime_ms
+                        if fps.avg_frametime_ms is not None
+                        else raw.avg_frametime_ms
+                    ),
+                )
     elif args.mangohud_csv:
         fps = parse_mangohud_fps_csv(args.mangohud_csv, capture_mode=capture_mode)
     else:
         raise SystemExit("summarize requires --mangohud-csv or --mangohud-summary-csv")
 
     power = parse_game_power_jsonl(args.game_power_jsonl) if args.game_power_jsonl else None
+    phase_metrics = (
+        summarize_phase_metrics(args.game_power_jsonl, poll_s=args.poll_s)
+        if args.game_power_jsonl
+        else None
+    )
     pressure = summarize_pressure_jsonl(args.pressure_jsonl) if args.pressure_jsonl else None
     thread_affinity = (
         summarize_thread_affinity_jsonl(args.thread_affinity_jsonl)
@@ -2479,6 +2717,9 @@ def run_summarize(args: argparse.Namespace) -> Path:
         "affinity_advice_json": bool(cpu_topology and thread_affinity),
         "process_cgroups_jsonl": bool(args.process_cgroups_jsonl),
         "background_shaping_json": bool(process_cgroups),
+        "color_ledger_json": bool(
+            args.thread_schedstat_jsonl or args.process_cgroups_jsonl
+        ),
         "restore_affinity_json": bool(args.restore_affinity_json),
         "foreground_affinity_writes_json": bool(args.foreground_affinity_writes_json),
         "foreground_affinity_restore_json": bool(args.foreground_affinity_restore_json),
@@ -2533,6 +2774,7 @@ def run_summarize(args: argparse.Namespace) -> Path:
         warmup_s=args.warmup_s,
         poll_s=args.poll_s,
         ab_evidence=ab_evidence,
+        phase_metrics=phase_metrics,
         restored=args.restored == "true",
     )
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -2563,6 +2805,25 @@ def run_summarize(args: argparse.Namespace) -> Path:
         )
         (output / "background-shaping.json").write_text(
             json.dumps(_json_ready(background), indent=2, sort_keys=True) + "\n"
+        )
+    if args.thread_schedstat_jsonl or args.process_cgroups_jsonl:
+        # Wire restore-snapshot coverage so roles whose cgroup lacks a restore
+        # snapshot color E (design section 6). ``None`` (no restore-affinity
+        # artifact) means "assume covered" and keeps prior behavior.
+        restore_covered_cgroups = (
+            set(restore_affinity.cgroups)
+            if restore_affinity is not None and restore_affinity.cgroups
+            else None
+        )
+        color_ledger = build_color_ledger_from_artifacts(
+            appid=args.appid,
+            window_s=args.duration_s or 1.0,
+            thread_schedstat_jsonl=args.thread_schedstat_jsonl,
+            process_cgroups_jsonl=args.process_cgroups_jsonl,
+            restore_covered_cgroups=restore_covered_cgroups,
+        )
+        (output / "color-ledger.json").write_text(
+            json.dumps(_json_ready(color_ledger.to_json()), indent=2, sort_keys=True) + "\n"
         )
     return output / "summary.json"
 
@@ -2643,24 +2904,48 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
                 )
             )
             continue
+        # Q4: candidate-side rollups depend only on the candidate group; compute
+        # them once here instead of per matched baseline (identical output).
+        candidate_runs = groups[candidate_key]
+        candidate = aggregate_run_summaries(candidate_runs)
+        candidate_sched_ext = aggregate_sched_ext_evidence(
+            paths_by_group[candidate_key]
+        )
+        candidate_gpu_floor = aggregate_gpu_floor_evidence(
+            paths_by_group[candidate_key]
+        )
+        candidate_foreground_uclamp = aggregate_foreground_uclamp_evidence(
+            paths_by_group[candidate_key]
+        )
+        candidate_roles = aggregate_affinity_roles(paths_by_group[candidate_key])
+        candidate_background = aggregate_background_shaping_candidates(
+            paths_by_group[candidate_key]
+        )
+        candidate_color_ledger = aggregate_color_ledger(paths_by_group[candidate_key])
         for baseline_key in sorted(baseline_keys, key=_sortable_group_key):
             matched_baseline_keys.add(baseline_key)
             baseline_runs = groups[baseline_key]
-            candidate_runs = groups[candidate_key]
             baseline = aggregate_run_summaries(baseline_runs)
-            candidate = aggregate_run_summaries(candidate_runs)
             comparison = compare_policy_aggregates(
                 baseline,
                 candidate,
                 min_runs=args.min_runs,
             )
+            # Validity gating for the new V9 profiler lanes: scx-lavd requires
+            # sched-ext state evidence, target-balance-gpufloor requires gpu-freq
+            # restore evidence, and target-balance-uclampmin requires foreground
+            # uclamp.min restore evidence in every candidate run (same
+            # all-runs-covered idiom as foreground affinity).
+            comparison = _gate_new_lane_evidence(
+                comparison,
+                candidate_policy=str(_candidate_policy),
+                sched_ext_evidence=candidate_sched_ext,
+                gpu_floor_evidence=candidate_gpu_floor,
+                foreground_uclamp_evidence=candidate_foreground_uclamp,
+            )
             baseline_roles = aggregate_affinity_roles(paths_by_group[baseline_key])
-            candidate_roles = aggregate_affinity_roles(paths_by_group[candidate_key])
             baseline_background = aggregate_background_shaping_candidates(
                 paths_by_group[baseline_key]
-            )
-            candidate_background = aggregate_background_shaping_candidates(
-                paths_by_group[candidate_key]
             )
             comparisons.append(
                 {
@@ -2672,6 +2957,13 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
                     "candidate_affinity_roles": candidate_roles,
                     "baseline_background_shaping_candidates": baseline_background,
                     "candidate_background_shaping_candidates": candidate_background,
+                    "baseline_color_ledger": aggregate_color_ledger(
+                        paths_by_group[baseline_key]
+                    ),
+                    "candidate_color_ledger": candidate_color_ledger,
+                    "candidate_sched_ext_evidence": candidate_sched_ext,
+                    "candidate_gpu_floor_evidence": candidate_gpu_floor,
+                    "candidate_foreground_uclamp_evidence": candidate_foreground_uclamp,
                     "affinity_experiment_plan": build_affinity_experiment_plan(
                         baseline=baseline,
                         candidate=candidate,
@@ -2719,6 +3011,547 @@ def run_aggregate(args: argparse.Namespace) -> dict[str, Any]:
         "comparisons": comparisons,
         "incomplete_groups": incomplete_groups,
     }
+
+
+# Explicit, tested candidate-policy -> daemon-actuator mapping (design section 8).
+# The daemon keys the verdict ledger on these actuator strings. The three
+# gpu-priority guarded lanes map deterministically; target-balance ladder/uclamp
+# verdicts are only exported when the aggregate context explicitly carries a
+# ``candidate_policy_actuators`` list, so a plain ``target-balance`` mode
+# aggregate never fabricates a single-lane claim it did not isolate.
+VERDICT_ACTUATOR_BY_CANDIDATE_POLICY: dict[str, str] = {
+    "gpu-priority-bg-weight": "bg-weight",
+    "gpu-priority-bg-uclamp": "bg-uclamp",
+    "gpu-priority-affinity": "compact-affinity",
+    # C16: one-control-per-run target-balance lane probes (design section 9).
+    "target-balance-uclampmin": "uclamp-min",
+    "target-balance-ladder5": "ladder-step-5",
+    # V10 single-lane candidates (Slice C). Each isolates one actuator via
+    # --trim-rungs so its BETTER claim maps to exactly one daemon actuator.
+    # The G1-G3 / P1-P3 base rungs are persona-defaults (always on for
+    # battery/ac-quiet), so a ``soft-pl1`` verdict still only accumulates
+    # evidence. A ``gpu-cap`` verdict, however, NOW unlocks runtime behavior:
+    # the daemon consumes it to enable the deep GPU cap rung G4CAP (the -45%
+    # depth beyond the measured pacing plateau), mirroring how ``ladder-step-5``
+    # unlocks S3CAP/S4CAP. ``v10-battery`` is deliberately absent: a whole-ladder
+    # BETTER cannot claim a single lane, so it is skipped unless the aggregate
+    # explicitly declares candidate_policy_actuators (same rule as a plain
+    # ``target-balance`` mode aggregate).
+    "v10-gpu-cap": "gpu-cap",
+    "v10-soft-pl1": "soft-pl1",
+}
+GAME_POWER_VERDICTS_SCHEMA_VERSION = "game-power-verdicts-v1"
+
+
+def _cpu_policies_from_topology_json(path: str | Path) -> list[object]:
+    """Rebuild ``CpuPolicy`` objects from a collected ``cpu-topology.json``.
+
+    Used only to feed the imported ``topology_fingerprint`` so the exported key
+    is byte-identical to what the daemon computes at runtime (never re-hashed
+    here).
+    """
+
+    from steamos_intel_handheld.game_power import (
+        PCORE_CAPACITY_RATIO,
+        CpuPolicy,
+        CpuPolicyClass,
+    )
+
+    payload = json.loads(Path(path).read_text())
+    cpus = payload.get("cpus") if isinstance(payload, dict) else None
+    groups: dict[str, dict[str, object]] = {}
+    for item in cpus or []:
+        if not isinstance(item, dict):
+            continue
+        cpu = item.get("cpu")
+        if not isinstance(cpu, int):
+            continue
+        name = _optional_str(item.get("policy")) or f"policy-cpu{cpu}"
+        group = groups.setdefault(
+            name,
+            {"cpus": set(), "capacity": None, "max_freq": None, "cpuinfo_max_freq": None},
+        )
+        group["cpus"].add(cpu)  # type: ignore[union-attr]
+        capacity = item.get("capacity")
+        if isinstance(capacity, int):
+            group["capacity"] = capacity
+        max_freq = item.get("max_freq_khz")
+        if isinstance(max_freq, int):
+            group["max_freq"] = max_freq
+        # C15: prefer the immutable ceiling so the exported fingerprint matches
+        # the daemon's (which hashes cpuinfo_max_freq).
+        cpuinfo_max_freq = item.get("cpuinfo_max_freq_khz")
+        if isinstance(cpuinfo_max_freq, int):
+            group["cpuinfo_max_freq"] = cpuinfo_max_freq
+
+    capacities = [
+        group["capacity"] for group in groups.values() if group["capacity"] is not None
+    ]
+    max_capacity = max(capacities) if capacities else None  # type: ignore[type-var]
+    policies: list[object] = []
+    for name, group in groups.items():
+        capacity = group["capacity"]
+        if max_capacity is None or capacity is None:
+            policy_class = CpuPolicyClass.UNKNOWN
+        elif capacity >= PCORE_CAPACITY_RATIO * max_capacity:
+            # F1: same tolerance as the daemon's discover_cpu_policies so the
+            # exported fingerprint's pcore/ecore label matches at runtime.
+            policy_class = CpuPolicyClass.PCORE
+        else:
+            policy_class = CpuPolicyClass.ECORE
+        policies.append(
+            CpuPolicy(
+                name=name,
+                path=Path(name),
+                affected_cpus=tuple(sorted(group["cpus"])),  # type: ignore[arg-type]
+                capacity=capacity,  # type: ignore[arg-type]
+                policy_class=policy_class,
+                available_epp=(),
+                current_epp=None,
+                scaling_min_freq=None,
+                scaling_max_freq=group["max_freq"],  # type: ignore[arg-type]
+                cpuinfo_max_freq=group["cpuinfo_max_freq"],  # type: ignore[arg-type]
+            )
+        )
+    return policies
+
+
+def resolve_topology_fingerprint(cpu_topology_json: str | Path) -> str:
+    from steamos_intel_handheld.game_power import topology_fingerprint
+
+    return topology_fingerprint(_cpu_policies_from_topology_json(cpu_topology_json))
+
+
+def _comparison_actuators(comparison: dict[str, object]) -> list[str]:
+    declared = comparison.get("candidate_policy_actuators")
+    if isinstance(declared, list):
+        explicit = [item for item in declared if isinstance(item, str) and item]
+        if explicit:
+            return explicit
+    inner = comparison.get("comparison")
+    candidate_policy = None
+    if isinstance(inner, dict):
+        candidate_policy = _optional_str(inner.get("candidate_policy"))
+    if candidate_policy is None:
+        candidate = comparison.get("candidate")
+        if isinstance(candidate, dict):
+            candidate_policy = _optional_str(candidate.get("policy"))
+    actuator = VERDICT_ACTUATOR_BY_CANDIDATE_POLICY.get(candidate_policy or "")
+    return [actuator] if actuator else []
+
+
+def export_verdicts(
+    reports: list[dict[str, object]],
+    *,
+    topology_fingerprint: str,
+    kernel: str,
+    policy_version: str | None = None,
+) -> dict[str, object]:
+    """Emit daemon-compatible verdict-ledger entries from aggregate reports.
+
+    Only ``BETTER`` comparisons are exported (which already implies controlled
+    capture, >= 3 pairs, exact restore, and the pairwise gate). ``claim_scope``
+    is copied verbatim from the comparison so no claim exceeds its evidence.
+    """
+
+    from steamos_intel_handheld.game_power import (
+        GAME_POWER_POLICY_VERSION_V9,
+        verdict_tdp_bucket,
+    )
+
+    resolved_policy_version = policy_version or GAME_POWER_POLICY_VERSION_V9
+    entries: list[dict[str, object]] = []
+    skipped: list[dict[str, object]] = []
+    for report in reports:
+        comparisons = report.get("comparisons") if isinstance(report, dict) else None
+        for comparison in comparisons or []:
+            if not isinstance(comparison, dict):
+                continue
+            inner = comparison.get("comparison")
+            if not isinstance(inner, dict):
+                continue
+            if inner.get("verdict") != PolicyVerdict.BETTER.value:
+                continue
+            candidate_policy = _optional_str(inner.get("candidate_policy"))
+            claim_scope = inner.get("claim_scope")
+            fps_target = None
+            if isinstance(claim_scope, dict):
+                fps_target = claim_scope.get("fps_target")
+            actuators = _comparison_actuators(comparison)
+            if not actuators:
+                skipped.append(
+                    {
+                        "appid": comparison.get("appid"),
+                        "tdp_w": comparison.get("tdp_w"),
+                        "candidate_policy": candidate_policy,
+                        "reason": "no-actuator-mapping-for-candidate-policy",
+                    }
+                )
+                continue
+            # C13: the daemon lookup matches exact bucket values (12/17/22/30),
+            # so raw tdp_w must be bucketed here; an off-bucket measurement is
+            # skipped explicitly instead of exported as a dead entry.
+            raw_tdp = comparison.get("tdp_w")
+            tdp_bucket = verdict_tdp_bucket(
+                raw_tdp if isinstance(raw_tdp, (int, float)) else None
+            )
+            if tdp_bucket is None:
+                skipped.append(
+                    {
+                        "appid": comparison.get("appid"),
+                        "tdp_w": raw_tdp,
+                        "candidate_policy": candidate_policy,
+                        "reason": "tdp-outside-verdict-buckets",
+                    }
+                )
+                continue
+            # C14: the daemon requires a non-None fps_target; entries without
+            # one are dead weight that inflate verdict_ledger_health entry_count.
+            if fps_target is None:
+                skipped.append(
+                    {
+                        "appid": comparison.get("appid"),
+                        "tdp_w": raw_tdp,
+                        "candidate_policy": candidate_policy,
+                        "reason": "missing-fps-target-in-claim-scope",
+                    }
+                )
+                continue
+            for actuator in actuators:
+                entries.append(
+                    {
+                        "appid": comparison.get("appid"),
+                        "tdp_w": tdp_bucket,
+                        "fps_target": fps_target,
+                        "topology_fingerprint": topology_fingerprint,
+                        "kernel": kernel,
+                        "policy_version": resolved_policy_version,
+                        "actuator": actuator,
+                        "verdict": "BETTER",
+                        "claim_scope": claim_scope,
+                    }
+                )
+    entries.sort(
+        key=lambda entry: (
+            str(entry.get("appid")),
+            str(entry.get("tdp_w")),
+            str(entry.get("actuator")),
+        )
+    )
+    return {
+        "schema_version": GAME_POWER_VERDICTS_SCHEMA_VERSION,
+        "policy_version": resolved_policy_version,
+        "topology_fingerprint": topology_fingerprint,
+        "kernel": kernel,
+        "entries": entries,
+        "skipped": skipped,
+    }
+
+
+def run_export_verdicts(args: argparse.Namespace) -> dict[str, object]:
+    if args.topology_fingerprint:
+        fingerprint = args.topology_fingerprint
+    elif args.cpu_topology_json:
+        fingerprint = resolve_topology_fingerprint(args.cpu_topology_json)
+    else:
+        raise SystemExit(
+            "export-verdicts requires --topology-fingerprint or --cpu-topology-json"
+        )
+
+    reports: list[dict[str, object]] = []
+    for aggregate_path in args.aggregate or []:
+        reports.append(json.loads(Path(aggregate_path).read_text()))
+    if args.root:
+        if not args.candidate_policy:
+            raise SystemExit("export-verdicts --root requires --candidate-policy")
+        aggregate_namespace = argparse.Namespace(
+            root=args.root,
+            baseline_policy=args.baseline_policy,
+            candidate_policy=args.candidate_policy,
+            appid=args.appid,
+            tdp_w=args.tdp_w,
+            duration_s=None,
+            warmup_s=None,
+            poll_s=None,
+            fps_target=args.fps_target,
+            fps_target_source=None,
+            capture_mode=args.capture_mode,
+            min_runs=args.min_runs,
+        )
+        reports.append(_json_ready(run_aggregate(aggregate_namespace)))
+    if not reports:
+        raise SystemExit("export-verdicts requires --aggregate or --root")
+
+    verdicts = export_verdicts(
+        reports,
+        topology_fingerprint=fingerprint,
+        kernel=args.kernel,
+        policy_version=args.policy_version,
+    )
+    if args.out:
+        Path(args.out).write_text(
+            json.dumps(_json_ready(verdicts), indent=2, sort_keys=True) + "\n"
+        )
+    return verdicts
+
+
+def aggregate_color_ledger(summary_paths: list[Path]) -> dict[str, object]:
+    """Aggregate per-run ``color-ledger.json`` artifacts across included runs.
+
+    Reuses the shared coloring module's per-run ledger (emitted by ``summarize``)
+    and rolls it up into per-color role stability, median cpu-time/wait, actuator
+    recommendation, and blocking reason codes (design section 9).
+    """
+
+    roles: dict[str, dict[str, object]] = {}
+    runs_with_ledger = 0
+    for summary_path in summary_paths:
+        ledger_path = Path(summary_path).with_name("color-ledger.json")
+        if not ledger_path.is_file():
+            continue
+        try:
+            payload = json.loads(ledger_path.read_text())
+        except json.JSONDecodeError:
+            continue
+        runs_with_ledger += 1
+        for entry in payload.get("entries") or []:
+            if not isinstance(entry, dict):
+                continue
+            role_key = _optional_str(entry.get("role_key"))
+            color = _optional_str(entry.get("color"))
+            if role_key is None or color is None:
+                continue
+            state = roles.setdefault(
+                f"{color}:{role_key}",
+                {
+                    "color": color,
+                    "role_key": role_key,
+                    "observed_run_count": 0,
+                    "cpu_time_ms_per_s": [],
+                    "runqueue_wait_ms_per_s": [],
+                    "actuator": _optional_str(entry.get("actuator")),
+                    "actuator_states": set(),
+                    "blocking_reason_codes": set(),
+                },
+            )
+            state["observed_run_count"] = int(state["observed_run_count"]) + 1
+            _append_float(state["cpu_time_ms_per_s"], entry.get("cpu_time_ms_per_s"))
+            _append_float(
+                state["runqueue_wait_ms_per_s"], entry.get("runqueue_wait_ms_per_s")
+            )
+            actuator = _optional_str(entry.get("actuator"))
+            if actuator is not None:
+                state["actuator"] = actuator
+            actuator_state = _optional_str(entry.get("actuator_state"))
+            if actuator_state is not None:
+                state["actuator_states"].add(actuator_state)  # type: ignore[union-attr]
+            for code in entry.get("blocking_reason_codes") or []:
+                if isinstance(code, str):
+                    state["blocking_reason_codes"].add(code)  # type: ignore[union-attr]
+
+    color_counts: dict[str, int] = {}
+    finalized: list[dict[str, object]] = []
+    for state in roles.values():
+        color = str(state["color"])
+        color_counts[color] = color_counts.get(color, 0) + 1
+        finalized.append(
+            {
+                "color": color,
+                "role_key": state["role_key"],
+                "observed_run_count": state["observed_run_count"],
+                "role_stability_ratio": _ratio(
+                    float(state["observed_run_count"]), float(runs_with_ledger)
+                ),
+                "cpu_time_ms_per_s_median": _median(state["cpu_time_ms_per_s"]),
+                "runqueue_wait_ms_per_s_median": _median(
+                    state["runqueue_wait_ms_per_s"]
+                ),
+                "actuator_recommendation": state["actuator"],
+                "actuator_states": sorted(state["actuator_states"]),  # type: ignore[arg-type]
+                "blocking_reason_codes": sorted(state["blocking_reason_codes"]),  # type: ignore[arg-type]
+            }
+        )
+    finalized.sort(
+        key=lambda item: (
+            str(item["color"]),
+            -int(item["observed_run_count"]),
+            str(item["role_key"]),
+        )
+    )
+    return {
+        "run_count": len(summary_paths),
+        "run_count_with_ledger": runs_with_ledger,
+        "color_counts": dict(sorted(color_counts.items())),
+        "roles": finalized,
+    }
+
+
+def aggregate_sched_ext_evidence(summary_paths: list[Path]) -> dict[str, object]:
+    """Roll up per-run ``sched-ext-state.json`` (scx-lavd lane, design section 9)."""
+
+    runs_total = len(summary_paths)
+    runs_with_evidence = 0
+    valid_count = 0
+    root_ops: set[str] = set()
+    for summary_path in summary_paths:
+        evidence_path = Path(summary_path).with_name("sched-ext-state.json")
+        if not evidence_path.is_file():
+            continue
+        try:
+            payload = json.loads(evidence_path.read_text())
+        except json.JSONDecodeError:
+            continue
+        runs_with_evidence += 1
+        if payload.get("valid") is True:
+            valid_count += 1
+        during = payload.get("during")
+        if isinstance(during, dict):
+            ops = _optional_str(during.get("root_ops"))
+            if ops is not None:
+                root_ops.add(ops)
+    return {
+        "runs_total": runs_total,
+        "runs_with_evidence": runs_with_evidence,
+        "valid_evidence_count": valid_count,
+        "evidence_complete": (
+            runs_total > 0
+            and runs_with_evidence == runs_total
+            and valid_count == runs_total
+        ),
+        "root_ops": sorted(root_ops),
+    }
+
+
+def aggregate_gpu_floor_evidence(summary_paths: list[Path]) -> dict[str, object]:
+    """Roll up per-run ``gpu-freq-restore.json`` (gpufloor lane, design section 9)."""
+
+    runs_total = len(summary_paths)
+    runs_with_evidence = 0
+    valid_count = 0
+    restored_count = 0
+    floor_mhz: set[int] = set()
+    scopes: set[str] = set()
+    for summary_path in summary_paths:
+        evidence_path = Path(summary_path).with_name("gpu-freq-restore.json")
+        if not evidence_path.is_file():
+            continue
+        try:
+            payload = json.loads(evidence_path.read_text())
+        except json.JSONDecodeError:
+            continue
+        runs_with_evidence += 1
+        if payload.get("valid") is True:
+            valid_count += 1
+        if payload.get("restored") is True:
+            restored_count += 1
+        value = payload.get("floor_mhz")
+        if isinstance(value, int):
+            floor_mhz.add(value)
+        scope = _optional_str(payload.get("gpu_floor_scope"))
+        if scope is not None:
+            scopes.add(scope)
+    return {
+        "runs_total": runs_total,
+        "runs_with_evidence": runs_with_evidence,
+        "valid_evidence_count": valid_count,
+        "restored_count": restored_count,
+        "evidence_complete": (
+            runs_total > 0
+            and runs_with_evidence == runs_total
+            and valid_count == runs_total
+            and restored_count == runs_total
+        ),
+        "floor_mhz": sorted(floor_mhz),
+        "gpu_floor_scope": sorted(scopes),
+    }
+
+
+def aggregate_foreground_uclamp_evidence(
+    summary_paths: list[Path],
+) -> dict[str, object]:
+    """Roll up per-run ``foreground-uclamp-restore.json`` (uclampmin lane, C16)."""
+
+    runs_total = len(summary_paths)
+    runs_with_evidence = 0
+    valid_count = 0
+    restored_count = 0
+    floor_values: set[str] = set()
+    for summary_path in summary_paths:
+        evidence_path = Path(summary_path).with_name("foreground-uclamp-restore.json")
+        if not evidence_path.is_file():
+            continue
+        try:
+            payload = json.loads(evidence_path.read_text())
+        except json.JSONDecodeError:
+            continue
+        runs_with_evidence += 1
+        if payload.get("valid") is True:
+            valid_count += 1
+        if payload.get("restored") is True:
+            restored_count += 1
+        value = _optional_str(payload.get("floor_value"))
+        if value is not None:
+            floor_values.add(value)
+    return {
+        "runs_total": runs_total,
+        "runs_with_evidence": runs_with_evidence,
+        "valid_evidence_count": valid_count,
+        "restored_count": restored_count,
+        "evidence_complete": (
+            runs_total > 0
+            and runs_with_evidence == runs_total
+            and valid_count == runs_total
+            and restored_count == runs_total
+        ),
+        "floor_value": sorted(floor_values),
+    }
+
+
+def _gate_new_lane_evidence(
+    comparison: PolicyComparison,
+    *,
+    candidate_policy: str,
+    sched_ext_evidence: dict[str, object],
+    gpu_floor_evidence: dict[str, object],
+    foreground_uclamp_evidence: dict[str, object] | None = None,
+) -> PolicyComparison:
+    """Reject a candidate that lacks complete new-lane evidence in every run.
+
+    Keeps ``export-verdicts`` honest: a scx-lavd, target-balance-gpufloor, or
+    target-balance-uclampmin aggregate cannot reach ``BETTER`` unless its guard
+    evidence covered every candidate run (mirrors the foreground-affinity
+    coverage gate).
+    """
+
+    if candidate_policy == "scx-lavd" and not sched_ext_evidence.get(
+        "evidence_complete"
+    ):
+        return PolicyComparison(
+            comparison.baseline_policy,
+            comparison.candidate_policy,
+            PolicyVerdict.REJECTED,
+            "sched_ext state evidence did not pass for every candidate run",
+        )
+    if candidate_policy == "target-balance-gpufloor" and not gpu_floor_evidence.get(
+        "evidence_complete"
+    ):
+        return PolicyComparison(
+            comparison.baseline_policy,
+            comparison.candidate_policy,
+            PolicyVerdict.REJECTED,
+            "gpu-freq restore evidence did not pass for every candidate run",
+        )
+    if candidate_policy == "target-balance-uclampmin" and not (
+        foreground_uclamp_evidence or {}
+    ).get("evidence_complete"):
+        return PolicyComparison(
+            comparison.baseline_policy,
+            comparison.candidate_policy,
+            PolicyVerdict.REJECTED,
+            "foreground uclamp.min restore evidence did not pass for every "
+            "candidate run",
+        )
+    return comparison
 
 
 def _incomplete_group(
@@ -3137,6 +3970,8 @@ def validate_runtime_telemetry(
     require_cpu_cap_action: bool = False,
     require_frame_performance: bool = False,
     require_fps_target_satisfied: bool = False,
+    require_target_balance_contract: bool = False,
+    require_v10_contract: bool = False,
     expect_fps_target: float | None = None,
     expect_fps_target_source: str | None = None,
     expect_fps_target_confidence: str | None = None,
@@ -3151,8 +3986,57 @@ def validate_runtime_telemetry(
     fps_target_satisfied_samples = 0
     target_rows = 0
     target_mismatches: list[str] = []
+    # V9 target-balance additive telemetry (contract v2). Presence is counted
+    # per run (>= 1 row), the same "at least one" idiom v1 uses for
+    # classification/pressure, because the daemon emits color_ledger only at the
+    # colorize cadence, not on every governor tick.
+    phase_samples = 0
+    ladder_step_samples = 0
+    color_ledger_samples = 0
+    verdict_ledger_health_samples = 0
+    # V10 target-balance additive telemetry (contract v3). ``persona`` must be on
+    # EVERY emitted row (it is only ever set by target-balance decisions, so it
+    # proves the run is a v10 run); trim_rungs_active/frame_feed_status need >= 1
+    # row; soft_pl1_w/gpu_freq_caps are presence-if-active (required only when the
+    # corresponding P/G rungs engaged).
+    persona_samples = 0
+    persona_missing_rows = 0
+    trim_rungs_active_samples = 0
+    frame_feed_status_samples = 0
+    g_rung_active = False
+    p_rung_active = False
+    gpu_freq_caps_present = False
+    soft_pl1_w_present = False
 
     for index, row in enumerate(rows, start=1):
+        if require_v10_contract:
+            persona_value = _optional_str(row.get("persona"))
+            if persona_value is not None:
+                persona_samples += 1
+            else:
+                persona_missing_rows += 1
+            trim = row.get("trim_rungs_active")
+            if isinstance(trim, list):
+                trim_rungs_active_samples += 1
+                for rung in trim:
+                    if isinstance(rung, str) and rung[:1] == "G":
+                        g_rung_active = True
+                    elif isinstance(rung, str) and rung[:1] == "P":
+                        p_rung_active = True
+            if "frame_feed_status" in row:
+                frame_feed_status_samples += 1
+            if isinstance(row.get("gpu_freq_caps"), dict):
+                gpu_freq_caps_present = True
+            if row.get("soft_pl1_w") is not None:
+                soft_pl1_w_present = True
+        if _optional_str(row.get("phase")) is not None:
+            phase_samples += 1
+        if isinstance(row.get("ladder_step"), int):
+            ladder_step_samples += 1
+        if isinstance(row.get("color_ledger"), dict):
+            color_ledger_samples += 1
+        if isinstance(row.get("verdict_ledger_health"), dict):
+            verdict_ledger_health_samples += 1
         primary, _advisories, malformed = _parse_runtime_classification(
             row.get("classification")
         )
@@ -3190,6 +4074,38 @@ def validate_runtime_telemetry(
         failures.append("frame-performance telemetry rows are missing")
     if require_fps_target_satisfied and fps_target_satisfied_samples == 0:
         failures.append("fps-target-satisfied classification was not reached")
+    # A v10 run is a target-balance run, so the v2 field presence checks also
+    # apply; keeping them together means --require-v10-contract is a single flag.
+    if require_target_balance_contract or require_v10_contract:
+        if phase_samples == 0:
+            failures.append("target-balance phase telemetry rows are missing")
+        if ladder_step_samples == 0:
+            failures.append("target-balance ladder_step telemetry rows are missing")
+        if color_ledger_samples == 0:
+            failures.append("target-balance color_ledger telemetry rows are missing")
+        if verdict_ledger_health_samples == 0:
+            failures.append(
+                "target-balance verdict_ledger_health telemetry rows are missing"
+            )
+    if require_v10_contract:
+        if persona_samples == 0:
+            failures.append("v10 persona telemetry rows are missing")
+        elif persona_missing_rows > 0:
+            failures.append(
+                f"v10 persona is missing on {persona_missing_rows} emitted row(s)"
+            )
+        if trim_rungs_active_samples == 0:
+            failures.append("v10 trim_rungs_active telemetry rows are missing")
+        if frame_feed_status_samples == 0:
+            failures.append("v10 frame_feed_status telemetry rows are missing")
+        if g_rung_active and not gpu_freq_caps_present:
+            failures.append(
+                "v10 gpu_freq_caps telemetry is missing while a G rung was active"
+            )
+        if p_rung_active and not soft_pl1_w_present:
+            failures.append(
+                "v10 soft_pl1_w telemetry is missing while a P rung was active"
+            )
     if (
         expect_fps_target is not None
         or expect_fps_target_source is not None
@@ -3210,15 +4126,38 @@ def validate_runtime_telemetry(
     if action_replay_json is not None:
         replay = json.loads(Path(action_replay_json).read_text())
         action_replay_status = "pass"
-        if replay.get("action_delta_count") != 0 or replay.get("reason_delta_count") != 0:
+        # C17: action/reason delta keys are the v1 contract; an artifact missing
+        # them must fail closed, not pass as if the deltas were zero.
+        required_deltas = (
+            replay.get("action_delta_count"),
+            replay.get("reason_delta_count"),
+        )
+        optional_deltas = (
+            # Target-balance replay adds phase/ladder deltas and v10 replay adds
+            # rung/boost deltas (default 0/absent for older artifacts, so v1/v2
+            # artifacts stay valid).
+            replay.get("phase_delta_count", 0),
+            replay.get("ladder_delta_count", 0),
+            replay.get("rung_delta_count", 0),
+            replay.get("boost_delta_count", 0),
+        )
+        if any(delta != 0 for delta in required_deltas) or any(
+            delta != 0 for delta in optional_deltas
+        ):
             action_replay_status = "fail"
             failures.append("action replay equivalence failed")
 
     if failures:
         raise ValueError("; ".join(failures))
 
-    return {
-        "schema_version": "game-power-runtime-telemetry-contract-v1",
+    if require_v10_contract:
+        schema_version = "game-power-runtime-telemetry-contract-v3"
+    elif require_target_balance_contract:
+        schema_version = "game-power-runtime-telemetry-contract-v2"
+    else:
+        schema_version = "game-power-runtime-telemetry-contract-v1"
+    result: dict[str, object] = {
+        "schema_version": schema_version,
         "status": "pass",
         "game_power_jsonl": str(game_power_jsonl),
         "samples": summary.samples,
@@ -3240,14 +4179,32 @@ def validate_runtime_telemetry(
         "expect_target_frame_ms": expect_target_frame_ms,
         "action_replay_status": action_replay_status,
     }
+    if require_target_balance_contract or require_v10_contract:
+        result["phase_samples"] = phase_samples
+        result["ladder_step_samples"] = ladder_step_samples
+        result["color_ledger_samples"] = color_ledger_samples
+        result["verdict_ledger_health_samples"] = verdict_ledger_health_samples
+    if require_v10_contract:
+        result["persona_samples"] = persona_samples
+        result["persona_missing_rows"] = persona_missing_rows
+        result["trim_rungs_active_samples"] = trim_rungs_active_samples
+        result["frame_feed_status_samples"] = frame_feed_status_samples
+        result["gpu_freq_caps_present"] = gpu_freq_caps_present
+        result["soft_pl1_w_present"] = soft_pl1_w_present
+        result["g_rung_active"] = g_rung_active
+        result["p_rung_active"] = p_rung_active
+    return result
 
 
 def replay_action_equivalence(output: str | Path | None = None) -> dict[str, object]:
     from steamos_intel_handheld.game_power import (
+        FramePerformanceTelemetry,
+        FrameTargetTelemetry,
         GamePowerAction,
         GamePowerConfig,
         GamePowerController,
         GamePowerMode,
+        GamePowerPersona,
         GamePowerSample,
         RaplPowerWindow,
     )
@@ -3365,33 +4322,237 @@ def replay_action_equivalence(output: str | Path | None = None) -> dict[str, obj
             }
         )
 
+    # --- V9 target-balance replay (phase + ladder determinism) ---
+    # gpu-priority scenarios above stay byte-identical; these additive scenarios
+    # drive the controller in TARGET_BALANCE mode through two independent fresh
+    # controllers and require the committed phase and ladder-step sequences to
+    # match between runs (zero delta = deterministic replay, design section 9).
+    def tb_sample(
+        *,
+        appid: str | None,
+        package_w: float,
+        core_w: float,
+        uncore_w: float,
+        render_busy: float = 0.8,
+    ) -> GamePowerSample:
+        return GamePowerSample(
+            appid=appid,
+            rapl=RaplPowerWindow(
+                duration_s=2.0,
+                package_w=package_w,
+                core_w=core_w,
+                uncore_w=uncore_w,
+            ),
+            pl1_w=20,
+            fdinfo_busy={"render": render_busy},
+        )
+
+    target_balance_scenarios = [
+        {
+            "name": "target-balance-no-game",
+            "config": GamePowerConfig(
+                mode=GamePowerMode.TARGET_BALANCE, activate_samples=1
+            ),
+            "samples": [tb_sample(appid=None, package_w=10.0, core_w=2.0, uncore_w=3.0)],
+        },
+        {
+            "name": "target-balance-no-target",
+            "config": GamePowerConfig(
+                mode=GamePowerMode.TARGET_BALANCE, activate_samples=1
+            ),
+            "samples": [
+                tb_sample(appid="1091500", package_w=19.0, core_w=7.0, uncore_w=9.0)
+                for _ in range(4)
+            ],
+        },
+    ]
+
+    target_balance_results = []
+    phase_delta_count = 0
+    ladder_delta_count = 0
+    for scenario in target_balance_scenarios:
+        phases_a, ladders_a, actions_a = _replay_target_balance_run(
+            GamePowerController(scenario["config"]), scenario["samples"]
+        )
+        phases_b, ladders_b, _actions_b = _replay_target_balance_run(
+            GamePowerController(scenario["config"]), scenario["samples"]
+        )
+        phase_delta = _sequence_delta_count(phases_a, phases_b)
+        ladder_delta = _sequence_delta_count(
+            [str(step) for step in ladders_a],
+            [str(step) for step in ladders_b],
+        )
+        phase_delta_count += phase_delta
+        ladder_delta_count += ladder_delta
+        target_balance_results.append(
+            {
+                "name": scenario["name"],
+                "phases": phases_a,
+                "ladder_steps": ladders_a,
+                "actions": actions_a,
+                "phase_delta_count": phase_delta,
+                "ladder_delta_count": ladder_delta,
+            }
+        )
+
+    # --- V10 replay (trim-rung + boost determinism) ---
+    # Two independent fresh controllers driven through the same at-target sample
+    # sequence must reproduce identical trim_rungs_active and boost_active
+    # sequences (zero delta = deterministic replay, contract 1.7). The pure
+    # controller never engages the fast boost lane (that overlay lives in the
+    # observer's run_once), so boost_active is captured as the controller-emitted
+    # value; its determinism is still asserted. gpu-priority replay above stays
+    # byte-identical.
+    def v10_sample() -> GamePowerSample:
+        return GamePowerSample(
+            appid="1091500",
+            rapl=RaplPowerWindow(
+                duration_s=2.0, package_w=22.0, core_w=8.8, uncore_w=7.4
+            ),
+            pl1_w=22,
+            fdinfo_busy={"render": 0.75},
+            frame_target=FrameTargetTelemetry(
+                fps_target=60.0, source="manual", confidence="high"
+            ),
+            frame_performance=FramePerformanceTelemetry(
+                avg_fps=63.0,
+                p95_frame_ms=15.0,
+                sample_count=20,
+                window_s=2.0,
+                source="mangoapp-feed",
+                confidence="high",
+            ),
+            foreground_process_age_s=100.0,
+            gpu_rp0_mhz=1950,
+            gpu_rpe_mhz=800,
+            package_median_w=22.0,
+            frame_feed_status="live",
+        )
+
+    def v10_config(**over: object) -> GamePowerConfig:
+        base: dict[str, object] = dict(
+            mode=GamePowerMode.TARGET_BALANCE,
+            activate_samples=1,
+            phase_stable_samples=1,
+            ladder_hold_samples=1,
+            persona=GamePowerPersona.BATTERY,
+        )
+        base.update(over)
+        return GamePowerConfig(**base)
+
+    v10_scenarios = [
+        {"name": "v10-battery-full-ladder", "config": v10_config(), "ticks": 8},
+        {
+            "name": "v10-gpu-cap-only",
+            "config": v10_config(trim_rung_filter=("G",)),
+            "ticks": 5,
+        },
+        {
+            "name": "v10-soft-pl1-only",
+            "config": v10_config(trim_rung_filter=("P",)),
+            "ticks": 5,
+        },
+    ]
+    v10_results = []
+    rung_delta_count = 0
+    boost_delta_count = 0
+    for scenario in v10_scenarios:
+        samples = [v10_sample() for _ in range(scenario["ticks"])]
+        rungs_a, boosts_a = _replay_v10_run(
+            GamePowerController(scenario["config"]), samples
+        )
+        rungs_b, boosts_b = _replay_v10_run(
+            GamePowerController(scenario["config"]), samples
+        )
+        rung_delta = _sequence_delta_count(
+            [",".join(step) for step in rungs_a],
+            [",".join(step) for step in rungs_b],
+        )
+        boost_delta = _sequence_delta_count(
+            [str(flag) for flag in boosts_a],
+            [str(flag) for flag in boosts_b],
+        )
+        rung_delta_count += rung_delta
+        boost_delta_count += boost_delta
+        v10_results.append(
+            {
+                "name": scenario["name"],
+                "trim_rung_sequences": rungs_a,
+                "boost_sequence": boosts_a,
+                "rung_delta_count": rung_delta,
+                "boost_delta_count": boost_delta,
+            }
+        )
+
     verdict = {
         "schema_version": "game-power-action-equivalence-v1",
         "status": (
             "pass"
-            if action_delta_count == 0 and reason_delta_count == 0
+            if action_delta_count == 0
+            and reason_delta_count == 0
+            and phase_delta_count == 0
+            and ladder_delta_count == 0
+            and rung_delta_count == 0
+            and boost_delta_count == 0
             else "fail"
         ),
         "action_delta_count": action_delta_count,
         "reason_delta_count": reason_delta_count,
+        "phase_delta_count": phase_delta_count,
+        "ladder_delta_count": ladder_delta_count,
+        "rung_delta_count": rung_delta_count,
+        "boost_delta_count": boost_delta_count,
         "scenarios": results,
+        "target_balance_scenarios": target_balance_results,
+        "v10_scenarios": v10_results,
     }
     if output is not None:
         Path(output).write_text(json.dumps(_json_ready(verdict), indent=2, sort_keys=True) + "\n")
     return verdict
 
 
+def _replay_target_balance_run(
+    controller: object,
+    samples: list[object],
+) -> tuple[list[str], list[int | None], list[str]]:
+    """Evaluate a target-balance sample sequence, returning phase/ladder/action.
+
+    Kept helper-local so the gpu-priority replay path stays untouched.
+    """
+
+    phases: list[str] = []
+    ladders: list[int | None] = []
+    actions: list[str] = []
+    for item in samples:
+        decision = controller.evaluate(item)  # type: ignore[attr-defined]
+        phases.append(decision.phase.value if decision.phase is not None else "none")
+        ladders.append(decision.ladder_step)
+        actions.append(decision.action.value)
+    return phases, ladders, actions
+
+
+def _replay_v10_run(
+    controller: object,
+    samples: list[object],
+) -> tuple[list[list[str]], list[bool]]:
+    """Evaluate a v10 sample sequence, returning trim-rung and boost sequences.
+
+    Kept helper-local so the gpu-priority and v2 replay paths stay untouched.
+    """
+
+    rungs: list[list[str]] = []
+    boosts: list[bool] = []
+    for item in samples:
+        decision = controller.evaluate(item)  # type: ignore[attr-defined]
+        rungs.append(list(decision.trim_rungs_active or []))
+        boosts.append(bool(decision.boost_active))
+    return rungs, boosts
+
+
 def _read_jsonl_rows(path: str | Path) -> list[dict[str, object]]:
-    rows = []
-    with Path(path).open() as handle:
-        for line in handle:
-            text = line.strip()
-            if not text:
-                continue
-            row = json.loads(text)
-            if isinstance(row, dict):
-                rows.append(row)
-    return rows
+    # Q3: single hardened JSONL reader shared with the coloring module
+    # (tolerates a truncated final line, rejects mid-file corruption).
+    return list(iter_jsonl_rows(path))
 
 
 def _check_target_expectation(
@@ -3847,381 +5008,6 @@ def _read_optional_text(path: Path) -> str | None:
     except OSError:
         return None
     return value or None
-
-
-def apply_background_shaping_writes(
-    restore_affinity_json: str | Path,
-    output: str | Path,
-    *,
-    appid: str,
-    variant: str,
-    command_runner: Any | None = None,
-) -> dict[str, object]:
-    control_file, proposed_value = _background_write_variant(variant)
-    payload = json.loads(Path(restore_affinity_json).read_text())
-    writes: list[dict[str, object]] = []
-    for cgroup in payload.get("cgroups") or []:
-        if not isinstance(cgroup, dict):
-            continue
-        cgroup_name = _optional_str(cgroup.get("cgroup"))
-        cgroup_path = _optional_str(cgroup.get("path"))
-        if cgroup_name is None or cgroup_path is None:
-            continue
-        if not _is_background_shaping_write_target(cgroup_name, appid=appid):
-            continue
-        path = Path(cgroup_path)
-        control_path = path / control_file
-        if _should_use_systemd_user_property(cgroup_name, control_file):
-            write = _apply_systemd_user_background_write(
-                cgroup_name,
-                path,
-                control_file,
-                proposed_value,
-                command_runner=command_runner,
-            )
-        elif control_path.is_file():
-            write = _apply_direct_cgroup_background_write(
-                cgroup_name,
-                path,
-                control_file,
-                proposed_value,
-            )
-        else:
-            write = _apply_systemd_user_background_write(
-                cgroup_name,
-                path,
-                control_file,
-                proposed_value,
-                command_runner=command_runner,
-            )
-        if write is not None:
-            writes.append(write)
-
-    report = {
-        "mode": "background-shaping-writes",
-        "write_policy": "guarded-background-shaping",
-        "appid": appid,
-        "variant": variant,
-        "control_file": control_file,
-        "proposed_value": proposed_value,
-        "writes": writes,
-    }
-    Path(output).write_text(json.dumps(_json_ready(report), indent=2, sort_keys=True) + "\n")
-    return report
-
-
-def restore_background_shaping_writes(
-    writes_json: str | Path,
-    output: str | Path,
-    *,
-    command_runner: Any | None = None,
-) -> dict[str, object]:
-    payload = json.loads(Path(writes_json).read_text())
-    restores: list[dict[str, object]] = []
-    restored = True
-    for item in payload.get("writes") or []:
-        if not isinstance(item, dict) or item.get("status") != "written":
-            continue
-        cgroup = _optional_str(item.get("cgroup")) or ""
-        path = _optional_str(item.get("path")) or ""
-        control_file = _optional_str(item.get("control_file")) or ""
-        original_value = _optional_str(item.get("original_value")) or ""
-        method = _optional_str(item.get("method")) or "direct-cgroup-file"
-        if method == "systemd-user-property":
-            restore_item = _restore_systemd_user_background_write(
-                item,
-                command_runner=command_runner,
-            )
-            current_value = _optional_str(restore_item.get("current_value"))
-            status = _optional_str(restore_item.get("status")) or "restore-failed"
-            restores.append(restore_item)
-            if status != "restored":
-                restored = False
-            continue
-
-        control_path = Path(path) / control_file
-        status = "restored"
-        try:
-            _write_control_value(control_path, original_value)
-            current_value = _read_control_value(control_path)
-        except OSError:
-            current_value = None
-            status = "restore-failed"
-        if current_value != original_value:
-            restored = False
-            status = "restore-mismatch" if status == "restored" else status
-        restores.append(
-            {
-                "cgroup": cgroup,
-                "path": path,
-                "control_file": control_file,
-                "restored_value": original_value,
-                "current_value": current_value,
-                "status": status,
-                "method": method,
-            }
-        )
-
-    report = {
-        "mode": "background-shaping-restore",
-        "write_policy": "restore-background-shaping",
-        "restored": restored,
-        "restores": restores,
-    }
-    Path(output).write_text(json.dumps(_json_ready(report), indent=2, sort_keys=True) + "\n")
-    return report
-
-
-def _background_write_variant(variant: str) -> tuple[str, str]:
-    try:
-        return BACKGROUND_SHAPING_WRITE_VARIANTS[variant]
-    except KeyError as exc:
-        choices = ", ".join(sorted(BACKGROUND_SHAPING_WRITE_VARIANTS))
-        raise ValueError(
-            f"unsupported background shaping variant {variant}; choices: {choices}"
-        ) from exc
-
-
-def _apply_direct_cgroup_background_write(
-    cgroup: str,
-    path: Path,
-    control_file: str,
-    proposed_value: str,
-) -> dict[str, object] | None:
-    control_path = path / control_file
-    current_value = _read_control_value(control_path)
-    if current_value is None:
-        return None
-    if not _background_write_lowers_value(control_file, current_value, proposed_value):
-        return None
-    _write_control_value(control_path, proposed_value)
-    written_value = _read_control_value(control_path)
-    return {
-        "cgroup": cgroup,
-        "path": str(path),
-        "control_file": control_file,
-        "original_value": current_value,
-        "proposed_value": proposed_value,
-        "status": "written" if written_value == proposed_value else "write-mismatch",
-        "method": "direct-cgroup-file",
-    }
-
-
-def _apply_systemd_user_background_write(
-    cgroup: str,
-    path: Path,
-    control_file: str,
-    proposed_value: str,
-    *,
-    command_runner: Any | None,
-) -> dict[str, object] | None:
-    if control_file != "cpu.weight":
-        return None
-    unit = _systemd_user_unit_from_cgroup(cgroup)
-    if unit is None:
-        return None
-    current_value = _systemd_user_show_property(
-        unit,
-        "CPUWeight",
-        command_runner=command_runner,
-    )
-    if not _background_write_lowers_value(control_file, current_value, proposed_value):
-        return None
-    try:
-        _systemd_user_set_property(
-            unit,
-            f"CPUWeight={proposed_value}",
-            command_runner=command_runner,
-        )
-        written_value = _systemd_user_show_property(
-            unit,
-            "CPUWeight",
-            command_runner=command_runner,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        written_value = None
-    return {
-        "cgroup": cgroup,
-        "path": str(path),
-        "control_file": control_file,
-        "original_value": current_value,
-        "proposed_value": proposed_value,
-        "status": (
-            "written"
-            if written_value == proposed_value
-            else "write-failed"
-            if written_value is None
-            else "write-mismatch"
-        ),
-        "method": "systemd-user-property",
-        "unit": unit,
-        "property": "CPUWeight",
-    }
-
-
-def _restore_systemd_user_background_write(
-    item: dict[str, object],
-    *,
-    command_runner: Any | None,
-) -> dict[str, object]:
-    unit = _optional_str(item.get("unit")) or ""
-    property_name = _optional_str(item.get("property")) or "CPUWeight"
-    original_value = _optional_str(item.get("original_value")) or ""
-    restored_assignment = (
-        f"{property_name}="
-        if original_value == "[not set]"
-        else f"{property_name}={original_value}"
-    )
-    status = "restored"
-    try:
-        _systemd_user_set_property(
-            unit,
-            restored_assignment,
-            command_runner=command_runner,
-        )
-        current_value = _systemd_user_show_property(
-            unit,
-            property_name,
-            command_runner=command_runner,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        current_value = None
-        status = "restore-failed"
-    if current_value != original_value and status == "restored":
-        status = "restore-mismatch"
-    return {
-        "cgroup": item.get("cgroup"),
-        "path": item.get("path"),
-        "control_file": item.get("control_file"),
-        "restored_value": original_value,
-        "current_value": current_value,
-        "status": status,
-        "method": "systemd-user-property",
-        "unit": unit,
-        "property": property_name,
-    }
-
-
-def _systemd_user_unit_from_cgroup(cgroup: str) -> str | None:
-    for part in reversed(cgroup.split("/")):
-        if part.endswith((".service", ".scope", ".slice")):
-            return part
-    return None
-
-
-def _systemd_user_show_property(
-    unit: str,
-    property_name: str,
-    *,
-    command_runner: Any | None,
-) -> str:
-    output = _run_systemd_user_command(
-        ["show", unit, "-p", property_name],
-        command_runner=command_runner,
-    )
-    prefix = f"{property_name}="
-    for line in output.splitlines():
-        if line.startswith(prefix):
-            return line.removeprefix(prefix)
-    return "[not set]"
-
-
-def _systemd_user_set_property(
-    unit: str,
-    assignment: str,
-    *,
-    command_runner: Any | None,
-) -> None:
-    _run_systemd_user_command(
-        ["set-property", "--runtime", unit, assignment],
-        command_runner=command_runner,
-    )
-
-
-def _run_systemd_user_command(
-    args: list[str],
-    *,
-    command_runner: Any | None,
-) -> str:
-    command = [
-        "runuser",
-        "-u",
-        "deck",
-        "--",
-        "env",
-        "XDG_RUNTIME_DIR=/run/user/1000",
-        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
-        "systemctl",
-        "--user",
-        *args,
-    ]
-    if command_runner is not None:
-        return str(command_runner(command))
-    return subprocess.run(
-        command,
-        check=True,
-        text=True,
-        capture_output=True,
-    ).stdout
-
-
-def _is_background_shaping_write_target(cgroup: str, *, appid: str) -> bool:
-    lowered = cgroup.lower()
-    if f"app-steam-app{appid}".lower() in lowered:
-        return False
-    relative = lowered.removeprefix("0::").rstrip("/")
-    if relative in {"/user.slice", "/system.slice"}:
-        return False
-    helper_tokens = (
-        "app-steam-client",
-        "steam-launcher",
-        "steamwebhelper",
-        "gamescope-session.service",
-        "gamescope-mangoapp.service",
-    )
-    return any(token in lowered for token in helper_tokens)
-
-
-def _should_use_systemd_user_property(cgroup: str, control_file: str) -> bool:
-    if control_file != "cpu.weight":
-        return False
-    lowered = cgroup.lower()
-    relative = lowered.removeprefix("0::")
-    unit = _systemd_user_unit_from_cgroup(cgroup)
-    return relative.startswith("/user.slice/") and unit is not None and unit.endswith(
-        ".service"
-    )
-
-
-def _background_write_lowers_value(
-    control_file: str,
-    current_value: str,
-    proposed_value: str,
-) -> bool:
-    if control_file == "cpu.weight":
-        if current_value == "[not set]":
-            current_value = "100"
-        current = _float(current_value)
-        proposed = _float(proposed_value)
-        return current is not None and proposed is not None and current > proposed
-    if control_file == "cpu.uclamp.max":
-        if current_value == "max":
-            return True
-        current = _float(current_value)
-        proposed = _float(proposed_value)
-        return current is not None and proposed is not None and current > proposed
-    return False
-
-
-def _read_control_value(path: Path) -> str | None:
-    try:
-        return path.read_text().strip()
-    except OSError:
-        return None
-
-
-def _write_control_value(path: Path, value: str) -> None:
-    path.write_text(f"{value}\n")
 
 
 def _load_run_summary(path: str | Path) -> RunSummary:
@@ -4970,44 +5756,6 @@ def _classification_rank(classification: str | None) -> int:
     }.get(classification or "", -1)
 
 
-def _thread_cgroup_role(cgroup: object) -> str:
-    text = (_optional_str(cgroup) or "").lower()
-    if "app-steam-app" in text:
-        return "foreground-game"
-    if "gamescope" in text or "mangoapp" in text:
-        return "gamescope-helper"
-    if "steam" in text:
-        return "steam-helper"
-    return "other"
-
-
-def _normalize_role_part(value: object) -> str:
-    text = (_optional_str(value) or "unknown").lower()
-    normalized = []
-    previous_dash = False
-    for char in text:
-        if char.isalnum():
-            normalized.append(char)
-            previous_dash = False
-        elif not previous_dash:
-            normalized.append("-")
-            previous_dash = True
-    return "".join(normalized).strip("-") or "unknown"
-
-
-def _classify_background_cgroup(cgroup: str, command: object) -> str:
-    haystack = f"{cgroup} {_optional_str(command) or ''}".lower()
-    if "gamescope" in haystack or "mangoapp" in haystack:
-        return "gamescope-helper"
-    if "steamwebhelper" in haystack or "steam" in haystack:
-        return "steam-helper"
-    if "/system.slice" in haystack:
-        return "system-helper"
-    if "/user.slice" in haystack:
-        return "user-helper"
-    return "other-background"
-
-
 def _process_cgroup_candidate(state: dict[str, object]) -> dict[str, object]:
     processes = state.get("processes")
     if not isinstance(processes, dict):
@@ -5324,6 +6072,23 @@ def main(argv: list[str] | None = None) -> None:
         if report.get("restored") is not True:
             raise SystemExit(1)
         return
+    if args.command == "apply-foreground-uclamp":
+        report = apply_foreground_uclamp_min_writes(
+            args.restore_affinity_json,
+            args.output,
+            appid=args.appid,
+            floor_value=args.floor_value,
+        )
+        print(json.dumps(_json_ready(report), sort_keys=True))
+        if not report.get("valid"):
+            raise SystemExit(1)
+        return
+    if args.command == "restore-foreground-uclamp":
+        report = restore_foreground_uclamp_min_writes(args.writes_json, args.output)
+        print(json.dumps(_json_ready(report), sort_keys=True))
+        if report.get("restored") is not True:
+            raise SystemExit(1)
+        return
     if args.command == "resolve-foreground-affinity":
         report = resolve_foreground_affinity_candidate(args.plan_json)
         print(json.dumps(_json_ready(report), sort_keys=True))
@@ -5338,6 +6103,8 @@ def main(argv: list[str] | None = None) -> None:
             require_cpu_cap_action=args.require_cpu_cap_action,
             require_frame_performance=args.require_frame_performance,
             require_fps_target_satisfied=args.require_fps_target_satisfied,
+            require_target_balance_contract=args.require_target_balance_contract,
+            require_v10_contract=args.require_v10_contract,
             expect_fps_target=args.expect_fps_target,
             expect_fps_target_source=args.expect_fps_target_source,
             expect_fps_target_confidence=args.expect_fps_target_confidence,
@@ -5351,6 +6118,10 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "replay-action-equivalence":
         report = replay_action_equivalence(args.output)
+        print(json.dumps(_json_ready(report), sort_keys=True))
+        return
+    if args.command == "export-verdicts":
+        report = run_export_verdicts(args)
         print(json.dumps(_json_ready(report), sort_keys=True))
         return
     raise SystemExit(f"unsupported command: {args.command}")

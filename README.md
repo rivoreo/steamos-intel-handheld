@@ -243,11 +243,83 @@ frame data has enough samples. Background-shaping readiness remains an advisory
 profiler output with `write_policy=disabled` until guarded device A/B runs pass
 restore, pacing, and power-saving gates.
 
+### Target-balance mode (V9)
+
+V9 adds a target-aware `target-balance` policy that treats the FPS target as the
+contract rather than maximizing raw frames. The daemon-side machinery ships now
+and is exercised as a profiler candidate; the installed service default **remains
+`gpu-priority`** until controlled device evidence passes. `target-balance` never
+degrades below shipped `gpu-priority` behavior when no FPS target is known.
+
+What ships in the daemon and Decky panel (all additive telemetry, no new public
+modes; `automatic`, `observe`, and `off` stay frozen and the manual FPS target
+keeps its 30-120 step-5 contract):
+
+- A phase machine (`loading`, `below-target-cpu-bound`, `below-target-gpu-bound`,
+  `at-target`, `above-target`, `no-target`, `no-game`, `unknown`) that releases
+  all constraints during loading and identifies the bound resource below target.
+- A convergence trim ladder that, once the target is sustained, converts surplus
+  CPU turbo into package-power savings and shared iGPU headroom (per-class P/E
+  EPP and soft frequency trims), with fast release on any target miss.
+- A thread color ledger that classifies foreground/background roles and maps them
+  to a least-invasive actuator; compositor/overlay roles are never shaped.
+- Verdict-gated write lanes (foreground `cpu.uclamp.min` floor and background
+  cgroup shaping) that stay **fail-closed**: a missing or corrupt verdict ledger
+  disables every gated lane, and each lane reports a why-not reason code.
+
+Lanes that stay profiler-only in V9 (never applied by the daemon): the GPU
+minimum-frequency floor (`target-balance-gpufloor`), the `scx-lavd` sched_ext
+lane, and compact foreground affinity. These remain measurement candidates, not
+shipped daemon actuators.
+
+The daemon loads the verdict ledger read-only. Operators produce it from
+controlled profiler evidence and then run the daemon with `--verdict-ledger`:
+
+```bash
+# 1. Controlled A/B with the target-balance candidate (see profiling below).
+PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
+PROFILE_GAME_POWER_REPEATS=3 \
+PROFILE_GAME_POWER_FPS_TARGET=30 \
+PROFILE_GAME_POWER_POLICIES="off target-balance off" \
+scripts/profile-game-power-on-device.sh root@10.100.0.19
+
+# 2. Aggregate the runs into a scoped verdict.
+steamos-intel-handheld-game-power-profile aggregate \
+  --root .cache/game-power/profiles \
+  --baseline-policy off --candidate-policy target-balance \
+  --appid 1903340 --tdp-w 17 --capture-mode controlled --min-runs 3 \
+  > .cache/game-power/profiles/aggregate.json
+
+# 3. Export only BETTER aggregates into a verdict ledger.
+steamos-intel-handheld-game-power-profile export-verdicts \
+  --root .cache/game-power/profiles \
+  --out game-power-verdicts.json
+
+# 4. Install the ledger where the daemon reads it (mtime reload; /run fallback).
+#    /var/lib/steamos-intel-handheld/game-power-verdicts.json
+```
+
+Once controlled evidence accepts the policy, the service is launched with
+`--game-power-mode target-balance --verdict-ledger <path>` in place of the
+current `--game-power-mode gpu-priority`. Until then the packaged unit keeps the
+`gpu-priority` default.
+
+Only aggregates whose verdict is `BETTER` (controlled capture, exact restore,
+pairwise gate) are exported, and a ledger entry unlocks a lane only on an exact
+match of AppID, FPS target, topology fingerprint, policy version, and TDP bucket.
+The panel surfaces the current phase, trim ladder step, per-color actuator state,
+verdict-ledger health, and each gated lane's state with its why-not reason. These
+are read-only diagnostics: they blank out when the runtime snapshot is stale or
+the mode is `off`/`observe`, and they are absent for the shipped `gpu-priority`
+default.
+
 Use the standalone validation CLI when checking a specific game scene:
 
 ```bash
 steamos-intel-handheld-game-power --mode observe --duration-s 30
 steamos-intel-handheld-game-power --mode gpu-priority --duration-s 30 --target-appid 1091500
+steamos-intel-handheld-game-power --mode target-balance --duration-s 30 \
+  --fps-target 30 --verdict-ledger /var/lib/steamos-intel-handheld/game-power-verdicts.json
 VERIFY_GAME_POWER_APPID=1091500 scripts/verify-game-power-on-device.sh root@10.100.0.19
 ```
 
@@ -261,6 +333,105 @@ package-limited with GPU activity. The governor restores the previous CPU EPP
 and frequency limits when the active policy deactivates, the command exits, the
 service stops, or a write fails. It does not raise the SteamOS TDP, does not
 raise PL1, and does not replace SteamOS Manager's TDP slider.
+
+### Demand-shaped power (V10 framework)
+
+V10 adds the demand-shaping framework described in
+`docs/game-power-v10-direction.md` and `docs/game-power-v10-framework-plan.md`:
+GPU frequency-envelope caps, a soft-PL1 overlay below the user slider, a fast
+boost lane fed by a live mangoapp frame feed, personas, and a consent-gated
+frame limiter. **The installed service default remains `gpu-priority`.** The
+GPU cap and soft-PL1 rung constants are sized from the on-device 17 W / 60 fps
+probes (P2/P3): the GPU-cap pacing plateau holds to rp0x0.69 (~1350 MHz, -2 W
+package), so the battery G-rungs step -12%/-22%/-30% and the old -45% depth is
+reachable only as the verdict-gated `G4CAP` rung; the soft-PL1 P1 rung always
+starts at least `soft_pl1_p1_slider_margin_w` (default 1 W) below the user
+slider so it can never clamp to a no-op on a PL1-pinned scene (the p95 guard,
+not a hardcoded knee, stops the descent). Remaining tuning numbers (guard
+bands, boost thresholds) stay provisional, and every tunable is a config
+field, not a literal. All new actuators are **reduction-only** under user intent: nothing
+ever exceeds the TDP slider, the QAM/limiter FPS cap, or the refresh rate, and
+"boost" only removes our own reductions.
+
+Personas (`battery`, `ac-quiet`, `ac-performance`) resolve from power-source
+detection plus an optional Decky/CLI override. The conservative default mapping
+is battery→`battery` and AC→`ac-performance`, so AC behavior is unchanged until
+the user opts into quiet. `ac-performance` keeps EPP-only behavior (ladder
+parked above target); `battery`/`ac-quiet` run the full GPU/soft-PL1/EPP trim
+ladder with a p95 guard band.
+
+```bash
+# Persona override (session runtime control; invalid values fail closed).
+steamos-intel-handheld-game-power-control set-persona ac-quiet --source decky --json
+steamos-intel-handheld-game-power-control clear-persona --json
+```
+
+The **frame feed** is the daemon's live frame-time source for the boost lane
+and decay guard. It is produced by the patched mangoapp and activated by the
+`gamescope-mangoapp` drop-in, which now sets `MANGOAPP_FRAME_FEED=1`. The
+exporter writes a compact rolling summary atomically at ~2 Hz to
+`$XDG_RUNTIME_DIR/steamos-intel-handheld/frame-feed.json` (override with
+`MANGOAPP_FRAME_FEED_FILE`); the daemon reads it via
+`--game-power-frame-feed-file`. A stale (older than `frame_feed_stale_s`,
+default 5 s), missing, or corrupt feed is reported as `absent`/`stale` and the
+daemon falls back to V9 behavior (MangoHud CSV when configured, else NO_TARGET
+degradation).
+
+The **frame limiter helper** is a consent-gated helper on the control CLI. It
+drives gamescope's own control channel (`gamescopectl debug_set_fps_limit`) and
+therefore **must run as the session user** with `XDG_RUNTIME_DIR` /
+`DBUS_SESSION_BUS_ADDRESS` set, exactly like the display-workaround service. The
+daemon never calls it; only the Decky backend (which hops to the session user
+with `runuser -u deck -- env ...`) or a user helper service does. Its efficacy
+and interaction with the QAM slider are **device-unverified** (probe P4): the
+helper feature-detects `gamescopectl` and honestly reports `unsupported` or
+`unknown` (no read-back) rather than guessing.
+
+```bash
+# Runs as the session user; feature-detects and never fabricates a read-back.
+steamos-intel-handheld-game-power-control limiter status --json
+steamos-intel-handheld-game-power-control limiter set 40 --source deck --json
+steamos-intel-handheld-game-power-control limiter clear --json
+```
+
+The Decky panel adds a persona selector (intent-framed labels), a consent
+frame-limit helper with an FPS readout, a live package-power vs soft-budget row
+with a boost indicator, and a frame-feed status chip. Like the V9 diagnostics,
+every V10 field blanks out when the runtime snapshot is stale/invalid or the
+mode is the `gpu-priority` default / `off` / `observe`.
+
+Additive telemetry v3 (target-balance only, so `gpu-priority`
+JSONL/snapshots stay byte-identical): `persona`, `soft_pl1_w`, `gpu_freq_caps`
+(per-GT min/max), `boost_active`, `boost_reason`, `trim_rungs_active` (rung ids
+`G1`-`G3`, `P1`-`P3`, `C1`, `C2`, plus verdict-gated `G4CAP`/`S3CAP`/`S4CAP`),
+`frame_feed_status` (`live`/`stale`/`absent`), and `limiter_state`.
+
+Candidate policies and device probes for sizing the V10 constants reuse the
+existing profiler and its `game-power-profile-device` harness check:
+
+```bash
+# Candidate policies (one candidate per run, same A/B discipline as V9).
+PROFILE_GAME_POWER_POLICIES="off v10-battery off" \
+  scripts/profile-game-power-on-device.sh root@10.100.0.19   # full battery ladder
+PROFILE_GAME_POWER_POLICIES="off v10-gpu-cap off" \
+  scripts/profile-game-power-on-device.sh root@10.100.0.19   # G rungs only
+PROFILE_GAME_POWER_POLICIES="off v10-soft-pl1 off" \
+  scripts/profile-game-power-on-device.sh root@10.100.0.19   # P rungs only
+
+# Observe-only device probes that size the ladders (P1-P3).
+PROFILE_GAME_POWER_PROBE=pin-baseline   scripts/profile-game-power-on-device.sh root@10.100.0.19
+PROFILE_GAME_POWER_PROBE=gpu-cap-sweep  scripts/profile-game-power-on-device.sh root@10.100.0.19
+PROFILE_GAME_POWER_PROBE=soft-pl1-sweep scripts/profile-game-power-on-device.sh root@10.100.0.19
+
+# Export verdicts for the new rungs (gpu-cap / soft-pl1 mappings). A gpu-cap
+# BETTER verdict is consumed by the daemon: it unlocks the deep G4CAP rung.
+steamos-intel-handheld-game-power-profile export-verdicts \
+  --root .cache/game-power/profiles --out game-power-verdicts.json
+```
+
+The profiler validates telemetry contract v3 with `--require-v10-contract`. As
+with V9, the packaged service stays `gpu-priority` until controlled device
+evidence accepts a V10 target-balance policy.
 
 ### Game-power profiling
 
@@ -477,7 +648,11 @@ A positive aggregate verdict is intentionally scoped. Reports render it as
 `BETTER (scene/profile-specific controlled result; not a general performance claim)`
 and include `claim_scope` fields for AppID, scene evidence, candidate policy,
 TDP, timing, FPS target, pair count, run order, power source, thermal source,
-pair thermal deltas, and cooldown evidence. guarded foreground-game artifacts are required for this captured profile only and are not sufficient for hardware-wide,
+pair thermal deltas, and cooldown evidence. The A/B thermal parity gate keys on
+START temperatures only (the pre-run pairing confound control); the END-temp
+delta is reported context (`thermal_end_delta_c`), not a rejection reason,
+because a genuine power-saving candidate necessarily ends cooler and gating on
+that would make a BETTER power verdict structurally unreachable. guarded foreground-game artifacts are required for this captured profile only and are not sufficient for hardware-wide,
 game-wide, release-note, or default-policy performance claims without a
 separate claim plan.
 AppID is an experiment grouping key; production game-power policy should remain

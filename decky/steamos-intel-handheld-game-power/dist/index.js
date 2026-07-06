@@ -87,6 +87,11 @@ const sampleOnce = callable("sample_once");
 const setMode = callable("set_mode");
 const setFpsTarget = callable("set_fps_target");
 const restoreDefaults = callable("restore_defaults");
+const setPersona = callable("set_persona");
+const clearPersona = callable("clear_persona");
+const getLimiter = callable("limiter_status");
+const applyLimiterFps = callable("set_limiter");
+const clearLimiterFps = callable("clear_limiter");
 const COPY = {
     en: {
         pluginName: "Game Power",
@@ -120,6 +125,47 @@ const COPY = {
         applying: "Applying...",
         restored: "Using the service default.",
         evidenceLabel: "Local evidence",
+        balanceLabel: "Target balance",
+        phaseLabel: "Phase",
+        ladderLabel: "Trim ladder step",
+        colorsLabel: "Thread colors",
+        lanesLabel: "Gated write lanes",
+        verdictLabel: "Verdict ledger",
+        truncatedNote: "color sampling truncated",
+        none: "none",
+        personaTitle: "Power intent",
+        personaCurrent: "Current intent",
+        personaAuto: "Auto (match power source)",
+        personaProvisional: "Framework shipped; tuning constants are provisional.",
+        personaLabels: {
+            battery: "Battery saver",
+            "ac-quiet": "Quiet (plugged in)",
+            "ac-performance": "Performance (plugged in)",
+        },
+        limiterTitle: "Frame limit helper",
+        limiterConsentNote: "Opt-in: caps in-game frames through gamescope. Device-unverified.",
+        limiterApply: "Apply frame limit",
+        limiterClear: "Clear frame limit",
+        limiterRead: "Check frame limit",
+        limiterStates: {
+            limited: "Frame limit active",
+            unlimited: "No frame limit",
+            unknown: "Frame limit helper available",
+            unsupported: "Frame limit helper unavailable",
+        },
+        budgetLabel: "Soft power budget",
+        boostLabel: "Boost",
+        boostStates: {
+            active: "active",
+            idle: "idle",
+        },
+        frameFeedLabel: "Frame feed",
+        frameFeedStates: {
+            live: "live",
+            stale: "stale",
+            absent: "absent",
+        },
+        trimLabel: "Active trims",
         evidenceStates: {
             "target-aware-live": "Local target/frame evidence ready",
             "power-signals-only": "Local evidence: power signals only",
@@ -127,6 +173,39 @@ const COPY = {
             stopped: "Game Power stopped",
             "control-invalid": "Local evidence unavailable",
             unavailable: "Local evidence unavailable",
+        },
+        phases: {
+            "no-game": "No foreground game",
+            loading: "Loading (constraints released)",
+            "below-target-cpu-bound": "Below target, CPU-bound",
+            "below-target-gpu-bound": "Below target, GPU-bound",
+            "at-target": "At target",
+            "above-target": "Above target (trimming)",
+            "no-target": "No FPS target",
+            unknown: "Unknown",
+        },
+        actuatorStates: {
+            active: "active",
+            advisory: "advisory",
+            blocked: "blocked",
+        },
+        laneNames: {
+            foreground: "Foreground boost",
+            background: "Background easing",
+            ladder: "Deep trim",
+            other: "Write lane",
+        },
+        laneStates: {
+            active: "active",
+            blocked: "blocked (no verdict)",
+            released: "released (loading)",
+        },
+        verdictStates: {
+            ready: "verdicts loaded",
+            unavailable: "no verdict ledger",
+            missing: "verdict file missing",
+            corrupt: "verdict file corrupt",
+            invalid: "verdict file invalid",
         },
         modes: {
             automatic: "Balance to FPS target",
@@ -222,6 +301,47 @@ const COPY = {
         applying: "正在套用...",
         restored: "已切回服務預設。",
         evidenceLabel: "本機證據",
+        balanceLabel: "目標平衡",
+        phaseLabel: "階段",
+        ladderLabel: "降頻階梯步數",
+        colorsLabel: "執行緒著色",
+        lanesLabel: "受管制的寫入通道",
+        verdictLabel: "裁決紀錄",
+        truncatedNote: "著色取樣已截斷",
+        none: "無",
+        personaTitle: "電力取向",
+        personaCurrent: "目前取向",
+        personaAuto: "自動（依電源）",
+        personaProvisional: "框架已上線；調校常數仍為暫定值。",
+        personaLabels: {
+            battery: "電池省電",
+            "ac-quiet": "安靜（外接電源）",
+            "ac-performance": "效能（外接電源）",
+        },
+        limiterTitle: "影格上限輔助",
+        limiterConsentNote: "選用：透過 gamescope 設定遊戲影格上限。尚未在裝置驗證。",
+        limiterApply: "套用影格上限",
+        limiterClear: "取消影格上限",
+        limiterRead: "檢查影格上限",
+        limiterStates: {
+            limited: "影格上限啟用中",
+            unlimited: "沒有影格上限",
+            unknown: "影格上限輔助可用",
+            unsupported: "影格上限輔助不可用",
+        },
+        budgetLabel: "動態功耗預算",
+        boostLabel: "衝刺",
+        boostStates: {
+            active: "啟用中",
+            idle: "待命",
+        },
+        frameFeedLabel: "影格資料流",
+        frameFeedStates: {
+            live: "即時",
+            stale: "過期",
+            absent: "無",
+        },
+        trimLabel: "生效的節流",
         evidenceStates: {
             "target-aware-live": "本機 FPS 目標與影格資料可用",
             "power-signals-only": "本機證據：僅有功耗訊號",
@@ -229,6 +349,39 @@ const COPY = {
             stopped: "遊戲電力已停止",
             "control-invalid": "本機證據不可用",
             unavailable: "本機證據不可用",
+        },
+        phases: {
+            "no-game": "沒有前景遊戲",
+            loading: "載入中（已釋放限制）",
+            "below-target-cpu-bound": "低於目標，CPU 受限",
+            "below-target-gpu-bound": "低於目標，GPU 受限",
+            "at-target": "已達目標",
+            "above-target": "高於目標（正在降頻）",
+            "no-target": "沒有 FPS 目標",
+            unknown: "未知",
+        },
+        actuatorStates: {
+            active: "啟用",
+            advisory: "僅建議",
+            blocked: "封鎖",
+        },
+        laneNames: {
+            foreground: "前景提升",
+            background: "背景讓路",
+            ladder: "深層降頻",
+            other: "寫入通道",
+        },
+        laneStates: {
+            active: "啟用",
+            blocked: "封鎖（無裁決）",
+            released: "已釋放（載入中）",
+        },
+        verdictStates: {
+            ready: "已載入裁決",
+            unavailable: "沒有裁決紀錄",
+            missing: "缺少裁決檔案",
+            corrupt: "裁決檔案損毀",
+            invalid: "裁決檔案無效",
         },
         modes: {
             automatic: "依 FPS 目標自動平衡",
@@ -443,6 +596,93 @@ function runtimeHeadline(t, mode, runtime) {
     }
     return t.telemetryLabels.powerSignals;
 }
+function phaseText(t, phase) {
+    if (!phase) {
+        return t.none;
+    }
+    return t.phases[phase] ?? phase;
+}
+function colorLedgerText(t, color) {
+    const states = Object.entries(color.actuator_states)
+        .map(([state, count]) => `${t.actuatorStates[state] ?? state}${count > 1 ? ` x${count}` : ""}`)
+        .join(", ");
+    const tail = states ? ` (${states})` : "";
+    return `${color.color}: ${color.tid_count} TID / ${color.entry_count} role${tail}`;
+}
+function laneLabelKey(name) {
+    if (name.includes("foreground")) {
+        return "foreground";
+    }
+    if (name.includes("background")) {
+        return "background";
+    }
+    if (name.includes("ladder")) {
+        return "ladder";
+    }
+    return "other";
+}
+function laneText(t, name, lane) {
+    const label = t.laneNames[laneLabelKey(name)] ?? t.laneNames.other;
+    const state = t.laneStates[lane.state] ?? lane.state;
+    const why = lane.reason_codes.length ? ` - ${lane.reason_codes.join(", ")}` : "";
+    return `${label}: ${state}${why}`;
+}
+function verdictText(t, health) {
+    const state = t.verdictStates[health.status] ?? health.status;
+    const count = health.entry_count === null ? "" : ` (${health.entry_count})`;
+    return `${state}${count}`;
+}
+function personaLabel(t, persona) {
+    if (!persona) {
+        return t.personaAuto;
+    }
+    return t.personaLabels[persona] ?? persona;
+}
+function activePersona(control) {
+    const override = control?.persona_override;
+    if (override?.status === "manual" && override.persona) {
+        return override.persona;
+    }
+    return null;
+}
+function frameFeedText(t, status) {
+    if (!status) {
+        return t.none;
+    }
+    return t.frameFeedStates[status] ?? status;
+}
+function limiterStateText(t, limiter) {
+    if (!limiter) {
+        return "-";
+    }
+    const label = t.limiterStates[limiter.status] ?? limiter.status;
+    return limiter.fps ? `${label}: ${limiter.fps} FPS` : label;
+}
+const TargetBalanceLiveRow = ({ t, runtime }) => {
+    if (!runtime || runtime.stale || runtime.error || !runtime.persona) {
+        return null;
+    }
+    const { soft_pl1_w, boost_active, frame_feed_status, trim_rungs_active } = runtime;
+    const boostText = boost_active ? t.boostStates.active : t.boostStates.idle;
+    const trims = trim_rungs_active && trim_rungs_active.length ? trim_rungs_active.join(", ") : t.none;
+    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { style: detailStyle, children: [t.personaCurrent, ": ", personaLabel(t, runtime.persona)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.package, ": ", fmtWatts(runtime.package_w), " / ", t.budgetLabel, ":", " ", soft_pl1_w === null || soft_pl1_w === undefined ? t.none : fmtWatts(soft_pl1_w)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.boostLabel, ": ", boostText] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.frameFeedLabel, ": ", frameFeedText(t, frame_feed_status)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.trimLabel, ": ", trims] })] }));
+};
+const TargetBalanceDetails = ({ t, runtime }) => {
+    if (!runtime || runtime.stale || runtime.error) {
+        return null;
+    }
+    const { phase, ladder_step, color_ledger, verdict_ledger_health, gated_lanes } = runtime;
+    if (phase === undefined ||
+        phase === null ||
+        (ladder_step === undefined || ladder_step === null) &&
+            !color_ledger &&
+            !verdict_ledger_health &&
+            !gated_lanes) {
+        return null;
+    }
+    const lanes = gated_lanes ? Object.entries(gated_lanes) : [];
+    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { style: detailStyle, children: [t.balanceLabel, " - ", t.phaseLabel, ": ", phaseText(t, phase)] }), ladder_step !== undefined && ladder_step !== null ? (SP_JSX.jsxs("div", { style: detailStyle, children: [t.ladderLabel, ": S", ladder_step] })) : null, verdict_ledger_health ? (SP_JSX.jsxs("div", { style: detailStyle, children: [t.verdictLabel, ": ", verdictText(t, verdict_ledger_health)] })) : null, color_ledger && color_ledger.colors.length ? (SP_JSX.jsxs("div", { style: detailStyle, children: [t.colorsLabel, ": ", color_ledger.colors.map((color) => colorLedgerText(t, color)).join(" | "), color_ledger.truncated ? ` (${t.truncatedNote})` : ""] })) : null, lanes.length ? (SP_JSX.jsxs("div", { style: detailStyle, children: [t.lanesLabel, ": ", lanes.map(([name, lane]) => laneText(t, name, lane)).join(" | ")] })) : null] }));
+};
 const PluginTitle = () => {
     const t = COPY[useLocale()];
     return SP_JSX.jsx("div", { className: DFL.staticClasses.Title, children: t.pluginName });
@@ -454,6 +694,7 @@ const GamePowerPanel = () => {
     const [runtime, setRuntime] = SP_REACT.useState(null);
     const [sample, setSample] = SP_REACT.useState(null);
     const [manualFps, setManualFps] = SP_REACT.useState(40);
+    const [limiter, setLimiter] = SP_REACT.useState(null);
     const [notice, setNotice] = SP_REACT.useState(null);
     const [error, setError] = SP_REACT.useState(null);
     const [busy, setBusy] = SP_REACT.useState(false);
@@ -569,9 +810,65 @@ const GamePowerPanel = () => {
             setBusy(false);
         }
     };
+    const applyPersona = async (persona) => {
+        if (busy) {
+            return;
+        }
+        setBusy(true);
+        setNotice(t.applying);
+        setError(null);
+        try {
+            if (persona === null) {
+                await clearPersona();
+            }
+            else {
+                await setPersona(persona);
+            }
+            const statusResult = await getStatus();
+            setStatus(statusResult.service);
+            setControl(statusResult.control);
+            setRuntime(statusResult.runtime);
+            setNotice(null);
+        }
+        catch (error) {
+            setError(errorText(error));
+            setNotice(null);
+        }
+        finally {
+            setBusy(false);
+        }
+    };
+    const runLimiter = async (action) => {
+        if (busy) {
+            return;
+        }
+        setBusy(true);
+        setNotice(action === "read" ? null : t.applying);
+        setError(null);
+        try {
+            if (action === "apply") {
+                setLimiter(await applyLimiterFps(manualFps));
+            }
+            else if (action === "clear") {
+                setLimiter(await clearLimiterFps());
+            }
+            else {
+                setLimiter(await getLimiter());
+            }
+            setNotice(null);
+        }
+        catch (error) {
+            setError(errorText(error));
+            setNotice(null);
+        }
+        finally {
+            setBusy(false);
+        }
+    };
     SP_REACT.useEffect(() => {
         load();
     }, []);
+    const currentPersona = activePersona(control);
     const runtimeTitle = runtime?.appid ? `${t.game}: ${runtime.appid}` : t.noSample;
     const probeTitle = sample?.appid ? `${t.game}: ${sample.appid}` : t.noSample;
     const supportedMin = control?.fps_target_override.supported_min ?? 30;
@@ -584,7 +881,7 @@ const GamePowerPanel = () => {
                                     ? `${t.currentMode}: ${modeLabel(t, status.mode, runtime)}`
                                     : busy
                                         ? t.loading
-                                        : t.unavailable }), status ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.serviceState, ": ", status.active_state, "/", status.sub_state] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.policyLabels, status.policy_label) }), SP_JSX.jsx("div", { style: detailStyle, children: modeDescription(t, status.mode) }), SP_JSX.jsx("div", { style: detailStyle, children: runtimeHeadline(t, status.mode, runtime) }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.evidenceLabel, ": ", evidenceText(t, runtime?.evidence_readiness)] }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, runtime?.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, runtime?.frame_source) }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.learning, ": ", learningText(t, runtime?.learning)] })] })) : null, notice ? SP_JSX.jsx("div", { style: detailStyle, children: notice }) : null, error ? (SP_JSX.jsxs("div", { role: "alert", style: detailStyle, children: [t.errorPrefix, ": ", error] })) : null] }) }) }), SP_JSX.jsxs(DFL.PanelSection, { title: t.control, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("automatic"), children: busy ? t.applying : t.modes.automatic }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("observe"), children: busy ? t.applying : t.modes.observe }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("off"), children: busy ? t.applying : t.modes.off }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsxs("div", { className: DFL.staticClasses.Title, style: titleStyle, children: [t.fpsTarget, ": ", manualFps, " FPS"] }), SP_JSX.jsx("div", { style: detailStyle, children: targetMode }), SP_JSX.jsxs("div", { style: detailStyle, children: [supportedMin, "-", supportedMax, " FPS / ", supportedStep] }), SP_JSX.jsx("input", { "aria-label": t.targetManual, type: "range", min: 30, max: 120, step: 5, value: manualFps, style: sliderStyle, onChange: (event) => setManualFps(Number(event.currentTarget.value)) })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyFpsTarget(manualFps), children: busy ? t.applying : t.targetApply }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyFpsTarget(null), children: busy ? t.applying : t.targetAuto }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.telemetry, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: runtimeTitle }), runtime ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, runtime.last_action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(runtime.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(runtime.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(runtime.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.classifications, runtime.classification_primary) }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, runtime.last_reason) }), SP_JSX.jsxs("div", { style: detailStyle, children: ["Render: ", fmtPercent(runtime.render_busy)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.learning, ": ", learningText(t, runtime.learning)] })] })) : (SP_JSX.jsx("div", { style: detailStyle, children: busy ? t.loading : t.noSample }))] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: load, children: busy ? t.applying : t.refresh }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: restore, children: busy ? t.applying : t.restore }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.manualProbe, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: probeTitle }), SP_JSX.jsx("div", { style: detailStyle, children: t.probeNotice }), sample ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, sample.action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(sample.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(sample.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(sample.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, sample.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, sample.frame_source) }), sample.reason ? (SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, sample.reason) })) : null] })) : null] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: readProbe, children: busy ? t.applying : t.readProbe }) })] })] }));
+                                        : t.unavailable }), status ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.serviceState, ": ", status.active_state, "/", status.sub_state] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.policyLabels, status.policy_label) }), SP_JSX.jsx("div", { style: detailStyle, children: modeDescription(t, status.mode) }), SP_JSX.jsx("div", { style: detailStyle, children: runtimeHeadline(t, status.mode, runtime) }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.evidenceLabel, ": ", evidenceText(t, runtime?.evidence_readiness)] }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, runtime?.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, runtime?.frame_source) }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.learning, ": ", learningText(t, runtime?.learning)] })] })) : null, notice ? SP_JSX.jsx("div", { style: detailStyle, children: notice }) : null, error ? (SP_JSX.jsxs("div", { role: "alert", style: detailStyle, children: [t.errorPrefix, ": ", error] })) : null] }) }) }), SP_JSX.jsxs(DFL.PanelSection, { title: t.control, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("automatic"), children: busy ? t.applying : t.modes.automatic }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("observe"), children: busy ? t.applying : t.modes.observe }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("off"), children: busy ? t.applying : t.modes.off }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsxs("div", { className: DFL.staticClasses.Title, style: titleStyle, children: [t.fpsTarget, ": ", manualFps, " FPS"] }), SP_JSX.jsx("div", { style: detailStyle, children: targetMode }), SP_JSX.jsxs("div", { style: detailStyle, children: [supportedMin, "-", supportedMax, " FPS / ", supportedStep] }), SP_JSX.jsx("input", { "aria-label": t.targetManual, type: "range", min: 30, max: 120, step: 5, value: manualFps, style: sliderStyle, onChange: (event) => setManualFps(Number(event.currentTarget.value)) })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyFpsTarget(manualFps), children: busy ? t.applying : t.targetApply }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyFpsTarget(null), children: busy ? t.applying : t.targetAuto }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.personaTitle, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsxs("div", { style: detailStyle, children: [t.personaCurrent, ": ", currentPersona ? personaLabel(t, currentPersona) : t.personaAuto] }), SP_JSX.jsx("div", { style: detailStyle, children: t.personaProvisional })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyPersona("battery"), children: busy ? t.applying : t.personaLabels.battery }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyPersona("ac-quiet"), children: busy ? t.applying : t.personaLabels["ac-quiet"] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyPersona("ac-performance"), children: busy ? t.applying : t.personaLabels["ac-performance"] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyPersona(null), children: busy ? t.applying : t.personaAuto }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.limiterTitle, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { style: detailStyle, children: t.limiterConsentNote }), SP_JSX.jsx("div", { style: detailStyle, children: limiterStateText(t, limiter) })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => runLimiter("read"), children: busy ? t.applying : t.limiterRead }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => runLimiter("apply"), children: busy ? t.applying : `${t.limiterApply}: ${manualFps} FPS` }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => runLimiter("clear"), children: busy ? t.applying : t.limiterClear }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.telemetry, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: runtimeTitle }), runtime ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, runtime.last_action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(runtime.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(runtime.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(runtime.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.classifications, runtime.classification_primary) }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, runtime.last_reason) }), SP_JSX.jsxs("div", { style: detailStyle, children: ["Render: ", fmtPercent(runtime.render_busy)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.learning, ": ", learningText(t, runtime.learning)] }), SP_JSX.jsx(TargetBalanceLiveRow, { t: t, runtime: runtime }), SP_JSX.jsx(TargetBalanceDetails, { t: t, runtime: runtime })] })) : (SP_JSX.jsx("div", { style: detailStyle, children: busy ? t.loading : t.noSample }))] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: load, children: busy ? t.applying : t.refresh }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: restore, children: busy ? t.applying : t.restore }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.manualProbe, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: probeTitle }), SP_JSX.jsx("div", { style: detailStyle, children: t.probeNotice }), sample ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, sample.action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(sample.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(sample.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(sample.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, sample.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, sample.frame_source) }), sample.reason ? (SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, sample.reason) })) : null] })) : null] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: readProbe, children: busy ? t.applying : t.readProbe }) })] })] }));
 };
 var index = definePlugin(() => ({
     name: "Game Power",

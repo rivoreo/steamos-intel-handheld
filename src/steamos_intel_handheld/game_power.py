@@ -10,6 +10,7 @@ import fcntl
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -19,10 +20,33 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
+from .game_power_cgroup_writers import (
+    ForegroundUclampMinWriter,
+    apply_background_shaping_to_cgroups,
+    is_background_shaping_write_target,
+    restore_background_shaping_from_report,
+)
+from .game_power_coloring import (
+    COLOR_LEDGER_TID_BUDGET,
+    ColorLedgerEntry,
+    aggregate_role_observations,
+    build_color_ledger,
+    cap_thread_samples,
+    is_compositor_role,
+    resolve_ledger_actuators,
+)
+from .game_power_gpu import GpuFreqActuator, discover_gpu_gts
+
 MICROJOULES_PER_JOULE = 1_000_000
 RUNTIME_SNAPSHOT_SCHEMA_VERSION = "game-power-runtime-snapshot-v1"
 DEFAULT_RUNTIME_SNAPSHOT_FILE = Path(
     "/run/steamos-intel-handheld/game-power-runtime.json"
+)
+DEFAULT_VERDICT_LEDGER_FILE = Path(
+    "/var/lib/steamos-intel-handheld/game-power-verdicts.json"
+)
+DEFAULT_VERDICT_LEDGER_RUN_FALLBACK = Path(
+    "/run/steamos-intel-handheld/game-power-verdicts.json"
 )
 
 
@@ -30,6 +54,19 @@ class GamePowerMode(str, Enum):
     OFF = "off"
     OBSERVE = "observe"
     GPU_PRIORITY = "gpu-priority"
+    TARGET_BALANCE = "target-balance"
+
+
+class GamePowerPersona(str, Enum):
+    """V10 persona (plan section 0). Resolved from power source + override.
+
+    Default mapping: battery power -> ``battery``; AC power -> ``ac-performance``
+    (conservative: AC behavior is unchanged until the user opts into quiet).
+    """
+
+    BATTERY = "battery"
+    AC_QUIET = "ac-quiet"
+    AC_PERFORMANCE = "ac-performance"
 
 
 class GamePowerAction(str, Enum):
@@ -38,6 +75,49 @@ class GamePowerAction(str, Enum):
     GPU_PRIORITY_EPP = "gpu-priority-epp"
     GPU_PRIORITY_CPU_CAP = "gpu-priority-cpu-cap"
     RESTORE = "restore"
+    TARGET_BALANCE_TRIM = "target-balance-trim"
+    TARGET_BALANCE_RELEASE = "target-balance-release"
+    LOADING_BOOST = "loading-boost"
+
+
+class GamePowerPhase(str, Enum):
+    NO_GAME = "no-game"
+    LOADING = "loading"
+    BELOW_TARGET_CPU_BOUND = "below-target-cpu-bound"
+    BELOW_TARGET_GPU_BOUND = "below-target-gpu-bound"
+    AT_TARGET = "at-target"
+    ABOVE_TARGET = "above-target"
+    NO_TARGET = "no-target"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class GamePowerActuation:
+    """Desired absolute per-class CPU policy layered on top of the baseline snapshot.
+
+    ``None`` fields mean "leave the baseline value"; a non-``None`` field is the
+    target value for that policy class. All target-balance writes are expressed
+    as absolute state so any phase/step transition is a restore-to-baseline plus
+    apply, which makes step-down and phase changes correct by construction.
+    """
+
+    pcore_epp: str | None = None
+    ecore_epp: str | None = None
+    pcore_max_khz: int | None = None
+    ecore_max_khz: int | None = None
+    # --- V10 additive: GPU envelope + soft-PL1 overlay (contracts 1.2/1.3/1.4).
+    # ``None`` means "leave the baseline value" exactly as the CPU fields do, so
+    # gpu-priority (which never sets these) stays byte-identical. GPU frequencies
+    # are expressed in MHz (native xe sysfs unit); soft-PL1 in whole watts. ---
+    gpu_max_mhz: int | None = None
+    gpu_min_mhz: int | None = None
+    soft_pl1_w: int | None = None
+    # D6: a G-rung expresses its GPU cap as a fraction of rp0, not an absolute
+    # MHz, because the two GTs have different rp0 (render gt0 1950, media gt1
+    # 1200) and each must be trimmed from its OWN rp0. The actuator derives the
+    # per-GT absolute cap; ``gpu_max_mhz`` remains for any absolute-MHz caller
+    # (e.g. a fixed profiler sweep). ``gpu_max_ratio`` wins over ``gpu_max_mhz``.
+    gpu_max_ratio: float | None = None
 
 
 @dataclass(frozen=True)
@@ -214,7 +294,7 @@ def frame_source_state_from_telemetry(
 
 
 def public_game_power_mode(mode: GamePowerMode) -> str:
-    if mode == GamePowerMode.GPU_PRIORITY:
+    if mode in (GamePowerMode.GPU_PRIORITY, GamePowerMode.TARGET_BALANCE):
         return "automatic"
     return mode.value
 
@@ -290,6 +370,119 @@ class MangoHudCsvFramePerformanceReader:
                 )
                 rows.append((fps, frametime, elapsed))
         return rows
+
+
+FRAME_FEED_SCHEMA = "steamos-intel-handheld-frame-feed-v1"
+
+
+@dataclass(frozen=True)
+class FrameFeedFast:
+    """Cheap fast-lane view of the frame feed (contract 1.5)."""
+
+    status: str  # "live" | "stale" | "absent"
+    last_frame_ms: float | None = None
+    spike_worst_ms: float | None = None
+    avg_fps: float | None = None
+
+
+class FrameFeedReader:
+    """Daemon-side reader for the mangoapp frame feed (contract 1.1).
+
+    Reads ``$XDG_RUNTIME_DIR/steamos-intel-handheld/frame-feed.json`` (path
+    injected). A record is *stale* when ``updated_monotonic_s`` is older than
+    ``stale_s`` against the injected CLOCK_MONOTONIC clock. Stale / missing /
+    corrupt all resolve to feed *absent* so the observer falls back to exact V9
+    behaviour (MangoHud CSV when configured, else NO_TARGET degradation). When
+    the feed is present and fresh, :meth:`read` upgrades the frame telemetry to
+    source ``mangoapp-feed`` with high confidence.
+    """
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        stale_s: float = 5.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.path = Path(path)
+        self.stale_s = float(stale_s)
+        self.clock = clock
+        self._last_status = "absent"
+
+    @property
+    def last_status(self) -> str:
+        return self._last_status
+
+    def _load(self) -> dict[str, object] | None:
+        try:
+            payload = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("schema") != FRAME_FEED_SCHEMA:
+            return None
+        return payload
+
+    def _fresh_payload(self) -> dict[str, object] | None:
+        """Return the payload only when present and fresh; set ``_last_status``."""
+
+        payload = self._load()
+        if payload is None:
+            self._last_status = "absent"
+            return None
+        updated = _float_or_none(payload.get("updated_monotonic_s"))
+        if updated is None:
+            self._last_status = "absent"
+            return None
+        if float(self.clock()) - updated > self.stale_s:
+            self._last_status = "stale"
+            return None
+        self._last_status = "live"
+        return payload
+
+    def status(self) -> str:
+        self._fresh_payload()
+        return self._last_status
+
+    def read(self) -> FramePerformanceTelemetry | None:
+        payload = self._fresh_payload()
+        if payload is None:
+            return None
+        avg_fps = _finite_positive_float_or_none(payload.get("avg_fps"))
+        p95 = _finite_positive_float_or_none(payload.get("p95_frame_ms"))
+        if avg_fps is None or p95 is None:
+            # Present but unusable numbers -> treat as absent (V9 fallback).
+            self._last_status = "absent"
+            return None
+        frame_count = payload.get("frame_count")
+        sample_count = int(frame_count) if isinstance(frame_count, int) else 0
+        window_s = _float_or_none(payload.get("window_s"))
+        return FramePerformanceTelemetry(
+            avg_fps=round(avg_fps, 3),
+            p95_frame_ms=round(p95, 3),
+            sample_count=sample_count,
+            window_s=round(window_s, 3) if window_s is not None else None,
+            source="mangoapp-feed",
+            confidence="high",
+        )
+
+    def read_fast(self) -> FrameFeedFast:
+        payload = self._fresh_payload()
+        if payload is None:
+            return FrameFeedFast(status=self._last_status)
+        spike = payload.get("spike")
+        spike_worst = (
+            _finite_positive_float_or_none(spike.get("worst_ms"))
+            if isinstance(spike, dict)
+            else None
+        )
+        return FrameFeedFast(
+            status="live",
+            last_frame_ms=_finite_positive_float_or_none(payload.get("last_frame_ms")),
+            spike_worst_ms=spike_worst,
+            avg_fps=_finite_positive_float_or_none(payload.get("avg_fps")),
+        )
 
 
 def _row_value(row: list[str], index: int | None) -> str | None:
@@ -400,11 +593,24 @@ class CpuPolicy:
     current_epp: str | None
     scaling_min_freq: int | None
     scaling_max_freq: int | None
+    # Immutable ceiling reported by the CPU/firmware. Used for the topology
+    # fingerprint so a runtime scaling_max_freq write (the ladder itself, or a
+    # user freq limit) cannot silently diverge the fingerprint (defect C15).
+    cpuinfo_max_freq: int | None = None
 
 
 @dataclass(frozen=True)
 class CpuPolicySnapshot:
     values: dict[str, tuple[str | None, int | None]]
+
+
+# F1: PCORE classification tolerance. Real Lunar Lake hardware reports slightly
+# different capacities within the P-core class (cpu0/1 = 1005 vs cpu2/3 = 1024
+# on the MSI Claw 8 AI+), so exact equality with the max misclassifies two real
+# P-cores as ECORE (they then get the E-core ladder caps and EPP). Anything at
+# or above 85% of the max capacity is a P-core; E-cores sit far below on every
+# supported hybrid part (676/1024 = 0.66).
+PCORE_CAPACITY_RATIO = 0.85
 
 
 def discover_cpu_policies(sysfs_root: str | Path = "/sys") -> list[CpuPolicy]:
@@ -420,7 +626,7 @@ def discover_cpu_policies(sysfs_root: str | Path = "/sys") -> list[CpuPolicy]:
         capacity = capacities[path.name]
         if max_capacity is None or capacity is None:
             policy_class = CpuPolicyClass.UNKNOWN
-        elif capacity == max_capacity:
+        elif capacity >= PCORE_CAPACITY_RATIO * max_capacity:
             policy_class = CpuPolicyClass.PCORE
         else:
             policy_class = CpuPolicyClass.ECORE
@@ -437,6 +643,7 @@ def discover_cpu_policies(sysfs_root: str | Path = "/sys") -> list[CpuPolicy]:
                 current_epp=_read_optional_text(path / "energy_performance_preference"),
                 scaling_min_freq=_read_optional_int(path / "scaling_min_freq"),
                 scaling_max_freq=_read_optional_int(path / "scaling_max_freq"),
+                cpuinfo_max_freq=_read_optional_int(path / "cpuinfo_max_freq"),
             )
         )
     return policies
@@ -510,24 +717,63 @@ class CpuPolicyActuator:
     def apply(
         self,
         *,
-        epp: str,
+        epp: str | None = None,
+        pcore_epp: str | None = None,
+        ecore_epp: str | None = None,
         pcore_max_khz: int | None = None,
         ecore_max_khz: int | None = None,
     ) -> None:
         for policy in self.policies:
-            if epp and epp in policy.available_epp:
-                _write_if_changed(policy.path / "energy_performance_preference", epp)
+            target_epp = _epp_for_policy(policy, epp, pcore_epp, ecore_epp)
+            if target_epp and target_epp in policy.available_epp:
+                _write_if_changed(
+                    policy.path / "energy_performance_preference", target_epp
+                )
             cap = _cap_for_policy(policy, pcore_max_khz, ecore_max_khz)
             if cap is not None:
                 _write_if_changed(policy.path / "scaling_max_freq", str(cap))
 
-    def restore(self, snapshot: CpuPolicySnapshot) -> None:
+    def restore(self, snapshot: CpuPolicySnapshot) -> list[str]:
+        """Restore snapshot values with readback verification (F2).
+
+        Every write is verified by readback (the write is skipped only when the
+        pre-read already matches), retried once on mismatch, and failures are
+        collected instead of silently ignored. Returns the list of control-file
+        paths that could not be verified as restored (empty on success).
+        """
+
+        failed: list[str] = []
         for policy in self.policies:
             epp, max_freq = snapshot.values.get(policy.name, (None, None))
-            if epp is not None:
-                _write_if_changed(policy.path / "energy_performance_preference", epp)
-            if max_freq is not None:
-                _write_if_changed(policy.path / "scaling_max_freq", str(max_freq))
+            # F2.3: restore scaling_max_freq BEFORE the EPP for each policy --
+            # a leftover frequency cap is the harmful residue, a leftover EPP
+            # is benign, so the cap gets the first (least interruptible) write.
+            if max_freq is not None and not _restore_verified(
+                policy.path / "scaling_max_freq", str(max_freq)
+            ):
+                failed.append(str(policy.path / "scaling_max_freq"))
+            if epp is not None and not _restore_verified(
+                policy.path / "energy_performance_preference", epp
+            ):
+                failed.append(str(policy.path / "energy_performance_preference"))
+        return failed
+
+
+def _epp_for_policy(
+    policy: CpuPolicy,
+    epp: str | None,
+    pcore_epp: str | None,
+    ecore_epp: str | None,
+) -> str | None:
+    if pcore_epp is None and ecore_epp is None:
+        return epp
+    if policy.policy_class == CpuPolicyClass.PCORE:
+        return pcore_epp if pcore_epp is not None else epp
+    if policy.policy_class == CpuPolicyClass.ECORE:
+        return ecore_epp if ecore_epp is not None else epp
+    if pcore_epp == ecore_epp:
+        return pcore_epp
+    return epp
 
 
 def _cap_for_policy(
@@ -546,6 +792,26 @@ def _write_if_changed(path: Path, value: str) -> None:
     if _read_text(path) == value:
         return
     path.write_text(value)
+
+
+def _restore_verified(path: Path, value: str, *, attempts: int = 2) -> bool:
+    """Write ``value`` and verify by readback; retry once on mismatch (F2).
+
+    The write is skipped only when the pre-read already matches. Any write
+    error or persistent readback mismatch returns ``False`` so the caller can
+    fail loudly instead of leaving a silent partial restore behind.
+    """
+
+    for _ in range(max(1, attempts)):
+        try:
+            if path.read_text().strip() == value:
+                return True
+            path.write_text(value)
+            if path.read_text().strip() == value:
+                return True
+        except OSError:
+            continue
+    return False
 
 
 RAPL_NAME_MAP = {
@@ -644,6 +910,94 @@ class GamePowerConfig:
     fps_target_satisfied_p95_ratio: float = 1.15
     frame_performance_min_samples: int = 12
     runtime_control_health: dict[str, object] | None = None
+    # --- V9 target-balance: phase machine (section 4) ---
+    phase_stable_samples: int = 3
+    above_target_fps_ratio: float = 1.25
+    loading_launch_grace_s: float = 30.0
+    loading_exit_samples: int = 5
+    loading_boost_max_s: float = 180.0
+    loading_frame_stall_s: float = 2.0
+    loading_cpu_psi_avg10_threshold: float = 40.0
+    loading_core_share_threshold: float = 0.50
+    loading_low_fps_ratio: float = 0.50
+    loading_render_busy_threshold: float = 0.30
+    loading_exit_fps_ratio: float = 0.70
+    below_target_cpu_core_share_threshold: float = 0.35
+    below_target_cpu_runqueue_wait_ms_threshold: float = 50.0
+    below_target_cpu_render_busy_threshold: float = 0.60
+    below_target_cpu_core_share_high_threshold: float = 0.45
+    # --- V9 target-balance: per-class EPP (section 5) ---
+    loading_pcore_epp: str = "performance"
+    loading_ecore_epp: str = "balance_performance"
+    below_target_cpu_pcore_epp: str = "performance"
+    below_target_cpu_ecore_epp: str = "balance_power"
+    # --- V9 target-balance: convergence ladder (section 7) ---
+    ladder_hold_samples: int = 15
+    ladder_backoff_s: float = 300.0
+    ladder_p95_guard_ratio: float = 1.10
+    ladder_pcore_epp: str = "balance_power"
+    ladder_ecore_epp: str = "balance_power"
+    ladder_s3_pcore_max_khz: int = 4_000_000
+    ladder_s4_pcore_max_khz: int = 3_000_000
+    ladder_s4_ecore_max_khz: int = 2_400_000
+    # S5+ deeper caps unlocked only by a BETTER verdict entry (section 7/8).
+    ladder_s5_pcore_max_khz: int = 2_600_000
+    ladder_s5_ecore_max_khz: int = 2_000_000
+    # Profiler-only unlock for the target-balance-ladder5 candidate policy
+    # (CLI --allow-ladder-step-5). The daemon service never sets this; it lets a
+    # controlled run gather the evidence a ladder-step-5 verdict requires.
+    allow_ladder_step_5: bool = False
+    # --- V9 gated lanes (section 8) ---
+    foreground_uclamp_min_floor: str = "25.00"
+    background_shaping_variant: str = "uclamp-max-85"
+    # --- V9 coloring cadence (section 6) ---
+    colorize_interval_s: float = 10.0
+    # --- V10 persona (plan section 0) ---
+    persona: GamePowerPersona = GamePowerPersona.BATTERY
+    # --- V10 frame feed (contract 1.1) ---
+    frame_feed_file: str | None = None
+    frame_feed_stale_s: float = 5.0
+    # --- V10 GPU cap rungs G1/G2/G3 (contract 1.4): max_freq = rp0 * (1-ratio) ---
+    # Defaults sized to the measured 17W/60fps pacing plateau: the cap holds to
+    # rp0*0.69 (~1350 MHz, -31% depth) before the knee, so the battery rungs stop
+    # at G3 -30%. The old -45% depth landed ~1072 MHz -> ~50 fps (breaks pacing)
+    # and is now reachable only as the verdict-gated deep rung G4CAP below.
+    gpu_cap_g1_ratio: float = 0.12
+    gpu_cap_g2_ratio: float = 0.22
+    gpu_cap_g3_ratio: float = 0.30
+    # Verdict-gated deep GPU cap (G4CAP): the -45% depth, unlocked only by a
+    # matching ``gpu-cap`` BETTER verdict (same mechanism as S3CAP/S4CAP).
+    gpu_cap_g4_ratio: float = 0.45
+    # --- V10 soft-PL1 rungs P1/P2/P3 (contracts 1.3/1.4) ---
+    # P1 = min(user_slider - slider_margin, ceil(package median) + headroom) so it
+    # always starts BELOW the user slider (the shipped ceil(median+headroom) sat
+    # >= slider on a PL1-pinned scene and clamped to a no-op). P2 = P1 - p2 step;
+    # P3 = P1 - p3 step. Effective soft-PL1 is floored at soft_pl1_floor_w. The
+    # p95 guard stops the descent (knee at ~slider-2 on the probed scene); the
+    # step depth is not hardcoded to that knee.
+    soft_pl1_floor_w: int = 8
+    soft_pl1_p1_headroom_w: float = 1.5
+    soft_pl1_p1_slider_margin_w: float = 1.0
+    soft_pl1_p2_step_w: float = 1.0
+    soft_pl1_p3_step_w: float = 2.0
+    # --- V10 CPU EPP rungs C1 (ecore)/C2 (pcore) (contract 1.4) ---
+    trim_ecore_epp: str = "balance_power"
+    trim_pcore_epp: str = "balance_power"
+    # Profiler-only rung-subset filter (CLI --trim-rungs). ``None`` keeps the
+    # full persona sequence (daemon default, byte-identical to V10 Slice A). When
+    # set it is a tuple of allowed rung-id first letters (e.g. ("G",) keeps only
+    # G-rungs) so the profiler can isolate a single lane for A/B evidence
+    # (v10-gpu-cap / v10-soft-pl1). The daemon service never sets this.
+    trim_rung_filter: tuple[str, ...] | None = None
+    # --- V10 persona guard bands (contract 1.4): ac-quiet holds a wider p95
+    # guard than battery so fan noise, not the wall, is the constraint. ---
+    ac_quiet_p95_guard_ratio: float = 1.20
+    # --- V10 fast boost lane (contract 1.5) ---
+    fast_poll_s: float = 0.25
+    spike_boost_ratio: float = 1.5
+    psi_boost_delta: float = 15.0
+    boost_hold_s: float = 3.0
+    gpu_boost_floor_ratio: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -655,6 +1009,24 @@ class GamePowerSample:
     frame_target: FrameTargetTelemetry | None = None
     frame_performance: FramePerformanceTelemetry | None = None
     pressure: PressureTelemetry | None = None
+    foreground_runqueue_wait_ms_per_s: float | None = None
+    foreground_process_age_s: float | None = None
+    frame_feed_stalled: bool | None = None
+    # --- V9 coloring (section 6): raw per-role color observations from the
+    # observer's colorize cadence, plus the writable allowlist cgroups the
+    # background-shaping gated lane may target (section 8). ---
+    color_ledger_entries: tuple[object, ...] | None = None
+    color_ledger_truncated: bool = False
+    allowlist_cgroups: tuple[dict[str, object], ...] = ()
+    foreground_cgroup_path: str | None = None
+    # --- V10 additive (contracts 1.1/1.2/1.4). All optional so gpu-priority and
+    # V9 target-balance samples are unaffected. GPU bounds (rp0/rpe MHz) size the
+    # G-rungs and the boost floor; package_median_w sizes the P-rungs; the frame
+    # feed status feeds telemetry v3. ---
+    gpu_rp0_mhz: int | None = None
+    gpu_rpe_mhz: int | None = None
+    package_median_w: float | None = None
+    frame_feed_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -662,6 +1034,25 @@ class GamePowerDecision:
     action: GamePowerAction
     reason: str
     classification: GamePowerClassification | None = None
+    phase: GamePowerPhase | None = None
+    phase_reason_codes: tuple[str, ...] = ()
+    ladder_step: int | None = None
+    actuation: GamePowerActuation | None = None
+    # --- V9 additive telemetry (target-balance only) ---
+    color_ledger: dict[str, object] | None = None
+    verdict_ledger_health: dict[str, object] | None = None
+    gated_lanes: dict[str, object] | None = None
+    # --- V10 additive telemetry v3 (target-balance only; contract 1.7). All
+    # default None so gpu-priority JSONL/snapshots stay byte-identical (same
+    # only-when-not-None pattern as the V9 additive fields). ---
+    persona: str | None = None
+    soft_pl1_w: int | None = None
+    gpu_freq_caps: dict[str, object] | None = None
+    boost_active: bool | None = None
+    boost_reason: str | None = None
+    trim_rungs_active: list[str] | None = None
+    frame_feed_status: str | None = None
+    limiter_state: str | None = None
 
 
 DEFAULT_GAME_POWER_POLICY_VERSION = "game-power-sampling-v1"
@@ -1310,6 +1701,116 @@ def _sample_fps_target_satisfied(config: GamePowerConfig, sample: GamePowerSampl
     )
 
 
+def _foreground_cpu_psi_avg10(pressure: PressureTelemetry | None) -> float | None:
+    if pressure is None:
+        return None
+    for signal in pressure.cpu:
+        if signal.scope == "foreground_cgroup" and signal.supported:
+            return signal.some_avg10
+    return None
+
+
+def classify_game_power_phase(
+    config: GamePowerConfig,
+    sample: GamePowerSample,
+) -> tuple[GamePowerPhase, tuple[str, ...]]:
+    """Instantaneous (pre-hysteresis) phase classification (design section 4).
+
+    Returns the raw phase for this tick plus reason codes. Hysteresis, loading
+    budget, and ladder control live in :class:`GamePowerController`.
+    """
+
+    if sample.appid is None:
+        return GamePowerPhase.NO_GAME, ("no-foreground-game",)
+
+    target = target_state_from_telemetry(sample.frame_target)
+    if target.status != "known":
+        return GamePowerPhase.NO_TARGET, ("target-unknown-or-unlimited",)
+
+    fps_target = target.fps
+    rapl = sample.rapl
+    core_share = rapl.core_share if rapl is not None else None
+    uncore_share = rapl.uncore_share if rapl is not None else None
+    package_w = rapl.package_w if rapl is not None else None
+    render_busy = sample.fdinfo_busy.get("render")
+    avg_fps = (
+        sample.frame_performance.avg_fps
+        if sample.frame_performance is not None
+        else None
+    )
+    cpu_psi = _foreground_cpu_psi_avg10(sample.pressure)
+
+    # LOADING has highest priority when a target exists (design section 4/5, P1).
+    loading_reasons: list[str] = []
+    if (
+        sample.foreground_process_age_s is not None
+        and sample.foreground_process_age_s < config.loading_launch_grace_s
+    ):
+        loading_reasons.append("launch-grace")
+    stalled = bool(sample.frame_feed_stalled)
+    high_core = core_share is not None and core_share > config.loading_core_share_threshold
+    high_psi = cpu_psi is not None and cpu_psi > config.loading_cpu_psi_avg10_threshold
+    # C6: the stall trigger must not fire while the game is comfortably at target
+    # with a slow-updating frame aggregate (launch-grace and low-fps unchanged).
+    if (
+        stalled
+        and (high_psi or high_core)
+        and not _sample_fps_target_satisfied(config, sample)
+    ):
+        loading_reasons.append("frame-feed-stalled")
+    if (
+        avg_fps is not None
+        and fps_target is not None
+        and avg_fps < config.loading_low_fps_ratio * fps_target
+        and render_busy is not None
+        and render_busy < config.loading_render_busy_threshold
+        and core_share is not None
+        and core_share > config.loading_core_share_threshold
+    ):
+        loading_reasons.append("asset-shader-burst")
+    if loading_reasons:
+        return GamePowerPhase.LOADING, tuple(loading_reasons)
+
+    if _sample_fps_target_satisfied(config, sample):
+        if (
+            avg_fps is not None
+            and fps_target is not None
+            and avg_fps >= config.above_target_fps_ratio * fps_target
+        ):
+            return GamePowerPhase.ABOVE_TARGET, ("above-target-fps",)
+        return GamePowerPhase.AT_TARGET, ("fps-target-satisfied",)
+
+    # Not satisfied: identify the bound resource.
+    gpu_bound = (
+        render_busy is not None and render_busy >= config.render_busy_threshold
+    ) or (
+        uncore_share is not None
+        and uncore_share >= config.uncore_share_threshold
+        and package_w is not None
+        and sample.pl1_w is not None
+        and package_w >= config.package_pressure_ratio * sample.pl1_w
+    )
+    if gpu_bound:
+        return GamePowerPhase.BELOW_TARGET_GPU_BOUND, ("gpu-bound",)
+
+    runqueue_wait = sample.foreground_runqueue_wait_ms_per_s
+    cpu_bound = (
+        core_share is not None
+        and core_share >= config.below_target_cpu_core_share_threshold
+        and runqueue_wait is not None
+        and runqueue_wait >= config.below_target_cpu_runqueue_wait_ms_threshold
+    ) or (
+        render_busy is not None
+        and render_busy < config.below_target_cpu_render_busy_threshold
+        and core_share is not None
+        and core_share >= config.below_target_cpu_core_share_high_threshold
+    )
+    if cpu_bound:
+        return GamePowerPhase.BELOW_TARGET_CPU_BOUND, ("cpu-bound",)
+
+    return GamePowerPhase.UNKNOWN, ("no-bound-signal",)
+
+
 def _frame_target_evidence(sample: GamePowerSample) -> dict[str, object]:
     target = sample.frame_target
     performance = sample.frame_performance
@@ -1383,15 +1884,277 @@ def _pressure_thresholds(resource: str) -> tuple[float, float]:
     return (1.0, 0.2)
 
 
+# V10 TrimLadder rung sequences (contract 1.4). Each rung is one demand-shaping
+# step applied cumulatively; climbing to step k means rungs[:k] are all active.
+#   G1/G2/G3  GPU max_freq capped to rp0 * (1 - ratio)
+#   P1/P2/P3  soft-PL1 overlay = ceil(package median + headroom), stepped down
+#   C1/C2     ecore then pcore EPP -> balance_power
+# The V9 S3/S4 CPU-frequency caps are dropped from the battery sequence (S4 p95
+# regression, direction 1b) and available only as verdict-gated deep rungs.
+_BATTERY_RUNGS = ("G1", "G2", "G3", "P1", "P2", "P3", "C1", "C2")
+_AC_QUIET_RUNGS = _BATTERY_RUNGS
+_AC_PERFORMANCE_RUNGS = ("C1", "C2")
+_DEEP_CPU_CAP_RUNGS = ("S3CAP", "S4CAP")
+# Verdict actuator string (and profiler --allow-ladder-step-5 flag) that unlocks
+# the deep CPU-frequency-cap rungs on battery / ac-quiet.
+_DEEP_CPU_CAP_VERDICT = "ladder-step-5"
+# Verdict-gated deep GPU cap rung: the -45% depth beyond the measured pacing
+# plateau, unlocked only by a matching ``gpu-cap`` BETTER verdict (the daemon now
+# consumes gpu-cap verdicts, mirroring the S3CAP/S4CAP mechanism above).
+_DEEP_GPU_CAP_RUNGS = ("G4CAP",)
+_DEEP_GPU_CAP_VERDICT = "gpu-cap"
+
+
+def _persona_base_rungs(persona: GamePowerPersona) -> tuple[str, ...]:
+    if persona == GamePowerPersona.AC_PERFORMANCE:
+        return _AC_PERFORMANCE_RUNGS
+    return _BATTERY_RUNGS
+
+
+# Profiler-only rung-subset selection (CLI --trim-rungs). Maps a user-facing
+# selector to the set of allowed rung-id first letters. ``all`` == no filter, so
+# the daemon default path stays byte-identical. Each rung id begins with its
+# kind letter (G1/P2/C1/S3CAP), so first-letter membership isolates a lane.
+_TRIM_RUNG_FILTERS: dict[str, tuple[str, ...] | None] = {
+    "all": None,
+    "G": ("G",),
+    "P": ("P",),
+    "GPC1C2": ("G", "P", "C"),
+}
+
+
+def _filter_rungs(
+    rungs: tuple[str, ...], allowed_first_letters: tuple[str, ...] | None
+) -> tuple[str, ...]:
+    if allowed_first_letters is None:
+        return rungs
+    return tuple(rung for rung in rungs if rung[:1] in allowed_first_letters)
+
+
+def _actuation_for_gpu_priority_action(
+    action: GamePowerAction,
+    config: GamePowerConfig,
+) -> GamePowerActuation | None:
+    """Translate a V7 gpu-priority decision into the absolute actuation model.
+
+    Used by the target-balance ``NO_TARGET``/``NO_GAME`` fallback so V7 behavior
+    flows through the same restore/apply path as every other target-balance
+    write.
+    """
+
+    if action == GamePowerAction.GPU_PRIORITY_EPP:
+        return GamePowerActuation(pcore_epp=config.epp, ecore_epp=config.epp)
+    if action == GamePowerAction.GPU_PRIORITY_CPU_CAP:
+        return GamePowerActuation(
+            pcore_epp=config.epp,
+            ecore_epp=config.epp,
+            pcore_max_khz=config.pcore_max_khz,
+            ecore_max_khz=config.ecore_max_khz,
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# V9 verdict ledger (design section 8): the authoritative unlock for gated
+# write lanes. Read-only for the daemon, fail-closed on any problem.
+# ---------------------------------------------------------------------------
+GAME_POWER_POLICY_VERSION_V9 = "game-power-target-balance-v9"
+VERDICT_TDP_BUCKETS_W = (12, 17, 22, 30)
+VERDICT_TDP_TOLERANCE_W = 2
+
+
+def topology_fingerprint(policies: Iterable[CpuPolicy]) -> str:
+    """Deterministic fingerprint from sorted (cpu, capacity, max_khz) + layout.
+
+    Example shape ``4p4e-nosmt-<sha256[:8]>`` (design section 8).
+    """
+
+    cpu_tuples: list[tuple[int, int | None, int | None]] = []
+    pcore = 0
+    ecore = 0
+    smt = False
+    for policy in sorted(
+        policies,
+        key=lambda p: min(p.affected_cpus) if p.affected_cpus else -1,
+    ):
+        if len(policy.affected_cpus) > 1:
+            smt = True
+        # C15: hash the immutable ceiling; fall back to scaling_max_freq only
+        # when cpuinfo_max_freq is unavailable (prefer consistency).
+        max_freq = (
+            policy.cpuinfo_max_freq
+            if policy.cpuinfo_max_freq is not None
+            else policy.scaling_max_freq
+        )
+        for cpu in sorted(policy.affected_cpus):
+            cpu_tuples.append((cpu, policy.capacity, max_freq))
+        if policy.policy_class == CpuPolicyClass.PCORE:
+            pcore += 1
+        elif policy.policy_class == CpuPolicyClass.ECORE:
+            ecore += 1
+    payload = json.dumps(
+        {"cpus": cpu_tuples, "pcore": pcore, "ecore": ecore},
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(payload.encode()).hexdigest()[:8]
+    return f"{pcore}p{ecore}e-{'smt' if smt else 'nosmt'}-{digest}"
+
+
+def verdict_tdp_bucket(pl1_w: int | float | None) -> int | None:
+    """Nearest of 12/17/22/30 W within +-2 W, else ``None`` (design section 8)."""
+
+    if pl1_w is None or not math.isfinite(pl1_w):
+        return None
+    nearest = min(VERDICT_TDP_BUCKETS_W, key=lambda bucket: abs(bucket - pl1_w))
+    if abs(nearest - pl1_w) > VERDICT_TDP_TOLERANCE_W:
+        return None
+    return nearest
+
+
+def read_kernel_release(proc_root: str | Path = "/proc") -> str:
+    return _read_text(Path(proc_root) / "sys" / "kernel" / "osrelease")
+
+
+@dataclass(frozen=True)
+class GamePowerVerdictEnv:
+    topology_fingerprint: str
+    kernel: str
+    policy_version: str = GAME_POWER_POLICY_VERSION_V9
+
+
+class GamePowerVerdictLedger:
+    """Read-only verdict ledger with mtime reload and fail-closed lookups."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        fallback_path: str | Path | None = None,
+    ) -> None:
+        self.path = Path(path)
+        self.fallback_path = Path(fallback_path) if fallback_path is not None else None
+        self._entries: tuple[dict[str, object], ...] = ()
+        self._status = "unavailable"
+        self._reason = "not-loaded"
+        self._loaded_path: Path | None = None
+        self._mtime: float | None = None
+        self._load()
+
+    def _active_path(self) -> Path | None:
+        if self.path.exists():
+            return self.path
+        if self.fallback_path is not None and self.fallback_path.exists():
+            return self.fallback_path
+        return None
+
+    def _load(self) -> None:
+        active = self._active_path()
+        if active is None:
+            self._entries = ()
+            self._status = "unavailable"
+            self._reason = "missing"
+            self._loaded_path = None
+            self._mtime = None
+            return
+        try:
+            payload = json.loads(active.read_text())
+            self._mtime = active.stat().st_mtime
+        except (OSError, ValueError):
+            self._entries = ()
+            self._status = "corrupt"
+            self._reason = "unreadable-or-invalid-json"
+            self._loaded_path = active
+            return
+        entries = payload.get("entries") if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            self._entries = ()
+            self._status = "corrupt"
+            self._reason = "entries-not-a-list"
+            self._loaded_path = active
+            return
+        better = tuple(
+            entry
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("verdict") == "BETTER"
+        )
+        self._entries = better
+        self._status = "ready"
+        self._reason = "loaded"
+        self._loaded_path = active
+
+    def _maybe_reload(self) -> None:
+        active = self._active_path()
+        if active is None:
+            if self._loaded_path is not None or self._status == "ready":
+                self._load()
+            return
+        try:
+            mtime = active.stat().st_mtime
+        except OSError:
+            self._load()
+            return
+        if active != self._loaded_path or mtime != self._mtime:
+            self._load()
+
+    def health(self) -> dict[str, object]:
+        self._maybe_reload()
+        return {
+            "status": self._status,
+            "reason": self._reason,
+            "entry_count": len(self._entries),
+            "path": str(self._loaded_path) if self._loaded_path is not None else None,
+        }
+
+    def lookup(
+        self,
+        *,
+        appid: str | None,
+        fps_target: float | None,
+        pl1_w: int | float | None,
+        actuator: str,
+        env: GamePowerVerdictEnv,
+    ) -> bool:
+        self._maybe_reload()
+        if self._status != "ready" or appid is None or fps_target is None:
+            return False
+        bucket = verdict_tdp_bucket(pl1_w)
+        if bucket is None:
+            return False
+        target = round(float(fps_target), 3)
+        for entry in self._entries:
+            if str(entry.get("appid")) != str(appid):
+                continue
+            if entry.get("actuator") != actuator:
+                continue
+            entry_fps = _float_or_none(entry.get("fps_target"))
+            if entry_fps is None or round(entry_fps, 3) != target:
+                continue
+            entry_tdp = entry.get("tdp_w")
+            if not isinstance(entry_tdp, (int, float)) or int(entry_tdp) != bucket:
+                continue
+            if entry.get("topology_fingerprint") != env.topology_fingerprint:
+                continue
+            if entry.get("kernel") != env.kernel:
+                continue
+            if entry.get("policy_version") != env.policy_version:
+                continue
+            return True
+        return False
+
+
 class GamePowerController:
     def __init__(
         self,
         config: GamePowerConfig,
         *,
         hint: GamePowerHintEntry | None = None,
+        verdict_ledger: GamePowerVerdictLedger | None = None,
+        verdict_env: GamePowerVerdictEnv | None = None,
     ) -> None:
         self.config = config
         self.hint = hint
+        self.verdict_ledger = verdict_ledger
+        self.verdict_env = verdict_env
         self._positive_samples = 0
         self._negative_samples = 0
         self._active = False
@@ -1403,6 +2166,23 @@ class GamePowerController:
         self._recent_positive: deque[bool] = deque(
             maxlen=max(0, config.rolling_window_samples)
         )
+        # --- V9 target-balance state (phase machine + ladder) ---
+        self._tick = 0
+        self._committed_phase = GamePowerPhase.NO_GAME
+        self._pending_phase: GamePowerPhase | None = None
+        self._pending_phase_count = 0
+        self._loading_ticks = 0
+        self._ladder_step = 0
+        self._ladder_hold = 0
+        self._ladder_backoff: dict[int, int] = {}
+        self._deep_unlocked = False
+        self._gpu_deep_unlocked = False
+        self._last_actuation: GamePowerActuation | None = None
+        self._current_sample: GamePowerSample | None = None
+        # Previous tick's gated-lane state + active actuators so UNKNOWN can hold
+        # them instead of flapping to blocked (design section 5; defect C4b).
+        self._last_gated_lanes: dict[str, object] | None = None
+        self._last_active_actuators: frozenset[str] = frozenset()
 
     def evaluate(self, sample: GamePowerSample) -> GamePowerDecision:
         classification = classify_game_power_sample(
@@ -1422,7 +2202,15 @@ class GamePowerController:
                 "mode is observe",
                 classification=classification,
             )
+        if self.config.mode == GamePowerMode.TARGET_BALANCE:
+            return self._evaluate_target_balance(sample, classification)
+        return self._evaluate_gpu_priority(sample, classification)
 
+    def _evaluate_gpu_priority(
+        self,
+        sample: GamePowerSample,
+        classification: GamePowerClassification,
+    ) -> GamePowerDecision:
         positive = self._sample_supports_gpu_priority(sample)
         self.last_positive = positive
         if self.config.rolling_window_samples > 0:
@@ -1492,6 +2280,748 @@ class GamePowerController:
             reason,
             classification=classification,
         )
+
+    # ------------------------------------------------------------------
+    # V9 target-balance mode
+    # ------------------------------------------------------------------
+    def _evaluate_target_balance(
+        self,
+        sample: GamePowerSample,
+        classification: GamePowerClassification,
+    ) -> GamePowerDecision:
+        self._tick += 1
+        self._current_sample = sample
+        # Reset per-tick gated-lane state (populated by S4 phase dispatch).
+        self._active_actuators = frozenset()
+        self._gated_lanes = self._default_gated_lanes()
+        self._verdict_health = self._verdict_ledger_health()
+        raw_phase, reason_codes = classify_game_power_phase(self.config, sample)
+
+        # C1: target-balance only governs the configured target AppID. A
+        # different foreground game is NO_GAME posture: restore CPU actuation
+        # and release the gated lanes so the ladder never runs on the wrong
+        # game (gpu-priority enforces this predicate; target-balance must too).
+        if (
+            self.config.target_appid is not None
+            and sample.appid is not None
+            and sample.appid != self.config.target_appid
+        ):
+            self._committed_phase = GamePowerPhase.NO_GAME
+            self._pending_phase = None
+            self._pending_phase_count = 0
+            self._loading_ticks = 0
+            self._ladder_step = 0
+            self._ladder_hold = 0
+            self._active_actuators = frozenset()
+            self._gated_lanes = self._released_gated_lanes("non-target-game")
+            return self._finalize_target_balance(
+                GamePowerAction.RESTORE,
+                "non-target game restore",
+                classification,
+                GamePowerPhase.NO_GAME,
+                ("non-target-game",),
+                None,
+            )
+
+        prev_committed = self._committed_phase
+        phase = self._commit_phase(raw_phase)
+        satisfied = _sample_fps_target_satisfied(self.config, sample)
+
+        if phase == GamePowerPhase.LOADING:
+            self._loading_ticks += 1
+        else:
+            self._loading_ticks = 0
+        if phase not in (
+            GamePowerPhase.AT_TARGET,
+            GamePowerPhase.ABOVE_TARGET,
+            GamePowerPhase.UNKNOWN,
+        ):
+            # Leaving the at/above band abandons the ladder position; re-entry
+            # always restarts from S0 (backoff timers persist for the session).
+            # C3: if the band was left on a real target miss (below-*), record
+            # backoff for the failed step BEFORE resetting so the anti-oscillation
+            # lock is reachable. UNKNOWN is handled in its own branch (C4a).
+            if (
+                prev_committed
+                in (GamePowerPhase.AT_TARGET, GamePowerPhase.ABOVE_TARGET)
+                and self._ladder_step > 0
+                and phase
+                in (
+                    GamePowerPhase.BELOW_TARGET_CPU_BOUND,
+                    GamePowerPhase.BELOW_TARGET_GPU_BOUND,
+                )
+                and not satisfied
+            ):
+                self._ladder_backoff[self._ladder_step] = (
+                    self._tick + self._backoff_samples()
+                )
+                reason_codes = reason_codes + ("ladder-target-miss",)
+            self._ladder_step = 0
+            self._ladder_hold = 0
+
+        if phase == GamePowerPhase.UNKNOWN:
+            return self._target_balance_unknown(
+                sample, classification, phase, reason_codes, satisfied
+            )
+
+        if phase in (GamePowerPhase.NO_GAME, GamePowerPhase.NO_TARGET):
+            base = self._evaluate_gpu_priority(sample, classification)
+            actuation = _actuation_for_gpu_priority_action(base.action, self.config)
+            return self._finalize_target_balance(
+                base.action, base.reason, classification, phase, reason_codes, actuation
+            )
+
+        if phase == GamePowerPhase.LOADING:
+            return self._target_balance_loading(classification, phase, reason_codes)
+
+        if phase == GamePowerPhase.BELOW_TARGET_CPU_BOUND:
+            actuation = GamePowerActuation(
+                pcore_epp=self.config.below_target_cpu_pcore_epp,
+                ecore_epp=self.config.below_target_cpu_ecore_epp,
+            )
+            # Gated lanes (a) foreground cpu.uclamp.min and (b) background
+            # shaping are allowed here (design section 5); each activates only
+            # with a matching BETTER verdict entry.
+            self._apply_gated_lanes(
+                sample,
+                foreground_uclamp=True,
+                background_shaping=True,
+            )
+            return self._finalize_target_balance(
+                GamePowerAction.TARGET_BALANCE_TRIM,
+                "below-target cpu-bound boost",
+                classification,
+                phase,
+                reason_codes,
+                actuation,
+            )
+
+        if phase == GamePowerPhase.BELOW_TARGET_GPU_BOUND:
+            # Gated lane (b) background shaping is allowed while below-target;
+            # foreground uclamp.min is not (design section 5).
+            self._apply_gated_lanes(
+                sample,
+                foreground_uclamp=False,
+                background_shaping=True,
+            )
+            if self.config.cpu_cap_enabled and _sample_core_pressure_high(
+                sample, self.config.cpu_cap_core_share_threshold
+            ):
+                actuation = GamePowerActuation(
+                    pcore_epp=self.config.epp,
+                    ecore_epp=self.config.epp,
+                    pcore_max_khz=self.config.pcore_max_khz,
+                    ecore_max_khz=self.config.ecore_max_khz,
+                )
+                action = GamePowerAction.GPU_PRIORITY_CPU_CAP
+            else:
+                actuation = GamePowerActuation(
+                    pcore_epp=self.config.epp, ecore_epp=self.config.epp
+                )
+                action = GamePowerAction.GPU_PRIORITY_EPP
+            return self._finalize_target_balance(
+                action,
+                "below-target gpu-bound",
+                classification,
+                phase,
+                reason_codes,
+                actuation,
+            )
+
+        if phase in (GamePowerPhase.AT_TARGET, GamePowerPhase.ABOVE_TARGET):
+            return self._target_balance_ladder(
+                sample, classification, phase, reason_codes
+            )
+
+        # UNKNOWN handled above via _target_balance_unknown.
+        raise AssertionError("unreachable target-balance phase dispatch")
+
+    def _target_balance_unknown(
+        self,
+        sample: GamePowerSample,
+        classification: GamePowerClassification,
+        phase: GamePowerPhase,
+        reason_codes: tuple[str, ...],
+        satisfied: bool,
+    ) -> GamePowerDecision:
+        # C4b: preserve the previous tick's gated-lane state and active
+        # actuators during UNKNOWN so one UNKNOWN tick cannot restore-then-reapply
+        # the background-shaping cgroup writes (systemctl churn). Lanes release
+        # only on NO_GAME/LOADING/non-target/mode-change/fail-closed.
+        held_lanes = (
+            self._last_gated_lanes
+            if self._last_gated_lanes is not None
+            else self._default_gated_lanes()
+        )
+        self._gated_lanes = held_lanes
+        self._active_actuators = self._last_active_actuators
+        target = sample.frame_target
+        target_known = target is not None and target.fps_target is not None
+        if target_known and not satisfied:
+            # C4a: below target with no bound signature. Holding a deep trim
+            # forever has no escape, so release the ladder (restore CPU state),
+            # record backoff for the held step, and report the release honestly.
+            held_step = self._ladder_step
+            if held_step > 0:
+                self._ladder_backoff[held_step] = self._tick + self._backoff_samples()
+            self._ladder_step = 0
+            self._ladder_hold = 0
+            return self._finalize_target_balance(
+                GamePowerAction.TARGET_BALANCE_RELEASE,
+                "unknown below-target release",
+                classification,
+                phase,
+                reason_codes + ("unknown-below-target-release",),
+                None,
+            )
+        # No target (or satisfied): hold current writes, take no new action.
+        return self._finalize_target_balance(
+            GamePowerAction.OBSERVE_ONLY,
+            "unknown phase hold",
+            classification,
+            phase,
+            reason_codes,
+            self._last_actuation,
+        )
+
+    def _commit_phase(self, raw_phase: GamePowerPhase) -> GamePowerPhase:
+        committed = self._committed_phase
+        if raw_phase == committed:
+            self._pending_phase = None
+            self._pending_phase_count = 0
+            return committed
+        # C7: exiting LOADING requires a stable cadence at >= ratio*target for
+        # loading_exit_samples consecutive samples (design section 4). A sample
+        # below the cadence ratio does not accumulate toward the exit count.
+        if (
+            committed == GamePowerPhase.LOADING
+            and not self._loading_exit_sample_qualifies()
+        ):
+            self._pending_phase = raw_phase
+            self._pending_phase_count = 0
+            return committed
+        if self._pending_phase == raw_phase:
+            self._pending_phase_count += 1
+        else:
+            self._pending_phase = raw_phase
+            self._pending_phase_count = 1
+        required = self._phase_commit_samples(committed, raw_phase)
+        if self._pending_phase_count >= required:
+            self._committed_phase = raw_phase
+            self._pending_phase = None
+            self._pending_phase_count = 0
+        return self._committed_phase
+
+    def _loading_exit_sample_qualifies(self) -> bool:
+        sample = self._current_sample
+        if sample is None:
+            return True
+        target = sample.frame_target
+        fps_target = target.fps_target if target is not None else None
+        if fps_target is None:
+            # No target: keep the plain consecutive-sample-count exit behavior.
+            return True
+        performance = sample.frame_performance
+        avg_fps = performance.avg_fps if performance is not None else None
+        if avg_fps is None:
+            return False
+        return avg_fps >= self.config.loading_exit_fps_ratio * fps_target
+
+    def _phase_commit_samples(
+        self, committed: GamePowerPhase, raw_phase: GamePowerPhase
+    ) -> int:
+        # Asymmetric hysteresis (design section 4): fast to give power back,
+        # slow to take it away.
+        if raw_phase == GamePowerPhase.LOADING:
+            return 1
+        if committed == GamePowerPhase.LOADING:
+            return max(1, self.config.loading_exit_samples)
+        if committed in (
+            GamePowerPhase.AT_TARGET,
+            GamePowerPhase.ABOVE_TARGET,
+        ) and raw_phase not in (
+            GamePowerPhase.AT_TARGET,
+            GamePowerPhase.ABOVE_TARGET,
+        ):
+            return 1
+        return max(1, self.config.phase_stable_samples)
+
+    def _target_balance_loading(
+        self,
+        classification: GamePowerClassification,
+        phase: GamePowerPhase,
+        reason_codes: tuple[str, ...],
+    ) -> GamePowerDecision:
+        # LOADING releases ALL V9 constraints, including gated lanes (section 5).
+        self._active_actuators = frozenset()
+        self._gated_lanes = self._released_gated_lanes()
+        elapsed_s = self._loading_ticks * max(0.0, self.config.poll_s)
+        if elapsed_s > self.config.loading_boost_max_s:
+            return self._finalize_target_balance(
+                GamePowerAction.OBSERVE_ONLY,
+                "loading boost budget exhausted",
+                classification,
+                phase,
+                reason_codes + ("loading-budget-exhausted",),
+                None,
+            )
+        actuation = GamePowerActuation(
+            pcore_epp=self.config.loading_pcore_epp,
+            ecore_epp=self.config.loading_ecore_epp,
+        )
+        return self._finalize_target_balance(
+            GamePowerAction.LOADING_BOOST,
+            "loading boost",
+            classification,
+            phase,
+            reason_codes,
+            actuation,
+        )
+
+    def _target_balance_ladder(
+        self,
+        sample: GamePowerSample,
+        classification: GamePowerClassification,
+        phase: GamePowerPhase,
+        reason_codes: tuple[str, ...],
+    ) -> GamePowerDecision:
+        target = sample.frame_target
+        performance = sample.frame_performance
+        target_frame_ms = target.target_frame_ms if target is not None else None
+        p95 = performance.p95_frame_ms if performance is not None else None
+        p95_ok = (
+            target_frame_ms is not None
+            and p95 is not None
+            and p95 <= target_frame_ms * self._p95_guard_ratio()
+        )
+        satisfied = _sample_fps_target_satisfied(self.config, sample)
+
+        # Gated lane (b) background shaping is allowed at/above target; the deep
+        # CPU-frequency-cap rungs need a matching verdict (or profiler flag).
+        self._apply_gated_lanes(
+            sample, foreground_uclamp=False, background_shaping=True
+        )
+        not_ac_perf = self.config.persona != GamePowerPersona.AC_PERFORMANCE
+        deep_active = not_ac_perf and (
+            self.config.allow_ladder_step_5
+            or self._verdict_active(_DEEP_CPU_CAP_VERDICT, sample)
+        )
+        # Deep GPU cap rung (G4CAP) is unlocked by a matching gpu-cap verdict.
+        gpu_deep_active = not_ac_perf and self._verdict_active(
+            _DEEP_GPU_CAP_VERDICT, sample
+        )
+        self._deep_unlocked = deep_active
+        self._gpu_deep_unlocked = gpu_deep_active
+        base_len = len(self._filtered_base_rungs())
+        deep_len = 0
+        if gpu_deep_active:
+            deep_len += len(
+                _filter_rungs(_DEEP_GPU_CAP_RUNGS, self.config.trim_rung_filter)
+            )
+        if deep_active:
+            deep_len += len(
+                _filter_rungs(_DEEP_CPU_CAP_RUNGS, self.config.trim_rung_filter)
+            )
+        max_step = base_len + deep_len
+        if deep_active or gpu_deep_active:
+            lanes = dict(self._gated_lanes or {})
+            lanes["ladder_deep_step"] = {"state": "active", "reason_codes": []}
+            self._gated_lanes = lanes
+
+        # C5: if a deeper step was reached under a verdict that no longer matches
+        # (e.g. TDP bucket changed), clamp down to the currently-allowed max step
+        # immediately instead of continuing to apply the now-unlocked actuation.
+        if self._ladder_step > max_step:
+            self._ladder_step = max_step
+            self._ladder_hold = 0
+            codes = reason_codes + ("ladder-verdict-lock-lost",)
+            return self._finalize_target_balance(
+                GamePowerAction.TARGET_BALANCE_TRIM
+                if max_step > 0
+                else GamePowerAction.TARGET_BALANCE_RELEASE,
+                f"ladder verdict lock lost, clamp to step {max_step}",
+                classification,
+                phase,
+                codes,
+                self._ladder_actuation(max_step),
+            )
+
+        if not satisfied or not p95_ok:
+            # Fast release (contract 1.4): drop ALL rungs at once, lock the failed
+            # step for backoff, and re-climb per the hold rules.
+            failed_step = self._ladder_step
+            if failed_step > 0:
+                self._ladder_backoff[failed_step] = self._tick + self._backoff_samples()
+            self._ladder_step = 0
+            self._ladder_hold = 0
+            codes = reason_codes + (
+                "ladder-p95-breach" if satisfied else "ladder-target-miss",
+            )
+            return self._finalize_target_balance(
+                GamePowerAction.TARGET_BALANCE_RELEASE,
+                "ladder fast release to step 0",
+                classification,
+                phase,
+                codes,
+                self._ladder_actuation(0),
+            )
+
+        # Qualifying tick.
+        self._ladder_hold += 1
+        hold_required = self._ladder_hold_required(phase)
+        next_step = self._ladder_step + 1
+        if self._ladder_hold >= hold_required and next_step <= max_step:
+            if self._backoff_active(next_step):
+                codes = reason_codes + ("ladder-backoff-active",)
+                return self._finalize_target_balance(
+                    GamePowerAction.TARGET_BALANCE_TRIM
+                    if self._ladder_step > 0
+                    else GamePowerAction.OBSERVE_ONLY,
+                    f"ladder hold at step {self._ladder_step} (backoff)",
+                    classification,
+                    phase,
+                    codes,
+                    self._ladder_actuation(self._ladder_step),
+                )
+            self._ladder_step = next_step
+            self._ladder_hold = 0
+            return self._finalize_target_balance(
+                GamePowerAction.TARGET_BALANCE_TRIM,
+                f"ladder step up to step {next_step}",
+                classification,
+                phase,
+                reason_codes,
+                self._ladder_actuation(next_step),
+            )
+
+        if self._ladder_hold >= hold_required and next_step > max_step:
+            # S5+ inert until a verdict-ledger entry exists (design section 7).
+            codes = reason_codes + ("no-verdict-for-context",)
+            return self._finalize_target_balance(
+                GamePowerAction.TARGET_BALANCE_TRIM,
+                f"ladder hold at step {self._ladder_step} (locked)",
+                classification,
+                phase,
+                codes,
+                self._ladder_actuation(self._ladder_step),
+            )
+
+        action = (
+            GamePowerAction.TARGET_BALANCE_TRIM
+            if self._ladder_step > 0
+            else GamePowerAction.OBSERVE_ONLY
+        )
+        return self._finalize_target_balance(
+            action,
+            f"ladder hold at step {self._ladder_step}",
+            classification,
+            phase,
+            reason_codes,
+            self._ladder_actuation(self._ladder_step),
+        )
+
+    def _ladder_hold_required(self, phase: GamePowerPhase) -> int:
+        base = max(1, self.config.ladder_hold_samples)
+        if phase == GamePowerPhase.ABOVE_TARGET:
+            return max(1, base // 2)
+        return base
+
+    def _backoff_samples(self) -> int:
+        poll = max(0.0, self.config.poll_s)
+        if poll <= 0:
+            return 1
+        return max(1, math.ceil(self.config.ladder_backoff_s / poll))
+
+    def _backoff_active(self, step: int) -> bool:
+        return self._ladder_backoff.get(step, 0) > self._tick
+
+    def _p95_guard_ratio(self) -> float:
+        if self.config.persona == GamePowerPersona.AC_QUIET:
+            return self.config.ac_quiet_p95_guard_ratio
+        return self.config.ladder_p95_guard_ratio
+
+    def _filtered_base_rungs(self) -> tuple[str, ...]:
+        return _filter_rungs(
+            _persona_base_rungs(self.config.persona),
+            self.config.trim_rung_filter,
+        )
+
+    def _rung_sequence(self) -> tuple[str, ...]:
+        base = self._filtered_base_rungs()
+        if self.config.persona == GamePowerPersona.AC_PERFORMANCE:
+            return base
+        suffix: tuple[str, ...] = ()
+        if self._gpu_deep_unlocked:
+            suffix += _filter_rungs(_DEEP_GPU_CAP_RUNGS, self.config.trim_rung_filter)
+        if self._deep_unlocked:
+            suffix += _filter_rungs(_DEEP_CPU_CAP_RUNGS, self.config.trim_rung_filter)
+        return base + suffix
+
+    def _active_rungs(self, step: int) -> tuple[str, ...]:
+        if step <= 0:
+            return ()
+        return self._rung_sequence()[:step]
+
+    def _ladder_actuation(self, step: int) -> GamePowerActuation | None:
+        """Fold the persona rung sequence[:step] into one absolute actuation.
+
+        The GPU cap, soft-PL1 overlay and EPP are each the *deepest* active rung
+        of their kind, so a step change is realised as restore-to-baseline plus
+        this absolute state (correct by construction, contract 1.4).
+        """
+
+        active = self._active_rungs(step)
+        if not active:
+            return None
+        sample = self._current_sample
+        slider_w = sample.pl1_w if sample is not None else None
+        median = sample.package_median_w if sample is not None else None
+        if median is None and sample is not None and sample.rapl is not None:
+            median = sample.rapl.package_w
+
+        gpu_max_ratio = self._rung_gpu_max_ratio(active)
+        soft_pl1_w = self._rung_soft_pl1_w(active, median, slider_w)
+        pcore_epp: str | None = None
+        ecore_epp: str | None = None
+        pcore_max_khz: int | None = None
+        ecore_max_khz: int | None = None
+        if "C1" in active:
+            ecore_epp = self.config.trim_ecore_epp
+        if "C2" in active:
+            pcore_epp = self.config.trim_pcore_epp
+            ecore_epp = self.config.trim_ecore_epp
+        if "S3CAP" in active:
+            pcore_epp = pcore_epp or self.config.ladder_pcore_epp
+            ecore_epp = ecore_epp or self.config.ladder_ecore_epp
+            pcore_max_khz = self.config.ladder_s3_pcore_max_khz
+        if "S4CAP" in active:
+            pcore_epp = pcore_epp or self.config.ladder_pcore_epp
+            ecore_epp = ecore_epp or self.config.ladder_ecore_epp
+            pcore_max_khz = self.config.ladder_s4_pcore_max_khz
+            ecore_max_khz = self.config.ladder_s4_ecore_max_khz
+        if (
+            pcore_epp is None
+            and ecore_epp is None
+            and pcore_max_khz is None
+            and ecore_max_khz is None
+            and gpu_max_ratio is None
+            and soft_pl1_w is None
+        ):
+            return None
+        return GamePowerActuation(
+            pcore_epp=pcore_epp,
+            ecore_epp=ecore_epp,
+            pcore_max_khz=pcore_max_khz,
+            ecore_max_khz=ecore_max_khz,
+            gpu_max_ratio=gpu_max_ratio,
+            soft_pl1_w=soft_pl1_w,
+        )
+
+    def _rung_gpu_max_ratio(self, active: tuple[str, ...]) -> float | None:
+        # D6: the deepest active G-rung yields a cap RATIO of rp0; the actuator
+        # applies it per GT from each GT's own rp0 (render gt0 and media gt1 are
+        # trimmed proportionally, not collapsed to the smaller GT's absolute cap).
+        ratio: float | None = None
+        if "G1" in active:
+            ratio = self.config.gpu_cap_g1_ratio
+        if "G2" in active:
+            ratio = self.config.gpu_cap_g2_ratio
+        if "G3" in active:
+            ratio = self.config.gpu_cap_g3_ratio
+        if "G4CAP" in active:
+            ratio = self.config.gpu_cap_g4_ratio
+        return ratio
+
+    def _rung_soft_pl1_w(
+        self,
+        active: tuple[str, ...],
+        median_w: float | None,
+        slider_w: int | None,
+    ) -> int | None:
+        level = 0
+        if "P1" in active:
+            level = 1
+        if "P2" in active:
+            level = 2
+        if "P3" in active:
+            level = 3
+        if level == 0 or median_w is None:
+            return None
+        # D2: P1 must start BELOW the user slider. The shipped
+        # ceil(median + headroom) sat >= slider on a PL1-pinned scene, so the
+        # min(user_slider, soft_pl1) overlay clamped to a no-op. Anchor P1 at
+        # min(slider - slider_margin, ceil(median) + headroom) instead.
+        demand = math.ceil(median_w) + self.config.soft_pl1_p1_headroom_w
+        if slider_w is not None:
+            p1 = min(float(slider_w) - self.config.soft_pl1_p1_slider_margin_w, demand)
+        else:
+            p1 = demand
+        if level == 1:
+            value = p1
+        elif level == 2:
+            value = p1 - self.config.soft_pl1_p2_step_w
+        else:
+            value = p1 - self.config.soft_pl1_p3_step_w
+        return max(self.config.soft_pl1_floor_w, int(math.ceil(value)))
+
+    def _finalize_target_balance(
+        self,
+        action: GamePowerAction,
+        reason: str,
+        classification: GamePowerClassification,
+        phase: GamePowerPhase,
+        reason_codes: tuple[str, ...],
+        actuation: GamePowerActuation | None,
+    ) -> GamePowerDecision:
+        self.last_positive = actuation is not None
+        self._last_actuation = actuation
+        self._last_gated_lanes = self._gated_lanes
+        self._last_active_actuators = self._active_actuators
+        gpu_caps = None
+        if actuation is not None and (
+            actuation.gpu_max_mhz is not None
+            or actuation.gpu_min_mhz is not None
+            or actuation.gpu_max_ratio is not None
+        ):
+            # Controller-side (pre-apply) telemetry: report the render-GT (gt0)
+            # cap the ratio implies against the render rp0. The paired min is
+            # data-dependent (the actuator lowers a latched-high min per GT), so
+            # it stays null here; the governor overrides this with the real
+            # per-GT applied values (incl. the ``per_gt`` breakdown) after apply.
+            render_max = actuation.gpu_max_mhz
+            if actuation.gpu_max_ratio is not None:
+                render_rp0 = (
+                    self._current_sample.gpu_rp0_mhz
+                    if self._current_sample is not None
+                    else None
+                )
+                if render_rp0 is not None:
+                    render_max = max(1, int(render_rp0 * (1.0 - actuation.gpu_max_ratio)))
+            gpu_caps = {
+                "min_mhz": actuation.gpu_min_mhz,
+                "max_mhz": render_max,
+            }
+        return GamePowerDecision(
+            action,
+            reason,
+            classification=classification,
+            phase=phase,
+            phase_reason_codes=tuple(reason_codes),
+            ladder_step=self._ladder_step,
+            actuation=actuation,
+            color_ledger=self._build_color_ledger_json(),
+            verdict_ledger_health=self._verdict_health,
+            gated_lanes=self._gated_lanes,
+            persona=self.config.persona.value,
+            soft_pl1_w=actuation.soft_pl1_w if actuation is not None else None,
+            gpu_freq_caps=gpu_caps,
+            trim_rungs_active=list(self._active_rungs(self._ladder_step)),
+            frame_feed_status=(
+                self._current_sample.frame_feed_status
+                if self._current_sample is not None
+                else None
+            ),
+            limiter_state="unknown",
+        )
+
+    def _build_color_ledger_json(self) -> dict[str, object] | None:
+        sample = self._current_sample
+        if sample is None or sample.color_ledger_entries is None:
+            return None
+        resolved = resolve_ledger_actuators(
+            sample.color_ledger_entries,
+            active_actuators=self._active_actuators,
+        )
+        return {
+            "truncated": bool(sample.color_ledger_truncated),
+            "entries": [entry.to_json() for entry in resolved],
+        }
+
+    def _default_gated_lanes(self) -> dict[str, object]:
+        return {
+            "foreground_uclamp_min": {"state": "blocked", "reason_codes": []},
+            "background_shaping": {"state": "blocked", "reason_codes": []},
+            "ladder_deep_step": {"state": "blocked", "reason_codes": []},
+        }
+
+    def _verdict_ledger_health(self) -> dict[str, object]:
+        if self.verdict_ledger is None:
+            return {"status": "unavailable", "reason": "no-verdict-ledger"}
+        return self.verdict_ledger.health()
+
+    def _verdict_active(self, actuator: str, sample: GamePowerSample) -> bool:
+        if self.verdict_ledger is None or self.verdict_env is None:
+            return False
+        fps_target = (
+            sample.frame_target.fps_target if sample.frame_target is not None else None
+        )
+        return self.verdict_ledger.lookup(
+            appid=sample.appid,
+            fps_target=fps_target,
+            pl1_w=sample.pl1_w,
+            actuator=actuator,
+            env=self.verdict_env,
+        )
+
+    _BG_VARIANTS = (("bg-weight", "cpu-weight-80"), ("bg-uclamp", "uclamp-max-85"))
+
+    def _apply_gated_lanes(
+        self,
+        sample: GamePowerSample,
+        *,
+        foreground_uclamp: bool,
+        background_shaping: bool,
+    ) -> None:
+        """Resolve the gated lanes for this phase from the verdict ledger.
+
+        Populates ``self._active_actuators`` (for the color ledger) and
+        ``self._gated_lanes`` (for the governor's cgroup writes). A lane stays
+        ``blocked`` with ``no-verdict-for-context`` unless a BETTER verdict entry
+        matches the full context key.
+        """
+
+        active: set[str] = set()
+        lanes = self._default_gated_lanes()
+        if foreground_uclamp and self._verdict_active("uclamp-min", sample):
+            active.add("uclamp-min")
+            lanes["foreground_uclamp_min"] = {"state": "active", "reason_codes": []}
+        if background_shaping:
+            # C11: the lane/color-ledger actuator labels must reflect exactly the
+            # unlocked variant(s), not a hardcoded ``bg-weight`` whenever any
+            # background verdict matched.
+            matched = [
+                (actuator, variant)
+                for actuator, variant in self._BG_VARIANTS
+                if self._verdict_active(actuator, sample)
+            ]
+            if matched:
+                for actuator, _variant in matched:
+                    active.add(actuator)
+                lanes["background_shaping"] = {
+                    "state": "active",
+                    "reason_codes": [],
+                    "variants": [variant for _actuator, variant in matched],
+                }
+        self._active_actuators = frozenset(active)
+        self._gated_lanes = lanes
+
+    def _released_gated_lanes(
+        self, reason: str = "loading-release"
+    ) -> dict[str, object]:
+        released = {"state": "released", "reason_codes": [reason]}
+        return {
+            "foreground_uclamp_min": dict(released),
+            "background_shaping": dict(released),
+            "ladder_deep_step": dict(released),
+        }
+
+    @property
+    def committed_phase(self) -> GamePowerPhase:
+        return self._committed_phase
+
+    @property
+    def ladder_step(self) -> int:
+        return self._ladder_step
 
     def _sample_supports_gpu_priority(self, sample: GamePowerSample) -> bool:
         if _sample_fps_target_satisfied(self.config, sample):
@@ -1602,6 +3132,188 @@ def _sample_core_pressure_high(sample: GamePowerSample, threshold: float) -> boo
     )
 
 
+class FastBoostLane:
+    """Fast boost lane state machine (contract 1.5).
+
+    Boost is unconditional (no verdict gate) because it only removes our own
+    reductions. It fires on a frame-time spike, a foreground CPU-PSI jump between
+    fast samples, or the LOADING phase, and holds ``hold_s`` past the last
+    trigger. Pure logic with an injected clock so the governor can drive it from
+    the single-threaded sub-tick loop and tests can exercise it directly.
+    """
+
+    def __init__(
+        self,
+        hold_s: float,
+        *,
+        spike_boost_ratio: float,
+        psi_boost_delta: float,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.hold_s = float(hold_s)
+        self.spike_boost_ratio = float(spike_boost_ratio)
+        self.psi_boost_delta = float(psi_boost_delta)
+        self.clock = clock
+        self._last_trigger_s: float | None = None
+        self._prev_psi_avg10: float | None = None
+        self.active = False
+        self.reason: str | None = None
+
+    def reset(self) -> None:
+        self._last_trigger_s = None
+        self._prev_psi_avg10 = None
+        self.active = False
+        self.reason = None
+
+    def evaluate(
+        self,
+        *,
+        target_frame_ms: float | None = None,
+        spike_worst_ms: float | None = None,
+        last_frame_ms: float | None = None,
+        psi_avg10: float | None = None,
+        phase_is_loading: bool = False,
+    ) -> tuple[bool, str | None]:
+        now = float(self.clock())
+        bar = (
+            self.spike_boost_ratio * target_frame_ms
+            if target_frame_ms is not None and target_frame_ms > 0
+            else None
+        )
+        reason: str | None = None
+        if phase_is_loading:
+            reason = "loading"
+        elif bar is not None and (
+            (spike_worst_ms is not None and spike_worst_ms > bar)
+            or (last_frame_ms is not None and last_frame_ms > bar)
+        ):
+            reason = "frame-spike"
+        elif (
+            psi_avg10 is not None
+            and self._prev_psi_avg10 is not None
+            and psi_avg10 - self._prev_psi_avg10 > self.psi_boost_delta
+        ):
+            reason = "psi-jump"
+        if psi_avg10 is not None:
+            self._prev_psi_avg10 = psi_avg10
+        if reason is not None:
+            self._last_trigger_s = now
+            self.active = True
+            self.reason = reason
+            return True, reason
+        if self._last_trigger_s is not None and now - self._last_trigger_s <= self.hold_s:
+            self.active = True
+            self.reason = "boost-hold"
+            return True, "boost-hold"
+        self.active = False
+        self.reason = None
+        return False, None
+
+
+class _DaemonCgroupWriter:
+    """In-process gated cgroup writer bundling the V9 guarded writers.
+
+    Owns the foreground ``cpu.uclamp.min`` floor writer and the background
+    shaping apply/restore reports so the daemon can apply lanes when the verdict
+    ledger unlocks them and restore them on lane exit / failure / close.
+    """
+
+    def __init__(self, *, floor_value: str = "25.00") -> None:
+        self._floor_value = floor_value
+        self._uclamp = ForegroundUclampMinWriter(floor_value=floor_value)
+        self._bg_reports: list[dict[str, object]] = []
+        self._bg_variants: list[str] = []
+        self._failed = False
+        # Lanes whose restore failed, kept for gated-lane telemetry (C9/C10).
+        self._unrestored: list[dict[str, object]] = []
+
+    @property
+    def failed(self) -> bool:
+        return self._failed or self._uclamp.failed
+
+    @property
+    def background_reports(self) -> list[dict[str, object]]:
+        return list(self._bg_reports)
+
+    @property
+    def unrestored(self) -> list[dict[str, object]]:
+        return list(self._unrestored)
+
+    def apply_foreground_uclamp(self, cgroup_path: str) -> bool:
+        result = self._uclamp.apply(cgroup_path)
+        if result.get("status") in {
+            "write-failed",
+            "write-mismatch",
+            "write-unavailable",
+            "disabled",
+        }:
+            self._failed = True
+            return False
+        return True
+
+    def restore_foreground_uclamp(self) -> dict[str, object]:
+        report = self._uclamp.restore()
+        if report.get("status") in {"restore-failed", "restore-mismatch"} or (
+            self._uclamp.failed
+        ):
+            # C9: the daemon must fail closed and surface the unrestored floor.
+            self._failed = True
+            self._unrestored.append(report)
+        return report
+
+    def apply_background(
+        self, cgroups: list[dict[str, object]], *, appid: str, variants: list[str]
+    ) -> bool:
+        requested = list(variants)
+        # C12: hold only when the applied variant set matches the request. A
+        # changed variant set (verdict updated mid-session) means restore the
+        # current lanes and apply the new set instead of silently holding.
+        if self._bg_reports and self._bg_variants == requested:
+            return True
+        if self._bg_reports and not self.restore_background():
+            return False
+        for variant in requested:
+            report = apply_background_shaping_to_cgroups(
+                cgroups, appid=appid, variant=variant
+            )
+            self._bg_reports.append(report)
+            for write in report.get("writes") or []:
+                if write.get("status") not in {"written"}:
+                    self._failed = True
+                    return False
+        self._bg_variants = requested
+        return True
+
+    def restore_background(self) -> bool:
+        remaining: list[dict[str, object]] = []
+        all_restored = True
+        for report in self._bg_reports:
+            restore_report = restore_background_shaping_from_report(report)
+            if not restore_report.get("restored", False):
+                # C10: keep the unrestored report, fail closed, and stop further
+                # gated writes instead of dropping the report unconditionally.
+                all_restored = False
+                self._failed = True
+                remaining.append(report)
+                self._unrestored.append(restore_report)
+        self._bg_reports = remaining
+        if all_restored:
+            self._bg_variants = []
+        return all_restored
+
+    def restore_all(self) -> None:
+        self.restore_foreground_uclamp()
+        self.restore_background()
+
+    def reset(self) -> None:
+        self.restore_all()
+        self._uclamp = ForegroundUclampMinWriter(floor_value=self._floor_value)
+        self._bg_reports = []
+        self._bg_variants = []
+        self._unrestored = []
+        self._failed = False
+
+
 class GamePowerGovernor:
     def __init__(
         self,
@@ -1615,45 +3327,181 @@ class GamePowerGovernor:
         hint_context_provider: Callable[[GamePowerSample], GamePowerHintContext | None]
         | None = None,
         runtime_snapshot_path: str | Path | None = None,
+        verdict_ledger: GamePowerVerdictLedger | None = None,
+        verdict_env: GamePowerVerdictEnv | None = None,
+        cgroup_writer: object | None = None,
+        gpu_actuator: object | None = None,
+        soft_pl1_actuator: object | None = None,
+        frame_feed_reader: object | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.base_config = config
         self.config = config
         self.observer = observer
         self.actuator = actuator
+        # V10 additive actuators (contracts 1.2/1.3/1.5). All optional so the
+        # existing CPU-only tests and the gpu-priority path are unaffected.
+        self.gpu_actuator = gpu_actuator
+        self.soft_pl1_actuator = soft_pl1_actuator
+        self.frame_feed_reader = frame_feed_reader
         self.output_format = output_format
         self.config_provider = config_provider
         self.sleep = sleep
+        self.clock = clock
         self.hint_store = hint_store
         self.hint_context_provider = hint_context_provider
         self.runtime_snapshot_path = (
             Path(runtime_snapshot_path) if runtime_snapshot_path is not None else None
         )
-        self.controller = GamePowerController(config)
+        self.verdict_ledger = verdict_ledger
+        self.verdict_env = verdict_env
+        # ``cgroup_writer`` is an injectable seam for the gated cgroup lanes; the
+        # default in-process writer touches real cgroup files. A verdict ledger
+        # is still required before any lane can activate (fail-closed).
+        self.cgroup_writer = cgroup_writer or _DaemonCgroupWriter(
+            floor_value=config.foreground_uclamp_min_floor
+        )
+        self.controller = self._new_controller(config)
         self._started_s = time.monotonic()
         self._snapshot: object | None = None
         self._write_failed = False
+        self._applied_actuation: GamePowerActuation | None = None
         self._active_context_key: str | None = None
         self._active_context: GamePowerHintContext | None = None
         self._session: GamePowerSessionSummary | None = None
+        # V10 actuator state (GPU envelope + soft-PL1 overlay + fast boost lane).
+        self._gpu_snapshot: object | None = None
+        # ``_gpu_caps_applied`` is the intent key used for change detection; the
+        # telemetry view (``_gpu_caps_telemetry``) additionally carries the min
+        # the actuator actually wrote, which is data-dependent (D1: min is only
+        # lowered when the GT's latched min sits above the cap).
+        self._gpu_caps_applied: dict[str, object] | None = None
+        self._gpu_caps_telemetry: dict[str, object] | None = None
+        self._soft_pl1_applied: int | None = None
+        self._boost = FastBoostLane(
+            config.boost_hold_s,
+            spike_boost_ratio=config.spike_boost_ratio,
+            psi_boost_delta=config.psi_boost_delta,
+            clock=clock,
+        )
+        self._boost_posture_active = False
+        self._last_sample: GamePowerSample | None = None
+
+    async def _observer_sample(self, sleep_between: bool) -> GamePowerSample:
+        # Fake observers in tests define ``sample()`` without the keyword; the
+        # real SystemGamePowerObserver accepts ``sleep_between`` so the governor
+        # can own the fast-lane cadence.
+        try:
+            return await self.observer.sample(sleep_between=sleep_between)
+        except TypeError:
+            return await self.observer.sample()
+
+    def _new_controller(
+        self,
+        config: GamePowerConfig,
+        *,
+        hint: GamePowerHintEntry | None = None,
+    ) -> GamePowerController:
+        return GamePowerController(
+            config,
+            hint=hint,
+            verdict_ledger=self.verdict_ledger,
+            verdict_env=self.verdict_env,
+        )
 
     async def run_iterations(self, count: int) -> None:
         for _ in range(count):
             await self.run_once()
 
+    def _fast_subticks(self) -> int:
+        fast = self.config.fast_poll_s
+        if fast <= 0:
+            return 1
+        return max(1, round(self.config.poll_s / fast))
+
     async def run_forever(self) -> None:
+        """Production loop with the single-threaded fast boost lane (contract 1.5).
+
+        The loop sleeps in ``fast_poll_s`` increments, runs the cheap fast-lane
+        check each increment, and runs the full slow lane every
+        ``poll_s / fast_poll_s``-th increment (the slow tick samples without its
+        own sleep, so the governor owns the cadence).
+        """
+
+        subticks = self._fast_subticks()
+        i = 0
         try:
             while True:
-                await self.run_once()
+                if i % subticks == 0:
+                    await self.run_once(sleep_between=False)
+                await self.sleep(self.config.fast_poll_s)
+                self._fast_lane_tick()
+                i += 1
         finally:
             self.close()
 
-    async def run_once(self) -> GamePowerDecision:
+    def _fast_lane_tick(self) -> None:
+        """Cheap fast-lane boost check between slow ticks (frame-feed only).
+
+        Applies the boost posture the instant boost activates and lifts it when
+        the hold window ends, so boost latency is one fast tick, not one poll."""
+
+        if self.config.mode != GamePowerMode.TARGET_BALANCE:
+            return
+        sample = self._last_sample
+        if sample is None:
+            return
+        target_frame_ms = (
+            sample.frame_target.target_frame_ms
+            if sample.frame_target is not None
+            else None
+        )
+        fast = self._fast_feed_read()
+        active, reason = self._boost.evaluate(
+            target_frame_ms=target_frame_ms,
+            spike_worst_ms=fast.spike_worst_ms if fast is not None else None,
+            last_frame_ms=fast.last_frame_ms if fast is not None else None,
+        )
+        if active and not self._boost_posture_active:
+            self._boost_posture_active = True
+            self._apply_boost_posture(sample, reason)
+        elif not active and self._boost_posture_active:
+            self._boost_posture_active = False
+            # Slow lane resumes ownership on its next tick; drop our reductions'
+            # boost floor now by restoring the GPU/soft-PL1 to the slow state.
+            self.restore()
+
+    def _apply_boost_posture(self, sample: GamePowerSample, reason: str | None) -> None:
+        if self._write_failed:
+            return
+        rpe = sample.gpu_rpe_mhz
+        gpu_min = (
+            max(1, int(rpe * self.config.gpu_boost_floor_ratio))
+            if rpe is not None
+            else None
+        )
+        boost = GamePowerActuation(
+            pcore_epp=self.config.loading_pcore_epp,
+            gpu_min_mhz=gpu_min,
+            soft_pl1_w=None,
+        )
+        decision = GamePowerDecision(
+            GamePowerAction.LOADING_BOOST,
+            f"fast-lane boost ({reason})",
+            actuation=boost,
+        )
+        self._apply_cpu_intent(decision)
+        if not self._write_failed:
+            self._apply_gpu_pl1_intent(decision)
+
+    async def run_once(self, *, sleep_between: bool = True) -> GamePowerDecision:
         self._refresh_config()
         if self.config.mode == GamePowerMode.OFF:
             self._close_current_session()
             self.restore()
-            await self.sleep(self.config.poll_s)
+            if sleep_between:
+                await self.sleep(self.config.poll_s)
             sample = GamePowerSample(
                 appid=None,
                 rapl=None,
@@ -1668,13 +3516,104 @@ class GamePowerGovernor:
             elapsed_s = time.monotonic() - self._started_s
             self._emit_decision(sample, decision, elapsed_s=elapsed_s)
             return decision
-        sample = await self.observer.sample()
+        sample = await self._observer_sample(sleep_between)
+        self._last_sample = sample
         self._prepare_context(sample)
         decision = self.controller.evaluate(sample)
-        outcome = self._apply_decision(decision)
+        decision = self._maybe_apply_boost(sample, decision)
+        outcome = self._apply_decision(decision, sample)
+        decision = self._with_applied_telemetry(decision)
         self._record_session_sample(decision, outcome)
         elapsed_s = time.monotonic() - self._started_s
         self._emit_decision(sample, decision, elapsed_s=elapsed_s)
+        return decision
+
+    def _maybe_apply_boost(
+        self, sample: GamePowerSample, decision: GamePowerDecision
+    ) -> GamePowerDecision:
+        """Overlay the fast boost lane on a target-balance decision (contract 1.5).
+
+        Boost is unconditional (removes only our own reductions): it releases the
+        trim rungs, clears the soft-PL1 overlay, floors GPU ``min_freq`` at rpe,
+        and sets pcore EPP performance. LOADING implies boost posture.
+        """
+
+        if self.config.mode != GamePowerMode.TARGET_BALANCE:
+            return decision
+        target_frame_ms = (
+            sample.frame_target.target_frame_ms
+            if sample.frame_target is not None
+            else None
+        )
+        fast = self._fast_feed_read()
+        psi = _foreground_cpu_psi_avg10(sample.pressure)
+        active, reason = self._boost.evaluate(
+            target_frame_ms=target_frame_ms,
+            spike_worst_ms=fast.spike_worst_ms if fast is not None else None,
+            last_frame_ms=fast.last_frame_ms if fast is not None else None,
+            psi_avg10=psi,
+            phase_is_loading=decision.phase == GamePowerPhase.LOADING,
+        )
+        self._boost_posture_active = active
+        if not active:
+            return replace(decision, boost_active=False, boost_reason=None)
+        rpe = sample.gpu_rpe_mhz
+        gpu_min = (
+            max(1, int(rpe * self.config.gpu_boost_floor_ratio))
+            if rpe is not None
+            else None
+        )
+        if decision.phase == GamePowerPhase.LOADING:
+            # LOADING already released the rungs and set the loading EPP; boost
+            # only adds the GPU min floor and guarantees the soft-PL1 is clear.
+            base = decision.actuation or GamePowerActuation()
+            boost_actuation = replace(
+                base,
+                gpu_min_mhz=gpu_min,
+                gpu_max_mhz=None,
+                gpu_max_ratio=None,  # D6: boost lifts any G-rung ratio cap too.
+                soft_pl1_w=None,
+            )
+        else:
+            boost_actuation = GamePowerActuation(
+                pcore_epp=self.config.loading_pcore_epp,
+                gpu_min_mhz=gpu_min,
+                soft_pl1_w=None,
+            )
+        gpu_caps = {"min_mhz": gpu_min, "max_mhz": None} if gpu_min is not None else None
+        return replace(
+            decision,
+            actuation=boost_actuation,
+            boost_active=True,
+            boost_reason=reason,
+            soft_pl1_w=None,
+            gpu_freq_caps=gpu_caps,
+            trim_rungs_active=[],
+        )
+
+    def _fast_feed_read(self) -> FrameFeedFast | None:
+        if self.frame_feed_reader is None:
+            return None
+        reader = getattr(self.frame_feed_reader, "read_fast", None)
+        if not callable(reader):
+            return None
+        try:
+            return reader()
+        except Exception:  # noqa: BLE001 - fast path must never raise
+            return None
+
+    def _with_applied_telemetry(self, decision: GamePowerDecision) -> GamePowerDecision:
+        """Attach the *applied* GPU caps to the decision for telemetry v3."""
+
+        if decision.persona is None:
+            return decision
+        caps = (
+            self._gpu_caps_telemetry
+            if self._gpu_caps_telemetry is not None
+            else self._gpu_caps_applied
+        )
+        if caps is not None and decision.boost_active is not True:
+            return replace(decision, gpu_freq_caps=dict(caps))
         return decision
 
     def _emit_decision(
@@ -1703,19 +3642,75 @@ class GamePowerGovernor:
             print(f"game-power: runtime snapshot write failed: {exc}", file=sys.stderr)
 
     def restore(self) -> GamePowerActuatorOutcome:
+        # V10: the GPU envelope and soft-PL1 overlay are our own reductions and
+        # must be lifted on every restore path (mode change / close / RESTORE /
+        # deactivation), readback-verified and fail-closed like the CPU one.
+        gpu_pl1_detail = self._restore_gpu_and_pl1()
         if self._snapshot is not None:
             try:
-                self.actuator.restore(self._snapshot)
+                failed = self.actuator.restore(self._snapshot)
             except Exception as exc:
                 print(f"game-power: restore failed: {exc}", file=sys.stderr)
                 return GamePowerActuatorOutcome(True, False, str(exc))
             self._snapshot = None
+            self._applied_actuation = None
+            failed = list(failed or [])
+            if failed:
+                # F2: a partial restore must be loud and fail-closed, never a
+                # silent exit-0 with residue left in sysfs.
+                detail = self._report_restore_failures(failed)
+                return GamePowerActuatorOutcome(True, False, detail)
+            if gpu_pl1_detail is not None:
+                return GamePowerActuatorOutcome(True, False, gpu_pl1_detail)
             return GamePowerActuatorOutcome(True, True, "restored")
+        if gpu_pl1_detail is not None:
+            return GamePowerActuatorOutcome(True, False, gpu_pl1_detail)
         return GamePowerActuatorOutcome(False, True, "no-snapshot")
+
+    def _restore_gpu_and_pl1(self) -> str | None:
+        """Lift the GPU cap and clear the soft-PL1 overlay. Returns a failure
+        detail string when a GPU readback restore failed (fail-closed), else
+        ``None``."""
+
+        detail: str | None = None
+        if self.gpu_actuator is not None and self._gpu_snapshot is not None:
+            try:
+                failed = list(self.gpu_actuator.restore(self._gpu_snapshot) or [])
+            except Exception as exc:  # noqa: BLE001 - restore must never raise
+                failed = [f"gpu:{exc}"]
+            self._gpu_snapshot = None
+            self._gpu_caps_applied = None
+            self._gpu_caps_telemetry = None
+            if failed:
+                detail = "gpu-restore-mismatch: " + ", ".join(failed)
+                print(f"game-power: {detail}", file=sys.stderr)
+                self._write_failed = True
+        if self.soft_pl1_actuator is not None and self._soft_pl1_applied is not None:
+            try:
+                self.soft_pl1_actuator.set_soft_pl1_w(None)
+            except Exception as exc:  # noqa: BLE001
+                print(f"game-power: soft-PL1 clear failed: {exc}", file=sys.stderr)
+                self._write_failed = True
+                detail = detail or f"soft-pl1-clear-failed: {exc}"
+            self._soft_pl1_applied = None
+        return detail
+
+    def _report_restore_failures(self, failed: list[str]) -> str:
+        detail = "restore-mismatch: " + ", ".join(failed)
+        print(f"game-power: {detail}", file=sys.stderr)
+        self._write_failed = True
+        return detail
 
     def close(self) -> None:
         self._close_current_session()
+        self._restore_gated_lanes()
         self.restore()
+
+    def _restore_gated_lanes(self) -> None:
+        try:
+            self.cgroup_writer.restore_all()
+        except Exception as exc:  # noqa: BLE001 - restore must never raise
+            print(f"game-power: gated lane restore failed: {exc}", file=sys.stderr)
 
     def _refresh_config(self) -> None:
         if self.config_provider is None:
@@ -1724,11 +3719,42 @@ class GamePowerGovernor:
         if next_config == self.config:
             return
         self._close_current_session()
+        # Mode/config change releases the gated cgroup lanes (design section 8).
+        self._restore_gated_lanes()
+        # C2: a runtime mode change must also restore the CPU actuation snapshot.
+        # The new controller (fresh OFF/OBSERVE/GPU_PRIORITY) would never emit a
+        # RESTORE for the old target-balance snapshot, so a ladder cap would
+        # survive the switch. Restore here whenever the previous mode was
+        # target-balance or any actuation is still applied.
+        if (
+            self.config.mode == GamePowerMode.TARGET_BALANCE
+            or self._applied_actuation is not None
+            or self._gpu_snapshot is not None
+            or self._soft_pl1_applied is not None
+        ):
+            self.restore()
+        self._boost.reset()
+        self._boost_posture_active = False
+        self.cgroup_writer.reset()
         self.config = next_config
-        self.controller = GamePowerController(next_config)
+        self.controller = self._new_controller(next_config)
         self._write_failed = False
 
-    def _apply_decision(self, decision: GamePowerDecision) -> GamePowerActuatorOutcome:
+    def _apply_decision(
+        self, decision: GamePowerDecision, sample: GamePowerSample
+    ) -> GamePowerActuatorOutcome:
+        if self.config.mode == GamePowerMode.TARGET_BALANCE:
+            return self._apply_decision_target_balance(decision, sample)
+        # C2 (defense in depth): if a target-balance actuation is still applied
+        # when a non-TB path takes over, restore it before proceeding so a stale
+        # ladder cap / EPP / GPU cap / soft-PL1 cannot survive into the
+        # gpu-priority or observe/off path.
+        if (
+            self._applied_actuation is not None
+            or self._gpu_snapshot is not None
+            or self._soft_pl1_applied is not None
+        ):
+            self.restore()
         if self._write_failed:
             return GamePowerActuatorOutcome(False, False, "writes-disabled")
         if decision.action in {GamePowerAction.IDLE, GamePowerAction.OBSERVE_ONLY}:
@@ -1757,6 +3783,239 @@ class GamePowerGovernor:
             return outcome
         return GamePowerActuatorOutcome(False, True, "applied")
 
+    def _apply_decision_target_balance(
+        self, decision: GamePowerDecision, sample: GamePowerSample
+    ) -> GamePowerActuatorOutcome:
+        """Apply target-balance decisions as absolute CPU state (design section 5).
+
+        Every non-neutral intent is realized as restore-to-baseline plus apply,
+        so phase changes and ladder step-downs are correct without tracking the
+        deltas of prior writes. A write failure (CPU or gated cgroup lane)
+        triggers a full restore and the existing fail-closed ``_write_failed``
+        latch.
+        """
+
+        if self._write_failed:
+            return GamePowerActuatorOutcome(False, False, "writes-disabled")
+        cpu_outcome = self._apply_cpu_intent(decision)
+        if self._write_failed:
+            return cpu_outcome
+        gpu_pl1_outcome = self._apply_gpu_pl1_intent(decision)
+        if self._write_failed:
+            return gpu_pl1_outcome
+        gate_outcome = self._apply_gated_lane_writes(decision, sample)
+        if self._write_failed:
+            return gate_outcome
+        return cpu_outcome
+
+    def _apply_gpu_pl1_intent(
+        self, decision: GamePowerDecision
+    ) -> GamePowerActuatorOutcome:
+        """Apply the GPU envelope + soft-PL1 overlay as absolute reduction-only
+        state (contracts 1.2/1.3). ``None`` intent restores/clears both."""
+
+        intent = decision.actuation
+        gpu_min = intent.gpu_min_mhz if intent is not None else None
+        gpu_max = intent.gpu_max_mhz if intent is not None else None
+        gpu_max_ratio = intent.gpu_max_ratio if intent is not None else None
+        if self.gpu_actuator is not None:
+            if gpu_min is None and gpu_max is None and gpu_max_ratio is None:
+                if self._gpu_snapshot is not None:
+                    detail = self._restore_gpu_only()
+                    if detail is not None:
+                        return GamePowerActuatorOutcome(True, False, detail)
+            else:
+                target = {
+                    "min_mhz": gpu_min,
+                    "max_mhz": gpu_max,
+                    "max_ratio": gpu_max_ratio,
+                }
+                if target != self._gpu_caps_applied:
+                    try:
+                        if self._gpu_snapshot is None:
+                            self._gpu_snapshot = self.gpu_actuator.snapshot()
+                        else:
+                            # Reset to the baseline envelope before applying the
+                            # new absolute one so a step-down or a boost (which
+                            # floors min but lifts the max cap) cannot leave a
+                            # stale cap/floor behind (mirrors the CPU discipline).
+                            self.gpu_actuator.restore(self._gpu_snapshot)
+                        self.gpu_actuator.apply(
+                            min_mhz=gpu_min, max_mhz=gpu_max, max_ratio=gpu_max_ratio
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(
+                            "game-power: GPU write failed; restoring and disabling "
+                            f"writes: {exc}",
+                            file=sys.stderr,
+                        )
+                        self.restore()
+                        self._write_failed = True
+                        return GamePowerActuatorOutcome(True, False, str(exc))
+                    if getattr(self.gpu_actuator, "failed", False):
+                        # Fail-closed latch tripped inside the actuator.
+                        self.restore()
+                        self._write_failed = True
+                        return GamePowerActuatorOutcome(True, False, "gpu-write-latched")
+                    self._gpu_caps_applied = target
+                    self._gpu_caps_telemetry = self._gpu_applied_telemetry(gpu_min)
+        if self.soft_pl1_actuator is not None:
+            soft = intent.soft_pl1_w if intent is not None else None
+            if soft != self._soft_pl1_applied:
+                try:
+                    self.soft_pl1_actuator.set_soft_pl1_w(soft)
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        "game-power: soft-PL1 write failed; restoring and "
+                        f"disabling writes: {exc}",
+                        file=sys.stderr,
+                    )
+                    self.restore()
+                    self._write_failed = True
+                    return GamePowerActuatorOutcome(True, False, str(exc))
+                self._soft_pl1_applied = soft
+        return GamePowerActuatorOutcome(False, True, "gpu-pl1-applied")
+
+    def _gpu_applied_telemetry(self, intent_min: int | None) -> dict[str, object]:
+        """Build the telemetry v3 ``gpu_freq_caps`` from what the actuator wrote.
+
+        D6: report a per-GT breakdown (``per_gt``) built from the actuator's
+        recorded per-GT applied values, and keep the flat ``min_mhz``/``max_mhz``
+        keys populated with the RENDER GT (gt0) values for backward compat. The
+        min the cap forced is data-dependent (D1: a max cap lowers a latched-high
+        min per GT), so the flat/render min reflects what was actually written.
+        """
+
+        last_applied = getattr(self.gpu_actuator, "last_applied", None) or {}
+        per_gt: dict[str, object] = {
+            name: {"min_mhz": mn, "max_mhz": mx}
+            for name, (mn, mx) in last_applied.items()
+        }
+        render_min: int | None = None
+        render_max: int | None = None
+        gts = getattr(self.gpu_actuator, "gts", None) or []
+        if gts:
+            render_min, render_max = last_applied.get(gts[0].name, (None, None))
+        if render_min is None:
+            # Fall back to the explicit intent min, then the deepest floor the
+            # cap forced across GTs (preserves the pre-D6 flat-min semantics).
+            render_min = intent_min
+            if render_min is None:
+                render_min = getattr(self.gpu_actuator, "last_applied_min_mhz", None)
+        return {"min_mhz": render_min, "max_mhz": render_max, "per_gt": per_gt}
+
+    def _restore_gpu_only(self) -> str | None:
+        if self.gpu_actuator is None or self._gpu_snapshot is None:
+            return None
+        try:
+            failed = list(self.gpu_actuator.restore(self._gpu_snapshot) or [])
+        except Exception as exc:  # noqa: BLE001
+            failed = [f"gpu:{exc}"]
+        self._gpu_snapshot = None
+        self._gpu_caps_applied = None
+        self._gpu_caps_telemetry = None
+        if failed:
+            detail = "gpu-restore-mismatch: " + ", ".join(failed)
+            print(f"game-power: {detail}", file=sys.stderr)
+            self._write_failed = True
+            return detail
+        return None
+
+    def _apply_cpu_intent(
+        self, decision: GamePowerDecision
+    ) -> GamePowerActuatorOutcome:
+        intent = decision.actuation
+        if intent is None:
+            if self._snapshot is not None and self._applied_actuation is not None:
+                try:
+                    failed = list(self.actuator.restore(self._snapshot) or [])
+                except Exception as exc:  # noqa: BLE001
+                    print(f"game-power: restore failed: {exc}", file=sys.stderr)
+                    self._write_failed = True
+                    return GamePowerActuatorOutcome(True, False, str(exc))
+                self._applied_actuation = None
+                if failed:
+                    # F2: partial restore -> loud stderr + fail-closed latch.
+                    detail = self._report_restore_failures(failed)
+                    return GamePowerActuatorOutcome(True, False, detail)
+            return GamePowerActuatorOutcome(False, True, "no-write-action")
+        if intent == self._applied_actuation and self._snapshot is not None:
+            return GamePowerActuatorOutcome(False, True, "held")
+        try:
+            if self._snapshot is None:
+                self._snapshot = self.actuator.snapshot()
+            elif self._applied_actuation is not None:
+                # Reset to baseline before applying the new absolute state so a
+                # step-down or phase change cannot leave a stale cap/EPP behind.
+                failed = list(self.actuator.restore(self._snapshot) or [])
+                if failed:
+                    # F2: surface the partial reset before the fail-closed path.
+                    self._report_restore_failures(failed)
+                    raise OSError("cpu restore readback mismatch")
+            self.actuator.apply(
+                pcore_epp=intent.pcore_epp,
+                ecore_epp=intent.ecore_epp,
+                pcore_max_khz=intent.pcore_max_khz,
+                ecore_max_khz=intent.ecore_max_khz,
+            )
+            self._applied_actuation = intent
+        except Exception as exc:
+            print(
+                "game-power: active write failed; restoring and disabling writes: "
+                f"{exc}",
+                file=sys.stderr,
+            )
+            outcome = self.restore()
+            self._restore_gated_lanes()
+            self._write_failed = True
+            return outcome
+        return GamePowerActuatorOutcome(False, True, "applied")
+
+    def _apply_gated_lane_writes(
+        self, decision: GamePowerDecision, sample: GamePowerSample
+    ) -> GamePowerActuatorOutcome:
+        lanes = decision.gated_lanes or {}
+        writer = self.cgroup_writer
+        try:
+            fg = lanes.get("foreground_uclamp_min") or {}
+            if fg.get("state") == "active" and sample.foreground_cgroup_path:
+                if not writer.apply_foreground_uclamp(sample.foreground_cgroup_path):
+                    raise OSError("foreground uclamp.min write failed")
+            else:
+                writer.restore_foreground_uclamp()
+
+            bg = lanes.get("background_shaping") or {}
+            if (
+                bg.get("state") == "active"
+                and sample.allowlist_cgroups
+                and sample.appid is not None
+            ):
+                variants = bg.get("variants") or [self.config.background_shaping_variant]
+                if not writer.apply_background(
+                    list(sample.allowlist_cgroups),
+                    appid=sample.appid,
+                    variants=list(variants),
+                ):
+                    raise OSError("background shaping write failed")
+            else:
+                writer.restore_background()
+        except Exception as exc:  # noqa: BLE001
+            print(
+                "game-power: gated lane write failed; restoring and disabling "
+                f"writes: {exc}",
+                file=sys.stderr,
+            )
+            self._restore_gated_lanes()
+            self.restore()
+            self._write_failed = True
+            return GamePowerActuatorOutcome(True, False, str(exc))
+        # C9/C10: a restore that failed (unrestored floor / bg lane) must fail
+        # the daemon closed even though no apply raised this tick.
+        if getattr(writer, "failed", False):
+            self._write_failed = True
+            return GamePowerActuatorOutcome(False, True, "gated-lane-unrestored")
+        return GamePowerActuatorOutcome(False, True, "gated-applied")
+
     def _prepare_context(self, sample: GamePowerSample) -> None:
         context = self._sample_context(sample)
         next_key = canonical_hint_key(context) if context is not None else None
@@ -1770,7 +4029,10 @@ class GamePowerGovernor:
             if self.hint_store is not None and context is not None and context.complete
             else None
         )
-        self.controller = GamePowerController(self.config, hint=hint)
+        # Foreground context change releases any active gated cgroup lanes so a
+        # stale write cannot survive into a different game/context.
+        self._restore_gated_lanes()
+        self.controller = self._new_controller(self.config, hint=hint)
         if context is not None:
             self._session = GamePowerSessionSummary(
                 context=context,
@@ -2020,7 +4282,56 @@ def format_decision_jsonl(
         "classification": _classification_json(decision.classification),
         "pressure": _pressure_json(sample.pressure),
     }
+    if decision.phase is not None:
+        # Additive V9 fields; only present for target-balance so gpu-priority
+        # JSONL replay stays byte-identical.
+        payload["phase"] = decision.phase.value
+        payload["phase_reason_codes"] = list(decision.phase_reason_codes)
+        payload["ladder_step"] = decision.ladder_step
+    _apply_v9_additive_fields(payload, decision)
     return json.dumps(payload, sort_keys=True)
+
+
+def _apply_v9_additive_fields(
+    payload: dict[str, object], decision: GamePowerDecision
+) -> None:
+    """Attach color-ledger / verdict / gated-lane telemetry when present.
+
+    These are populated only by target-balance decisions, so gpu-priority JSONL
+    and snapshots stay byte-identical (same only-when-not-None pattern as
+    ``phase``).
+    """
+
+    if decision.color_ledger is not None:
+        payload["color_ledger"] = decision.color_ledger
+    if decision.verdict_ledger_health is not None:
+        payload["verdict_ledger_health"] = decision.verdict_ledger_health
+    if decision.gated_lanes is not None:
+        payload["gated_lanes"] = decision.gated_lanes
+    _apply_v10_additive_fields(payload, decision)
+
+
+def _apply_v10_additive_fields(
+    payload: dict[str, object], decision: GamePowerDecision
+) -> None:
+    """Attach telemetry v3 fields when present (contract 1.7).
+
+    Populated only by target-balance decisions, so gpu-priority JSONL/snapshots
+    stay byte-identical (same only-when-not-None discipline). ``persona`` gates
+    the whole block: it is set on every target-balance decision and never on the
+    gpu-priority path.
+    """
+
+    if decision.persona is None:
+        return
+    payload["persona"] = decision.persona
+    payload["soft_pl1_w"] = decision.soft_pl1_w
+    payload["gpu_freq_caps"] = decision.gpu_freq_caps
+    payload["boost_active"] = bool(decision.boost_active)
+    payload["boost_reason"] = decision.boost_reason
+    payload["trim_rungs_active"] = list(decision.trim_rungs_active or [])
+    payload["frame_feed_status"] = decision.frame_feed_status
+    payload["limiter_state"] = decision.limiter_state or "unknown"
 
 
 def runtime_snapshot_payload(
@@ -2038,12 +4349,13 @@ def runtime_snapshot_payload(
     rapl = sample.rapl
     classification = decision.classification
     learning_state = learning or _default_learning_state()
-    return {
+    payload: dict[str, object] = {
         "schema_version": RUNTIME_SNAPSHOT_SCHEMA_VERSION,
         "timestamp_monotonic_s": round(elapsed_s, 3),
         "source": source,
         "mode": public_game_power_mode(config.mode),
-        "control_active": config.mode == GamePowerMode.GPU_PRIORITY,
+        "control_active": config.mode
+        in (GamePowerMode.GPU_PRIORITY, GamePowerMode.TARGET_BALANCE),
         "sample_source": sample_source,
         "appid": sample.appid,
         "last_action": decision.action.value,
@@ -2074,6 +4386,12 @@ def runtime_snapshot_payload(
         "stale": stale,
         "error": error,
     }
+    if decision.phase is not None:
+        payload["phase"] = decision.phase.value
+        payload["phase_reason_codes"] = list(decision.phase_reason_codes)
+        payload["ladder_step"] = decision.ladder_step
+    _apply_v9_additive_fields(payload, decision)
+    return payload
 
 
 def _default_learning_state() -> dict[str, object]:
@@ -2394,6 +4712,13 @@ class SystemGamePowerObserver:
         frame_target: FrameTargetTelemetry | None = None,
         frame_target_provider: Callable[[], FrameTargetTelemetry | None] | None = None,
         frame_performance_reader: object | None = None,
+        frame_feed_reader: object | None = None,
+        gpu_rp0_mhz: int | None = None,
+        gpu_rpe_mhz: int | None = None,
+        package_median_window: int = 5,
+        colorize_interval_s: float = 10.0,
+        loading_frame_stall_s: float = 2.0,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.rapl = RaplObserver(sysfs_root=sysfs_root)
         self.proc_root = Path(proc_root)
@@ -2402,17 +4727,67 @@ class SystemGamePowerObserver:
         self.frame_target = frame_target
         self.frame_target_provider = frame_target_provider
         self.frame_performance_reader = frame_performance_reader
+        # V10 additive: the mangoapp frame feed (contract 1.1) is preferred over
+        # the MangoHud CSV; static GPU bounds size the rungs/boost floor.
+        self.frame_feed_reader = frame_feed_reader
+        self.gpu_rp0_mhz = gpu_rp0_mhz
+        self.gpu_rpe_mhz = gpu_rpe_mhz
+        self.colorize_interval_s = colorize_interval_s
+        self.loading_frame_stall_s = loading_frame_stall_s
+        self.clock = clock
+        self._frame_feed_status: str | None = None
+        self._package_w_window: deque[float] = deque(
+            maxlen=max(1, int(package_median_window))
+        )
+        self._previous_fdinfo: dict[str, int] | None = None
         self._previous_rapl: EnergyReading | None = None
+        self._last_runqueue_wait_ms_per_s: float | None = None
+        self._frame_signature: tuple[object, ...] | None = None
+        self._frame_last_change_s: float | None = None
+        # --- V9 coloring cadence state (section 6). One /proc pass per colorize
+        # tick feeds both the color ledger and the foreground runqueue-wait
+        # aggregate (Q2: single pass, single cadence counter). ---
+        self._color_tick = 0
+        self._color_prev: dict[int, dict[str, object]] | None = None
+        self._color_prev_s: float = 0.0
+        self._fg_sched_prev: dict[int, tuple[int, int]] | None = None
+        self._last_color_entries: tuple[ColorLedgerEntry, ...] | None = None
+        self._last_color_truncated = False
+        self._last_allowlist_cgroups: tuple[dict[str, object], ...] = ()
 
-    async def sample(self) -> GamePowerSample:
+    def _colorize_period_ticks(self) -> int:
+        if self.poll_s <= 0:
+            return 1
+        return max(1, round(self.colorize_interval_s / self.poll_s))
+
+    async def sample(self, *, sleep_between: bool = True) -> GamePowerSample:
+        # ``sleep_between`` False lets the governor own the poll cadence (the fast
+        # boost lane, contract 1.5): the RAPL/fdinfo window then spans the wall
+        # time between successive slow ticks via the carried-forward previous
+        # readings instead of an internal sleep.
         start = self._previous_rapl or self.rapl.read()
         processes = find_steam_game_processes(self.proc_root)
         process = processes[0] if processes else None
-        fdinfo_start = read_process_fdinfo_engines(self.proc_root, process.pid) if process else {}
-        await asyncio.sleep(self.poll_s)
-        end = self.rapl.read()
-        fdinfo_end = read_process_fdinfo_engines(self.proc_root, process.pid) if process else {}
+        fdinfo_now = (
+            read_process_fdinfo_engines(self.proc_root, process.pid) if process else {}
+        )
+        if sleep_between:
+            fdinfo_start = fdinfo_now
+            await asyncio.sleep(self.poll_s)
+            end = self.rapl.read()
+            fdinfo_end = (
+                read_process_fdinfo_engines(self.proc_root, process.pid)
+                if process
+                else {}
+            )
+        else:
+            fdinfo_start = (
+                self._previous_fdinfo if self._previous_fdinfo is not None else fdinfo_now
+            )
+            end = self.rapl.read()
+            fdinfo_end = fdinfo_now
         self._previous_rapl = end
+        self._previous_fdinfo = fdinfo_end if process else None
         try:
             rapl = compute_rapl_power_window(start, end)
         except ValueError:
@@ -2423,15 +4798,141 @@ class SystemGamePowerObserver:
             if process
             else {}
         )
+        frame_performance = self._read_frame_performance()
+        runqueue_wait = self._read_colorize_signals(process)
         return GamePowerSample(
             appid=process.appid if process else None,
             rapl=rapl,
             pl1_w=_read_current_pl1_w(self.rapl.sysfs_root),
             fdinfo_busy=busy,
             frame_target=self._read_frame_target(),
-            frame_performance=self._read_frame_performance(),
+            frame_performance=frame_performance,
             pressure=self._read_pressure(process),
+            foreground_runqueue_wait_ms_per_s=runqueue_wait,
+            foreground_process_age_s=(
+                read_process_age_s(self.proc_root, process.pid)
+                if process is not None
+                else None
+            ),
+            frame_feed_stalled=self._frame_feed_stalled(frame_performance),
+            color_ledger_entries=self._last_color_entries,
+            color_ledger_truncated=self._last_color_truncated,
+            allowlist_cgroups=self._last_allowlist_cgroups,
+            foreground_cgroup_path=self._foreground_cgroup_path(process),
+            gpu_rp0_mhz=self.gpu_rp0_mhz,
+            gpu_rpe_mhz=self.gpu_rpe_mhz,
+            package_median_w=self._package_median_w(rapl),
+            frame_feed_status=self._frame_feed_status,
         )
+
+    def _package_median_w(self, rapl: RaplPowerWindow | None) -> float | None:
+        if rapl is None or rapl.package_w is None:
+            return None
+        self._package_w_window.append(rapl.package_w)
+        ordered = sorted(self._package_w_window)
+        mid = len(ordered) // 2
+        if len(ordered) % 2:
+            return round(ordered[mid], 3)
+        return round((ordered[mid - 1] + ordered[mid]) / 2.0, 3)
+
+    def _foreground_cgroup_path(self, process: GameProcess | None) -> str | None:
+        if process is None:
+            return None
+        path = resolve_cgroup_v2_path(self.cgroup_root, process.cgroup_text)
+        return str(path) if path is not None else None
+
+    def _read_colorize_signals(self, process: GameProcess | None) -> float | None:
+        """One /proc pass per colorize tick: color ledger + runqueue wait (Q2).
+
+        Colorize cadence (design section 6): recompute both signals every
+        ``colorize_interval_s``; carry the last values forward between samples.
+        Returns the foreground runqueue-wait aggregate (ms/s).
+        """
+
+        self._color_tick += 1
+        if process is None:
+            self._color_prev = None
+            self._fg_sched_prev = None
+            self._last_color_entries = None
+            self._last_color_truncated = False
+            self._last_allowlist_cgroups = ()
+            self._last_runqueue_wait_ms_per_s = None
+            return None
+        if (self._color_tick - 1) % self._colorize_period_ticks() != 0:
+            return self._last_runqueue_wait_ms_per_s
+        now = float(self.clock())
+        fg_rows = read_colorize_thread_rows(
+            self.proc_root, process.pid, process.cgroup_text, restore_covered=True
+        )
+        rows: dict[int, dict[str, object]] = dict(fg_rows)
+        allowlist: list[dict[str, object]] = []
+        for helper in find_colorize_helper_processes(self.proc_root, process.appid):
+            rows.update(
+                read_colorize_thread_rows(
+                    self.proc_root,
+                    helper.pid,
+                    helper.cgroup_text,
+                    restore_covered=True,
+                )
+            )
+            if process.appid is not None and is_background_shaping_write_target(
+                helper.cgroup_text, appid=process.appid
+            ):
+                path = resolve_cgroup_v2_path(self.cgroup_root, helper.cgroup_text)
+                if path is not None:
+                    entry = {"cgroup": helper.cgroup_text, "path": str(path)}
+                    if entry not in allowlist:
+                        allowlist.append(entry)
+        self._last_allowlist_cgroups = tuple(allowlist)
+        fg_sched = {
+            tid: (int(row["cpu_ns"]), int(row["wait_ns"]))
+            for tid, row in fg_rows.items()
+        }
+        if self._color_prev is not None:
+            elapsed = now - self._color_prev_s
+            if elapsed > 0:
+                samples = _colorize_delta_samples(self._color_prev, rows)
+                kept, truncated = cap_thread_samples(
+                    samples, budget=COLOR_LEDGER_TID_BUDGET
+                )
+                observations = aggregate_role_observations(kept, window_s=elapsed)
+                ledger = build_color_ledger(observations, appid=process.appid)
+                self._last_color_entries = ledger.entries
+                self._last_color_truncated = truncated
+                value = compute_foreground_runqueue_wait_ms_per_s(
+                    self._fg_sched_prev or {},
+                    fg_sched,
+                    elapsed_s=elapsed,
+                )
+                if value is not None:
+                    self._last_runqueue_wait_ms_per_s = value
+        self._color_prev = rows
+        self._color_prev_s = now
+        self._fg_sched_prev = fg_sched
+        return self._last_runqueue_wait_ms_per_s
+
+    def _frame_feed_stalled(
+        self, frame_performance: FramePerformanceTelemetry | None
+    ) -> bool | None:
+        if frame_performance is None:
+            self._frame_signature = None
+            self._frame_last_change_s = None
+            return None
+        signature = (
+            frame_performance.avg_fps,
+            frame_performance.p95_frame_ms,
+            frame_performance.sample_count,
+            frame_performance.window_s,
+        )
+        now = float(self.clock())
+        if signature != self._frame_signature:
+            self._frame_signature = signature
+            self._frame_last_change_s = now
+            return False
+        if self._frame_last_change_s is None:
+            self._frame_last_change_s = now
+            return False
+        return (now - self._frame_last_change_s) >= self.loading_frame_stall_s
 
     def _read_frame_target(self) -> FrameTargetTelemetry | None:
         if self.frame_target_provider is not None:
@@ -2439,6 +4940,17 @@ class SystemGamePowerObserver:
         return self.frame_target
 
     def _read_frame_performance(self) -> FramePerformanceTelemetry | None:
+        # Contract 1.1: the mangoapp frame feed wins when present and fresh and
+        # upgrades confidence to high (source mangoapp-feed). Absent / stale /
+        # corrupt -> exact V9 behaviour (MangoHud CSV when configured).
+        if self.frame_feed_reader is not None:
+            read = getattr(self.frame_feed_reader, "read", None)
+            feed = read() if callable(read) else None
+            self._frame_feed_status = getattr(self.frame_feed_reader, "last_status", None)
+            if feed is not None:
+                return feed
+        else:
+            self._frame_feed_status = None
         if self.frame_performance_reader is None:
             return None
         read = getattr(self.frame_performance_reader, "read", None)
@@ -2540,6 +5052,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--frame-performance-min-samples", type=_positive_int, default=12)
     parser.add_argument("--runtime-snapshot-file")
     parser.add_argument("--hint-cache")
+    parser.add_argument("--verdict-ledger")
+    # Profiler-only: unlock ladder S5 for a controlled run without a verdict
+    # (target-balance-ladder5 candidate policy). The daemon service never sets
+    # this flag (design section 7: S5+ requires a BETTER verdict at runtime).
+    parser.add_argument("--allow-ladder-step-5", action="store_true")
+    # V10 frame feed + persona (contracts 1.1 / plan section 0).
+    parser.add_argument("--frame-feed-file")
+    parser.add_argument("--frame-feed-stale-s", type=_positive_finite_float, default=5.0)
+    parser.add_argument(
+        "--persona",
+        choices=[persona.value for persona in GamePowerPersona],
+        default=GamePowerPersona.BATTERY.value,
+    )
+    # Profiler-only rung-subset selection (v10-gpu-cap / v10-soft-pl1 candidate
+    # policies). ``all`` keeps the full persona ladder (daemon default). The
+    # daemon service never sets this; a controlled run isolates one lane so its
+    # A/B evidence attributes savings to that actuator alone.
+    parser.add_argument(
+        "--trim-rungs",
+        choices=sorted(_TRIM_RUNG_FILTERS),
+        default="all",
+    )
     return parser
 
 
@@ -2561,7 +5095,30 @@ def config_from_args(args: argparse.Namespace) -> GamePowerConfig:
         target_appid=args.target_appid,
         frame_target=frame_target,
         frame_performance_min_samples=args.frame_performance_min_samples,
+        allow_ladder_step_5=bool(args.allow_ladder_step_5),
+        persona=GamePowerPersona(args.persona),
+        frame_feed_file=args.frame_feed_file,
+        frame_feed_stale_s=args.frame_feed_stale_s,
+        trim_rung_filter=_TRIM_RUNG_FILTERS[getattr(args, "trim_rungs", "all")],
     )
+
+
+def gpu_freq_bounds(gts: Iterable[object]) -> tuple[int | None, int | None]:
+    """Representative (rp0, rpe) MHz across discovered GTs.
+
+    D6: the GTs do NOT share bounds on the target device -- the render GT (gt0)
+    tops out at rp0 1950 while the media GT (gt1) tops out at 1200. The per-GT
+    cap is derived in the actuator from each GT's own rp0, so this scalar is only
+    a representative for telemetry/boost:
+
+    - ``rp0`` = MAX across GTs = the render GT's ceiling (the flat/render value a
+      controller-side cap-telemetry line reports).
+    - ``rpe`` = MIN across GTs = the conservative efficient-frequency boost floor.
+    """
+
+    rp0 = [gt.rp0_mhz for gt in gts if getattr(gt, "rp0_mhz", None) is not None]
+    rpe = [gt.rpe_mhz for gt in gts if getattr(gt, "rpe_mhz", None) is not None]
+    return (max(rp0) if rp0 else None, min(rpe) if rpe else None)
 
 
 def _positive_finite_float(value: str) -> float:
@@ -2609,6 +5166,14 @@ async def run_cli(args: argparse.Namespace) -> None:
         if args.frame_performance_csv
         else None
     )
+    frame_feed_reader = (
+        FrameFeedReader(args.frame_feed_file, stale_s=config.frame_feed_stale_s)
+        if args.frame_feed_file
+        else None
+    )
+    gts = discover_gpu_gts(args.sysfs_root)
+    gpu_rp0_mhz, gpu_rpe_mhz = gpu_freq_bounds(gts)
+    gpu_actuator = GpuFreqActuator(gts) if gts else None
     observer = SystemGamePowerObserver(
         sysfs_root=args.sysfs_root,
         proc_root=args.proc_root,
@@ -2616,15 +5181,36 @@ async def run_cli(args: argparse.Namespace) -> None:
         poll_s=config.poll_s,
         frame_target=config.frame_target,
         frame_performance_reader=frame_performance_reader,
+        frame_feed_reader=frame_feed_reader,
+        gpu_rp0_mhz=gpu_rp0_mhz,
+        gpu_rpe_mhz=gpu_rpe_mhz,
+        colorize_interval_s=config.colorize_interval_s,
+        loading_frame_stall_s=config.loading_frame_stall_s,
     )
-    actuator = CpuPolicyActuator(discover_cpu_policies(args.sysfs_root))
+    policies = discover_cpu_policies(args.sysfs_root)
+    actuator = CpuPolicyActuator(policies)
+    verdict_ledger = None
+    verdict_env = None
+    if config.mode == GamePowerMode.TARGET_BALANCE:
+        verdict_ledger = GamePowerVerdictLedger(
+            args.verdict_ledger or DEFAULT_VERDICT_LEDGER_FILE,
+            fallback_path=DEFAULT_VERDICT_LEDGER_RUN_FALLBACK,
+        )
+        verdict_env = GamePowerVerdictEnv(
+            topology_fingerprint=topology_fingerprint(policies),
+            kernel=read_kernel_release(args.proc_root),
+        )
     governor = GamePowerGovernor(
         config=config,
         observer=observer,
         actuator=actuator,
+        gpu_actuator=gpu_actuator,
+        frame_feed_reader=frame_feed_reader,
         output_format=args.output_format,
         hint_store=GamePowerHintStore(args.hint_cache) if args.hint_cache else None,
         runtime_snapshot_path=args.runtime_snapshot_file,
+        verdict_ledger=verdict_ledger,
+        verdict_env=verdict_env,
     )
     iterations = max(1, int(args.duration_s / config.poll_s))
     try:
@@ -2691,6 +5277,229 @@ def read_process_fdinfo_engines(proc_root: Path, pid: int) -> dict[str, int]:
         for engine, value in parsed.items():
             totals[engine] = totals.get(engine, 0) + value
     return totals
+
+
+def parse_thread_schedstat(text: str) -> tuple[int, int] | None:
+    """Parse ``/proc/<pid>/task/<tid>/schedstat`` -> (cpu_time_ns, runqueue_wait_ns).
+
+    Q3: thin view over :func:`parse_thread_schedstat_full` (one parser, two
+    historical shapes).
+    """
+
+    parsed = parse_thread_schedstat_full(text)
+    if parsed is None:
+        return None
+    return parsed[0], parsed[1]
+
+
+def compute_foreground_runqueue_wait_ms_per_s(
+    prev: dict[int, tuple[int, int]],
+    curr: dict[int, tuple[int, int]],
+    *,
+    elapsed_s: float,
+    top_n: int = 16,
+) -> float | None:
+    """Sum runqueue-wait deltas over the top-N threads by CPU-time delta (ms/s).
+
+    Design section 4: N=16 threads ranked by CPU-time delta; carried forward
+    between colorize samples by the observer.
+    """
+
+    if elapsed_s <= 0:
+        return None
+    deltas: list[tuple[int, int]] = []  # (cpu_delta_ns, wait_delta_ns)
+    for tid, (cpu_ns, wait_ns) in curr.items():
+        if tid not in prev:
+            continue
+        prev_cpu, prev_wait = prev[tid]
+        cpu_delta = cpu_ns - prev_cpu
+        wait_delta = wait_ns - prev_wait
+        if cpu_delta < 0 or wait_delta < 0:
+            continue
+        deltas.append((cpu_delta, wait_delta))
+    if not deltas:
+        return None
+    deltas.sort(key=lambda item: item[0], reverse=True)
+    total_wait_ns = sum(wait for _cpu, wait in deltas[:top_n])
+    return round(total_wait_ns / 1_000_000 / elapsed_s, 3)
+
+
+def parse_thread_schedstat_full(text: str) -> tuple[int, int, int] | None:
+    """Parse schedstat -> (cpu_time_ns, runqueue_wait_ns, timeslices)."""
+
+    parts = text.split()
+    if len(parts) < 3:
+        return None
+    try:
+        return int(parts[0]), int(parts[1]), int(parts[2])
+    except ValueError:
+        return None
+
+
+def _parse_proc_stat_tail_field(text: str, index: int) -> int | None:
+    """Extract an integer field from the post-comm tail of ``/proc/<pid>/stat``.
+
+    Q3: single parser for the comm-with-spaces-safe stat tail; fields after the
+    closing paren start at field 3 (state), so field N sits at index N - 3.
+    """
+
+    rparen = text.rfind(")")
+    if rparen == -1:
+        return None
+    rest = text[rparen + 2 :].split()
+    if len(rest) <= index:
+        return None
+    try:
+        return int(rest[index])
+    except ValueError:
+        return None
+
+
+def parse_proc_stat_processor(text: str) -> int | None:
+    """Extract field 39 (processor, last-run CPU) from ``/proc/<pid>/stat``."""
+
+    return _parse_proc_stat_tail_field(text, 36)
+
+
+def read_colorize_thread_rows(
+    proc_root: Path, pid: int, cgroup_text: str, *, restore_covered: bool = True
+) -> dict[int, dict[str, object]]:
+    """Read per-thread coloring signals for one process (design section 6).
+
+    Returns ``{tid: {comm, cgroup, cpu_ns, wait_ns, timeslices, current_cpu,
+    restore_covered}}`` for every task under ``/proc/<pid>/task``.
+    """
+
+    task_root = Path(proc_root) / str(pid) / "task"
+    rows: dict[int, dict[str, object]] = {}
+    try:
+        entries = list(task_root.iterdir())
+    except OSError:
+        return rows
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        parsed = parse_thread_schedstat_full(_read_text(entry / "schedstat"))
+        if parsed is None:
+            continue
+        cpu_ns, wait_ns, timeslices = parsed
+        current_cpu = parse_proc_stat_processor(_read_text(entry / "stat"))
+        rows[int(entry.name)] = {
+            "comm": _read_text(entry / "comm") or None,
+            "cgroup": cgroup_text,
+            "cpu_ns": cpu_ns,
+            "wait_ns": wait_ns,
+            "timeslices": timeslices,
+            "current_cpu": current_cpu,
+            "restore_covered": restore_covered,
+        }
+    return rows
+
+
+def find_colorize_helper_processes(
+    proc_root: str | Path, appid: str | None
+) -> list[GameProcess]:
+    """Find compositor/overlay and background-helper processes to colorize.
+
+    These feed color C (compositor-overlay-sensitive) and color D (background-
+    helper-shapable). The foreground game itself is handled separately.
+    """
+
+    proc_root = Path(proc_root)
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return []
+    processes: list[GameProcess] = []
+    for entry in sorted(entries, key=_proc_sort_key):
+        if not entry.name.isdigit():
+            continue
+        cgroup = _read_text(entry / "cgroup")
+        if not cgroup:
+            continue
+        match = STEAM_APP_RE.search(cgroup)
+        if match is not None and (appid is None or match.group(1) == appid):
+            continue  # the foreground game, colorized on its own path
+        shapable = appid is not None and is_background_shaping_write_target(
+            cgroup, appid=appid
+        )
+        if not (shapable or is_compositor_role(cgroup, None)):
+            continue
+        processes.append(
+            GameProcess(
+                pid=int(entry.name),
+                appid=match.group(1) if match else None,
+                command=_read_cmdline(entry / "cmdline"),
+                cgroup_text=cgroup,
+            )
+        )
+    return processes
+
+
+def _colorize_delta_samples(
+    prev: dict[int, dict[str, object]],
+    curr: dict[int, dict[str, object]],
+) -> list[dict[str, object]]:
+    samples: list[dict[str, object]] = []
+    for tid, row in curr.items():
+        old = prev.get(tid)
+        if old is None:
+            continue
+        cpu_delta = int(row["cpu_ns"]) - int(old["cpu_ns"])
+        wait_delta = int(row["wait_ns"]) - int(old["wait_ns"])
+        slice_delta = int(row["timeslices"]) - int(old["timeslices"])
+        if cpu_delta < 0 or wait_delta < 0 or slice_delta < 0:
+            continue
+        cpus_seen = sorted(
+            {
+                cpu
+                for cpu in (old.get("current_cpu"), row.get("current_cpu"))
+                if isinstance(cpu, int)
+            }
+        )
+        samples.append(
+            {
+                "tid": tid,
+                "comm": row.get("comm"),
+                "cgroup": row.get("cgroup"),
+                "cpu_time_ms_delta": cpu_delta / 1_000_000,
+                "runqueue_wait_ms_delta": wait_delta / 1_000_000,
+                "timeslices_delta": slice_delta,
+                "cpus_seen": cpus_seen,
+                "restore_covered": bool(row.get("restore_covered", True)),
+            }
+        )
+    return samples
+
+
+def parse_proc_stat_starttime_ticks(text: str) -> int | None:
+    """Extract field 22 (starttime, clock ticks) from ``/proc/<pid>/stat``."""
+
+    return _parse_proc_stat_tail_field(text, 19)
+
+
+def read_process_age_s(
+    proc_root: str | Path,
+    pid: int,
+    *,
+    clock_ticks_per_s: int | None = None,
+) -> float | None:
+    """Age in seconds of ``pid`` from ``/proc/uptime`` and ``/proc/<pid>/stat``."""
+
+    proc_root = Path(proc_root)
+    uptime = _float_or_none((_read_text(proc_root / "uptime").split() or [""])[0])
+    if uptime is None:
+        return None
+    starttime_ticks = parse_proc_stat_starttime_ticks(
+        _read_text(proc_root / str(pid) / "stat")
+    )
+    if starttime_ticks is None:
+        return None
+    hz = clock_ticks_per_s or os.sysconf("SC_CLK_TCK")
+    if hz <= 0:
+        return None
+    age = uptime - starttime_ticks / hz
+    return round(max(0.0, age), 3)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,17 @@ frame_performance_min_samples="${PROFILE_GAME_POWER_FRAME_PERFORMANCE_MIN_SAMPLE
 frame_performance_live_timeout_s="${PROFILE_GAME_POWER_FRAME_PERFORMANCE_LIVE_TIMEOUT_S:-15}"
 target_satisfied_tdps="${PROFILE_GAME_POWER_TARGET_SATISFIED_TDPS:-22}"
 affinity_plan_json="${PROFILE_GAME_POWER_AFFINITY_PLAN_JSON:-}"
+gpu_floor_mhz="${PROFILE_GAME_POWER_GPU_FLOOR_MHZ:-1600}"
+scx_lavd_bin="${PROFILE_GAME_POWER_SCX_LAVD_BIN:-/usr/bin/scx_lavd}"
+persona="${PROFILE_GAME_POWER_PERSONA:-battery}"
+# V10 Slice C probes (direction section 6 P1-P5). Observe/one-knob capture modes
+# OUTSIDE the A/B pairing discipline; empty runs the normal A/B profiler.
+probe="${PROFILE_GAME_POWER_PROBE:-}"
+probe_pin_baseline_s="${PROFILE_GAME_POWER_PROBE_PIN_BASELINE_S:-300}"
+probe_step_s="${PROFILE_GAME_POWER_PROBE_STEP_S:-60}"
+probe_gpu_cap_steps_mhz="${PROFILE_GAME_POWER_PROBE_GPU_CAP_STEPS_MHZ:-1950 1750 1550 1350 1150 950 800}"
+probe_soft_pl1_steps_w="${PROFILE_GAME_POWER_PROBE_SOFT_PL1_STEPS_W:-17 15 13 11 9}"
+gpu_min_drift_tolerance_mhz="${PROFILE_GAME_POWER_GPU_MIN_DRIFT_TOLERANCE_MHZ:-100}"
 local_root="${PROFILE_GAME_POWER_OUTPUT_ROOT:-.cache/game-power/profiles}"
 mkdir -p "$local_root"
 
@@ -55,6 +66,15 @@ FRAME_PERFORMANCE_MIN_SAMPLES='$frame_performance_min_samples' \
 FRAME_PERFORMANCE_LIVE_TIMEOUT_S='$frame_performance_live_timeout_s' \
 TARGET_SATISFIED_TDPS='$target_satisfied_tdps' \
 AFFINITY_PLAN_JSON='$remote_affinity_plan_json' \
+GPU_FLOOR_MHZ='$gpu_floor_mhz' \
+SCX_LAVD_BIN='$scx_lavd_bin' \
+PERSONA='$persona' \
+PROBE='$probe' \
+PROBE_PIN_BASELINE_S='$probe_pin_baseline_s' \
+PROBE_STEP_S='$probe_step_s' \
+PROBE_GPU_CAP_STEPS_MHZ='$probe_gpu_cap_steps_mhz' \
+PROBE_SOFT_PL1_STEPS_W='$probe_soft_pl1_steps_w' \
+GPU_MIN_DRIFT_TOLERANCE_MHZ='$gpu_min_drift_tolerance_mhz' \
 FAILURE_MARKER='$failure_marker' \
 REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
 set -euo pipefail
@@ -95,6 +115,170 @@ restore_cpu_policy() {
       printf '%s\n' "$max_freq" >"$policy/scaling_max_freq"
     fi
   done <"$REMOTE_ROOT/cpu-policy.initial"
+}
+
+# --- V10 general restore verification: GPU freq + RAPL PL1 (Slice C item 3) ---
+# The daemon's v10 GpuFreqActuator writes GT max_freq and the soft-PL1 overlay
+# writes RAPL constraint_0 directly (bypassing the SteamOS Manager provider that
+# tdp.before/after snapshots). So a per-run gpu-freq and rapl-pl1 before/after
+# diff -- like cpu-policy.before/after -- is required to prove the daemon
+# restored those knobs; a mismatch invalidates the run.
+snapshot_gpu_freq() {
+  python3 - <<'PY'
+import pathlib
+
+for freq in sorted(pathlib.Path("/sys/class/drm").glob("card*/device/tile*/gt*/freq0")):
+    def read(name):
+        try:
+            return pathlib.Path(freq / name).read_text().strip()
+        except OSError:
+            return ""
+    # Stable key: <cardN>/<gtN>. min/max are the writable envelope knobs.
+    card = freq.parents[3].name
+    gt = freq.parent.name
+    print(f"{card}/{gt}\t{read('min_freq')}\t{read('max_freq')}")
+PY
+}
+
+snapshot_rapl_pl1() {
+  python3 - <<'PY'
+import pathlib
+
+# Top-level intel-rapl package domains only (one ':' in the leaf name). The
+# soft-PL1 overlay targets constraint_0 (long-term / PL1) on the package domain.
+root = pathlib.Path("/sys/class/powercap")
+if root.exists():
+    for domain in sorted(root.glob("intel-rapl:*")):
+        if domain.name.count(":") != 1:
+            continue
+        def read(name):
+            try:
+                return (domain / name).read_text().strip()
+            except OSError:
+                return ""
+        print(f"{domain.name}\t{read('constraint_0_name')}\t{read('constraint_0_power_limit_uw')}")
+PY
+}
+
+restore_gpu_freq_snapshot() {
+  local snapshot="$1"
+  [ -f "$snapshot" ] || return 0
+  python3 - "$snapshot" <<'PY'
+import pathlib
+import sys
+
+snapshot = pathlib.Path(sys.argv[1])
+by_key = {}
+for freq in pathlib.Path("/sys/class/drm").glob("card*/device/tile*/gt*/freq0"):
+    key = f"{freq.parents[3].name}/{freq.parent.name}"
+    by_key[key] = freq
+
+for line in snapshot.read_text().splitlines():
+    parts = line.split("\t")
+    if len(parts) != 3:
+        continue
+    key, min_before, max_before = parts
+    freq = by_key.get(key)
+    if freq is None:
+        continue
+    # Restore max first then min to avoid a transient min > max rejection.
+    for name, value in (("max_freq", max_before), ("min_freq", min_before)):
+        if value == "":
+            continue
+        try:
+            (freq / name).write_text(f"{value}\n")
+        except OSError:
+            pass
+PY
+}
+
+restore_rapl_pl1_snapshot() {
+  local snapshot="$1"
+  [ -f "$snapshot" ] || return 0
+  python3 - "$snapshot" <<'PY'
+import pathlib
+import sys
+
+snapshot = pathlib.Path(sys.argv[1])
+for line in snapshot.read_text().splitlines():
+    parts = line.split("\t")
+    if len(parts) != 3:
+        continue
+    domain, _name, limit_before = parts
+    if limit_before == "":
+        continue
+    target = pathlib.Path("/sys/class/powercap") / domain / "constraint_0_power_limit_uw"
+    try:
+        target.write_text(f"{limit_before}\n")
+    except OSError:
+        pass
+PY
+}
+
+# Autonomous SLPC min_freq drift on untouched GTs (observed: gt1 min_freq
+# oscillating 500<->550 MHz, never written by us) is not our residue and must not
+# invalidate a run. Tolerate a min_freq delta of at most this many MHz; max_freq
+# (which SLPC never moves on its own) and any larger min delta still hard-fail.
+GPU_MIN_FREQ_DRIFT_TOLERANCE_MHZ="${GPU_MIN_DRIFT_TOLERANCE_MHZ:-100}"
+
+# Compare a gpu-freq before/after snapshot pair (D4): hard-fail on any max_freq
+# mismatch or a min_freq delta above the SLPC drift tolerance; tolerate small
+# min drift on knobs the run did not need to keep pinned. Writes a human-readable
+# report to $3 and returns non-zero only on a hard failure.
+compare_gpu_freq_snapshots() {
+  local before="$1" after="$2" report="$3"
+  python3 - "$before" "$after" "$report" "$GPU_MIN_FREQ_DRIFT_TOLERANCE_MHZ" <<'PY'
+import pathlib
+import sys
+
+before_path, after_path, report_path, tol_s = sys.argv[1:5]
+tolerance = int(tol_s)
+
+
+def load(path):
+    rows = {}
+    for line in pathlib.Path(path).read_text().splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        key, min_v, max_v = parts
+        rows[key] = (min_v, max_v)
+    return rows
+
+
+before = load(before_path)
+after = load(after_path)
+lines = []
+hard_fail = False
+
+for key in sorted(set(before) | set(after)):
+    b = before.get(key)
+    a = after.get(key)
+    if b is None or a is None:
+        hard_fail = True
+        lines.append(f"HARD-FAIL {key}: structural change before={b} after={a}")
+        continue
+    (bmin, bmax), (amin, amax) = b, a
+    if bmax != amax:
+        hard_fail = True
+        lines.append(f"HARD-FAIL {key}: max_freq {bmax} -> {amax} (never SLPC-driven)")
+    if bmin != amin:
+        try:
+            delta = abs(int(amin) - int(bmin))
+        except ValueError:
+            delta = None
+        if delta is not None and delta <= tolerance:
+            lines.append(
+                f"TOLERATED {key}: min_freq {bmin} -> {amin} "
+                f"(|delta|={delta} <= {tolerance} MHz autonomous SLPC drift)"
+            )
+        else:
+            hard_fail = True
+            lines.append(f"HARD-FAIL {key}: min_freq {bmin} -> {amin} (delta above tolerance)")
+
+pathlib.Path(report_path).write_text("\n".join(lines) + ("\n" if lines else ""))
+sys.exit(1 if hard_fail else 0)
+PY
 }
 
 provider_tdp() {
@@ -219,6 +403,25 @@ restore_mangohud_controlled_capture() {
 }
 
 restore_state() {
+  # C18: a set -e failure or SSH drop between a lane apply and its inline
+  # restore must not leave scx_lavd running or the GPU floor pinned. Both
+  # helpers are idempotent: the active-run-dir markers are cleared by the
+  # inline restores, so this is a no-op on the happy path.
+  if [ -n "${SCX_LAVD_ACTIVE_RUN_DIR:-}" ]; then
+    stop_scx_lavd_variant "$SCX_LAVD_ACTIVE_RUN_DIR" || true
+  fi
+  if [ -n "${GPU_FLOOR_ACTIVE_RUN_DIR:-}" ]; then
+    restore_gpu_floor_variant "$GPU_FLOOR_ACTIVE_RUN_DIR" || true
+  fi
+  # V10 probe restore: a set -e failure or SSH drop mid-sweep must not leave a
+  # GPU max_freq cap or a soft-PL1 RAPL limit pinned. Both restores are
+  # idempotent (no-op once the probe cleared its marker).
+  if [ -n "${PROBE_GPU_FREQ_SNAPSHOT:-}" ]; then
+    restore_gpu_freq_snapshot "$PROBE_GPU_FREQ_SNAPSHOT" || true
+  fi
+  if [ -n "${PROBE_RAPL_PL1_SNAPSHOT:-}" ]; then
+    restore_rapl_pl1_snapshot "$PROBE_RAPL_PL1_SNAPSHOT" || true
+  fi
   restore_mangohud_controlled_capture || true
   restore_cpu_policy || true
   if [ -f "$REMOTE_ROOT/tdp.initial" ]; then
@@ -1212,6 +1415,319 @@ restore_foreground_affinity_variant() {
     >"$run_dir/foreground-affinity-restore.stdout"
 }
 
+# --- V9 foreground cpu.uclamp.min lane (C16, target-balance-uclampmin) ------
+# Run-scoped force-applied floor via the shared guarded writer CLI; the apply
+# evidence records the original value and restore verifies exact restore.
+apply_foreground_uclamp_variant() {
+  local run_dir="$1"
+  local variant="$2"
+  [ -n "$variant" ] || return 0
+  /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile \
+    apply-foreground-uclamp \
+    --appid "$APPID" \
+    --restore-affinity-json "$run_dir/restore-affinity.json" \
+    --output "$run_dir/foreground-uclamp-writes.json" \
+    >"$run_dir/foreground-uclamp-apply.stdout"
+}
+
+restore_foreground_uclamp_variant() {
+  local run_dir="$1"
+  [ -f "$run_dir/foreground-uclamp-writes.json" ] || return 0
+  /opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile \
+    restore-foreground-uclamp \
+    --writes-json "$run_dir/foreground-uclamp-writes.json" \
+    --output "$run_dir/foreground-uclamp-restore.json" \
+    >"$run_dir/foreground-uclamp-restore.stdout"
+}
+
+# --- V9 GPU min-freq floor lane (design section 9 item 2) -------------------
+# Run-scoped (not phase-scoped): the floor is held for the whole run window and
+# gpu_floor_scope="run" is recorded so claims stay honest. Phase-scoped flooring
+# would require daemon integration, which V9 reserves.
+GPU_GT_FREQ_DIRS=(
+  /sys/class/drm/card0/device/tile0/gt0/freq0
+  /sys/class/drm/card0/device/tile0/gt1/freq0
+)
+
+apply_gpu_floor_variant() {
+  local run_dir="$1"
+  local variant="$2"
+  [ -n "$variant" ] || return 0
+  GPU_FLOOR_ACTIVE_RUN_DIR="$run_dir"
+  GPU_FLOOR_MHZ="$GPU_FLOOR_MHZ" python3 - \
+    "$run_dir/gpu-freq-restore.json" "${GPU_GT_FREQ_DIRS[@]}" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+output = pathlib.Path(sys.argv[1])
+gt_dirs = sys.argv[2:]
+floor = int(os.environ["GPU_FLOOR_MHZ"])
+
+
+def read_int(path):
+    try:
+        return int(pathlib.Path(path).read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+# C20: a missing GT freq layout is a skip, not a session abort. The design
+# specifies both GTs, so a partial layout (e.g. only gt1 missing) is also a
+# skip; the run completes under neutral semantics and the aggregate rejects it
+# because valid stays false (honest inconclusive, never fabricated evidence).
+missing = [gt_dir for gt_dir in gt_dirs if not pathlib.Path(gt_dir).is_dir()]
+if missing:
+    payload = {
+        "policy": "target-balance-gpufloor",
+        "gpu_floor_scope": "run",
+        "floor_mhz": floor,
+        "skipped": True,
+        "skip_reason": "missing-gt-freq-dirs",
+        "missing_gt_dirs": missing,
+        "applied": False,
+        "restored": False,
+        "valid": False,
+    }
+    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    raise SystemExit(0)
+
+gts = {}
+ok = True
+for gt_dir in gt_dirs:
+    name = pathlib.Path(gt_dir).parent.name  # gt0 / gt1
+    min_path = pathlib.Path(gt_dir) / "min_freq"
+    max_path = pathlib.Path(gt_dir) / "max_freq"
+    min_before = read_int(min_path)
+    max_before = read_int(max_path)
+    entry = {
+        "min_freq_before": min_before,
+        "max_freq_before": max_before,
+        "min_freq_applied": None,
+    }
+    if min_before is None or max_before is None:
+        ok = False
+    else:
+        try:
+            min_path.write_text(f"{floor}\n")
+            applied = read_int(min_path)
+            entry["min_freq_applied"] = applied
+            if applied != floor:
+                ok = False
+        except OSError:
+            ok = False
+    gts[name] = entry
+
+payload = {
+    "policy": "target-balance-gpufloor",
+    "gpu_floor_scope": "run",
+    "floor_mhz": floor,
+    "gts": gts,
+    "applied": ok,
+    "restored": False,
+    "valid": False,
+}
+output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+raise SystemExit(0 if ok else 1)
+PY
+}
+
+restore_gpu_floor_variant() {
+  local run_dir="$1"
+  if [ "$run_dir" = "${GPU_FLOOR_ACTIVE_RUN_DIR:-}" ]; then
+    GPU_FLOOR_ACTIVE_RUN_DIR=""
+  fi
+  [ -f "$run_dir/gpu-freq-restore.json" ] || return 0
+  python3 - "$run_dir/gpu-freq-restore.json" "${GPU_GT_FREQ_DIRS[@]}" <<'PY'
+import json
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+gt_dirs = sys.argv[2:]
+payload = json.loads(state_path.read_text())
+# C20: a skipped lane applied nothing; restore is a clean no-op.
+if payload.get("skipped") is True:
+    raise SystemExit(0)
+gts = payload.get("gts") or {}
+
+
+def read_int(path):
+    try:
+        return int(pathlib.Path(path).read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+restored = True
+for gt_dir in gt_dirs:
+    name = pathlib.Path(gt_dir).parent.name
+    entry = gts.get(name) or {}
+    min_before = entry.get("min_freq_before")
+    max_before = entry.get("max_freq_before")
+    min_path = pathlib.Path(gt_dir) / "min_freq"
+    max_path = pathlib.Path(gt_dir) / "max_freq"
+    # Restore max first, then min, to avoid transient min > max rejections.
+    for path, value in ((max_path, max_before), (min_path, min_before)):
+        if value is None:
+            restored = False
+            continue
+        try:
+            path.write_text(f"{value}\n")
+        except OSError:
+            restored = False
+    entry["min_freq_after"] = read_int(min_path)
+    entry["max_freq_after"] = read_int(max_path)
+    if entry["min_freq_after"] != min_before or entry["max_freq_after"] != max_before:
+        restored = False
+    gts[name] = entry
+
+payload["restored"] = restored
+# valid only when the floor was applied to BOTH GTs and every GT restored
+# exactly; any mismatch or partial write invalidates the run's evidence.
+payload["valid"] = bool(payload.get("applied")) and restored
+state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+raise SystemExit(0 if restored else 1)
+PY
+}
+
+# --- V9 guarded sched_ext lane (design section 9 item 3) --------------------
+SCX_STATE_FILE=/sys/kernel/sched_ext/state
+SCX_ROOT_OPS_FILE=/sys/kernel/sched_ext/root/ops
+
+scx_state() {
+  cat "$SCX_STATE_FILE" 2>/dev/null | tr -d '[:space:]'
+}
+
+scx_root_ops() {
+  cat "$SCX_ROOT_OPS_FILE" 2>/dev/null | tr -d '[:space:]'
+}
+
+start_scx_lavd_variant() {
+  local run_dir="$1"
+  local variant="$2"
+  [ -n "$variant" ] || return 0
+  local before during ops
+  # Missing binary or kernel support -> skip with an explicit reason. The run
+  # still completes under governor observe semantics but the aggregate rejects
+  # it because valid=false (honest inconclusive, never a fabricated win).
+  if [ ! -x "$SCX_LAVD_BIN" ] || [ ! -e "$SCX_STATE_FILE" ]; then
+    printf '{"policy":"scx-lavd","valid":false,"skipped":true,"skip_reason":"%s"}\n' \
+      "missing-binary-or-kernel-support" >"$run_dir/sched-ext-state.json"
+    return 0
+  fi
+  before="$(scx_state)"
+  if [ "$before" != "disabled" ]; then
+    printf '{"policy":"scx-lavd","valid":false,"skipped":true,"skip_reason":"%s","before":{"state":"%s"}}\n' \
+      "sched-ext-not-disabled-at-precheck" "$before" >"$run_dir/sched-ext-state.json"
+    return 0
+  fi
+  "$SCX_LAVD_BIN" >"$run_dir/scx_lavd.log" 2>&1 &
+  SCX_LAVD_PID="$!"
+  SCX_LAVD_ACTIVE_RUN_DIR="$run_dir"
+  during="disabled"
+  for _ in $(seq 1 5); do
+    during="$(scx_state)"
+    if [ "$during" = "enabled" ]; then
+      break
+    fi
+    if ! kill -0 "$SCX_LAVD_PID" 2>/dev/null; then
+      during="crashed"
+      break
+    fi
+    sleep 1
+  done
+  ops="$(scx_root_ops)"
+  python3 - "$run_dir/sched-ext-state.json" "$before" "$during" "$ops" <<'PY'
+import json
+import pathlib
+import sys
+
+output, before, during, ops = sys.argv[1:5]
+payload = {
+    "policy": "scx-lavd",
+    "before": {"state": before},
+    "during": {"state": during, "root_ops": ops},
+    "after": None,
+    "skipped": False,
+    # valid is finalized at stop time; enabled during the window is required.
+    "valid": during == "enabled",
+}
+pathlib.Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
+  if [ "$during" != "enabled" ]; then
+    return 1
+  fi
+}
+
+stop_scx_lavd_variant() {
+  local run_dir="$1"
+  if [ "$run_dir" = "${SCX_LAVD_ACTIVE_RUN_DIR:-}" ]; then
+    SCX_LAVD_ACTIVE_RUN_DIR=""
+  fi
+  # Nothing to stop for a skipped lane (scx_lavd was never started).
+  if [ -z "${SCX_LAVD_PID:-}" ]; then
+    return 0
+  fi
+  # C19: bounded stop. TERM, poll sched_ext state back to disabled with a
+  # timeout, escalate to SIGKILL, re-verify; escalation marks the run's
+  # sched-ext evidence invalid. Never block the session on an unguarded wait.
+  local after="unknown"
+  local stop_escalated=false
+  local waited=0
+  kill -TERM "$SCX_LAVD_PID" 2>/dev/null || true
+  after="$(scx_state)"
+  while [ "$after" != "disabled" ] && [ "$waited" -lt 10 ]; do
+    sleep 1
+    waited=$((waited + 1))
+    after="$(scx_state)"
+  done
+  if [ "$after" != "disabled" ]; then
+    stop_escalated=true
+    kill -KILL "$SCX_LAVD_PID" 2>/dev/null || true
+    waited=0
+    while [ "$after" != "disabled" ] && [ "$waited" -lt 5 ]; do
+      sleep 1
+      waited=$((waited + 1))
+      after="$(scx_state)"
+    done
+  fi
+  SCX_LAVD_PID=""
+  # Crash window: PID was live but the evidence file was never written (e.g.
+  # trap fired mid-start). The kill/verify above still ran; nothing to update.
+  [ -f "$run_dir/sched-ext-state.json" ] || {
+    [ "$after" = "disabled" ]
+    return
+  }
+  python3 - "$run_dir/sched-ext-state.json" "$after" "$stop_escalated" <<'PY'
+import json
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+after = sys.argv[2]
+stop_escalated = sys.argv[3] == "true"
+payload = json.loads(state_path.read_text())
+payload["after"] = {"state": after}
+payload["stop_escalated"] = stop_escalated
+before = (payload.get("before") or {}).get("state")
+during = (payload.get("during") or {}).get("state")
+# valid only when the full disabled -> enabled -> disabled transition held with
+# no crash/failed stop/SIGKILL escalation; any mismatch invalidates the run's
+# evidence.
+payload["valid"] = (
+    payload.get("skipped") is not True
+    and payload.get("stop_escalated") is not True
+    and before == "disabled"
+    and during == "enabled"
+    and after == "disabled"
+)
+state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+raise SystemExit(0 if payload["valid"] else 1)
+PY
+}
+
 collect_cpu_topology() {
   local output="$1"
   python3 - "$output" <<'PY'
@@ -1297,6 +1813,7 @@ for cpu_dir in sorted(cpu_root.glob("cpu[0-9]*"), key=lambda item: int(item.name
             ),
             "max_freq_khz": read_int(policy_dir / "scaling_max_freq")
             or read_int(policy_dir / "cpuinfo_max_freq"),
+            "cpuinfo_max_freq_khz": read_int(policy_dir / "cpuinfo_max_freq"),
             "epp": read_text(policy_dir / "energy_performance_preference"),
             "scaling_driver": read_text(policy_dir / "scaling_driver"),
             "affected_cpus": read_text(policy_dir / "affected_cpus"),
@@ -1306,6 +1823,268 @@ for cpu_dir in sorted(cpu_root.glob("cpu[0-9]*"), key=lambda item: int(item.name
 output.write_text(json.dumps({"cpus": cpus}, indent=2, sort_keys=True) + "\n")
 PY
 }
+
+# --- V10 probe capture modes (direction section 6 P1-P3) --------------------
+# Observe/one-knob capture OUTSIDE the A/B pairing discipline. Every artifact is
+# marked probe=<mode> capture_mode=probe and is NEVER fed to aggregate verdicts.
+# Each sampled row carries package/core/uncore power (from RAPL energy_uj deltas)
+# plus per-GT act_freq/cur_freq/min/max, sampled at ~1 Hz.
+sample_probe_power_gpu() {
+  local output="$1"
+  local seconds="$2"
+  local label="$3"
+  local step_marker="${4:-}"
+  python3 - "$output" "$seconds" "$label" "$step_marker" <<'PY'
+import json
+import pathlib
+import sys
+import time
+
+output = pathlib.Path(sys.argv[1])
+seconds = float(sys.argv[2])
+label = sys.argv[3]
+step_marker = sys.argv[4]
+
+
+def read_int(path):
+    try:
+        return int(pathlib.Path(path).read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+powercap = pathlib.Path("/sys/class/powercap")
+rapl = [
+    d
+    for d in sorted(powercap.glob("intel-rapl:*"))
+    if d.name.count(":") == 1
+] if powercap.exists() else []
+gt_dirs = sorted(pathlib.Path("/sys/class/drm").glob("card*/device/tile*/gt*/freq0"))
+
+
+def energy_uj(domain):
+    return read_int(domain / "energy_uj")
+
+
+def domain_name(domain):
+    try:
+        return (domain / "name").read_text().strip()
+    except OSError:
+        return ""
+
+
+prev_energy = {str(d): energy_uj(d) for d in rapl}
+start = time.monotonic()
+prev_t = start
+with output.open("w") as handle:
+    while time.monotonic() - start < seconds:
+        time.sleep(1.0)
+        now = time.monotonic()
+        dt = now - prev_t
+        row = {
+            "elapsed_s": round(now - start, 3),
+            "probe": label,
+            "capture_mode": "probe",
+            "step": step_marker or None,
+            "packages": [],
+            "gts": [],
+        }
+        for domain in rapl:
+            current = energy_uj(domain)
+            previous = prev_energy.get(str(domain))
+            watts = None
+            if current is not None and previous is not None and dt > 0:
+                delta = current - previous
+                if delta < 0:
+                    delta = None  # counter wrap/reset: report unknown, not a guess
+                if delta is not None:
+                    watts = round(delta / 1e6 / dt, 3)
+            row["packages"].append(
+                {"domain": domain.name, "name": domain_name(domain), "power_w": watts}
+            )
+            prev_energy[str(domain)] = current
+        for freq in gt_dirs:
+            row["gts"].append(
+                {
+                    "gt": f"{freq.parents[3].name}/{freq.parent.name}",
+                    "act_freq_mhz": read_int(freq / "act_freq"),
+                    "cur_freq_mhz": read_int(freq / "cur_freq"),
+                    "min_freq_mhz": read_int(freq / "min_freq"),
+                    "max_freq_mhz": read_int(freq / "max_freq"),
+                }
+            )
+        prev_t = now
+        handle.write(json.dumps(row, sort_keys=True) + "\n")
+        handle.flush()
+PY
+}
+
+probe_write_meta() {
+  local probe_dir="$1"
+  local mode="$2"
+  shift 2
+  {
+    echo "probe=$mode"
+    echo "capture_mode=probe"
+    echo "note=observe/one-knob; NEVER fed to aggregate verdicts"
+    echo "tdp_w=$TDP_LEVELS"
+    echo "appid=$APPID"
+    for extra in "$@"; do
+      echo "$extra"
+    done
+  } >"$probe_dir/probe.meta"
+}
+
+probe_collect_mangohud_best_effort() {
+  # Best-effort: copy the newest MangoHud CSV if the operator has logging on.
+  local dest="$1"
+  local csv
+  csv="$(latest_mangohud_csv)"
+  if [ -n "$csv" ] && [ -f "$csv" ]; then
+    cp "$csv" "$dest" || true
+  fi
+}
+
+run_probe_pin_baseline() {
+  local probe_dir="$REMOTE_ROOT/probe-pin-baseline-$(date +%Y%m%dT%H%M%S)"
+  mkdir -p "$probe_dir"
+  collect_cpu_topology "$probe_dir/cpu-topology.json"
+  probe_write_meta "$probe_dir" "pin-baseline" "seconds=$PROBE_PIN_BASELINE_S"
+  echo "probe pin-baseline: observing at QAM cap for ${PROBE_PIN_BASELINE_S}s"
+  sample_probe_power_gpu "$probe_dir/gpu-freq.jsonl" "$PROBE_PIN_BASELINE_S" "pin-baseline"
+  echo "probe artifact gpu-freq.jsonl: $probe_dir/gpu-freq.jsonl"
+}
+
+run_probe_gpu_cap_sweep() {
+  local probe_dir="$REMOTE_ROOT/probe-gpu-cap-sweep-$(date +%Y%m%dT%H%M%S)"
+  mkdir -p "$probe_dir"
+  collect_cpu_topology "$probe_dir/cpu-topology.json"
+  probe_write_meta "$probe_dir" "gpu-cap-sweep" \
+    "step_seconds=$PROBE_STEP_S" "steps_mhz=$PROBE_GPU_CAP_STEPS_MHZ"
+  snapshot_gpu_freq >"$probe_dir/gpu-freq.before"
+  PROBE_GPU_FREQ_SNAPSHOT="$probe_dir/gpu-freq.before"
+  local step
+  for step in $PROBE_GPU_CAP_STEPS_MHZ; do
+    echo "probe gpu-cap-sweep: max_freq=${step}MHz for ${PROBE_STEP_S}s"
+    python3 - "$step" <<'PY'
+import pathlib
+import sys
+
+# D5: writing only max_freq is confounded by the gt0 min latch (min is pinned at
+# rp0, so max<min is a live no-op and the sweep measures nothing). Mirror the
+# daemon's D1 rule: when the cap sits below a GT's current min, lower that min to
+# min(cap, rpe), clamped to >= rpn, so the swept cap actually takes effect. Only
+# lower a min that sits above the cap (never raise a low/drifting min).
+step = int(sys.argv[1])
+for freq in pathlib.Path("/sys/class/drm").glob("card*/device/tile*/gt*/freq0"):
+    def read_int(name):
+        try:
+            return int((freq / name).read_text().strip())
+        except (OSError, ValueError):
+            return None
+    rpe = read_int("rpe_freq")
+    rpn = read_int("rpn_freq")
+    cur_min = read_int("min_freq")
+    try:
+        (freq / "max_freq").write_text(f"{step}\n")
+    except OSError:
+        pass
+    if cur_min is not None and cur_min > step:
+        new_min = step if rpe is None else min(step, rpe)
+        if rpn is not None:
+            new_min = max(new_min, rpn)
+        try:
+            (freq / "min_freq").write_text(f"{new_min}\n")
+        except OSError:
+            pass
+PY
+    sample_probe_power_gpu \
+      "$probe_dir/gpu-freq-step-${step}mhz.jsonl" "$PROBE_STEP_S" "gpu-cap-sweep" "${step}mhz"
+    probe_collect_mangohud_best_effort "$probe_dir/mangohud-step-${step}mhz.csv"
+  done
+  restore_gpu_freq_snapshot "$probe_dir/gpu-freq.before"
+  PROBE_GPU_FREQ_SNAPSHOT=""
+  snapshot_gpu_freq >"$probe_dir/gpu-freq.after"
+  # D4: same tolerant comparison as the A/B restore gate -- autonomous SLPC
+  # min_freq drift on untouched GTs is not a restore failure.
+  if ! compare_gpu_freq_snapshots \
+    "$probe_dir/gpu-freq.before" "$probe_dir/gpu-freq.after" "$probe_dir/gpu-freq.diff"; then
+    echo "WARNING: gpu-cap-sweep did not restore GPU freq cleanly: $probe_dir" >&2
+  fi
+  echo "probe artifacts (power+gt per step): $probe_dir/gpu-freq-step-*.jsonl"
+}
+
+run_probe_soft_pl1_sweep() {
+  local probe_dir="$REMOTE_ROOT/probe-soft-pl1-sweep-$(date +%Y%m%dT%H%M%S)"
+  mkdir -p "$probe_dir"
+  collect_cpu_topology "$probe_dir/cpu-topology.json"
+  probe_write_meta "$probe_dir" "soft-pl1-sweep" \
+    "step_seconds=$PROBE_STEP_S" "steps_w=$PROBE_SOFT_PL1_STEPS_W"
+  snapshot_rapl_pl1 >"$probe_dir/rapl-pl1.before"
+  PROBE_RAPL_PL1_SNAPSHOT="$probe_dir/rapl-pl1.before"
+  local watt
+  for watt in $PROBE_SOFT_PL1_STEPS_W; do
+    echo "probe soft-pl1-sweep: constraint_0 PL1=${watt}W for ${PROBE_STEP_S}s"
+    python3 - "$watt" <<'PY'
+import pathlib
+import sys
+
+watt = int(sys.argv[1])
+microwatt = watt * 1_000_000
+root = pathlib.Path("/sys/class/powercap")
+if root.exists():
+    for domain in root.glob("intel-rapl:*"):
+        if domain.name.count(":") != 1:
+            continue
+        try:
+            (domain / "constraint_0_power_limit_uw").write_text(f"{microwatt}\n")
+        except OSError:
+            pass
+PY
+    sample_probe_power_gpu \
+      "$probe_dir/power-step-${watt}w.jsonl" "$PROBE_STEP_S" "soft-pl1-sweep" "${watt}w"
+    probe_collect_mangohud_best_effort "$probe_dir/mangohud-step-${watt}w.csv"
+  done
+  restore_rapl_pl1_snapshot "$probe_dir/rapl-pl1.before"
+  PROBE_RAPL_PL1_SNAPSHOT=""
+  snapshot_rapl_pl1 >"$probe_dir/rapl-pl1.after"
+  if ! diff -u "$probe_dir/rapl-pl1.before" "$probe_dir/rapl-pl1.after" \
+    >"$probe_dir/rapl-pl1.diff"; then
+    echo "WARNING: soft-pl1-sweep did not restore RAPL PL1 cleanly: $probe_dir" >&2
+  fi
+  echo "probe artifacts (power+gt per step): $probe_dir/power-step-*.jsonl"
+}
+
+run_probe() {
+  # Probes need the daemon parked in observe (off) so it never fights the swept
+  # knob. TDP is pinned to the first requested level for a stable baseline.
+  local first_tdp
+  first_tdp="$(printf '%s\n' $TDP_LEVELS | head -n 1)"
+  wait_for_power_service
+  wait_for_power_provider
+  snapshot_cpu_policy >"$REMOTE_ROOT/cpu-policy.initial"
+  provider_tdp >"$REMOTE_ROOT/tdp.initial"
+  trap restore_state EXIT
+  set_service_game_power_mode off
+  set_provider_tdp "$first_tdp"
+  sleep "$WARMUP_S"
+  case "$PROBE" in
+    pin-baseline) run_probe_pin_baseline ;;
+    gpu-cap-sweep) run_probe_gpu_cap_sweep ;;
+    soft-pl1-sweep) run_probe_soft_pl1_sweep ;;
+    *)
+      echo "unsupported PROFILE_GAME_POWER_PROBE: $PROBE" >&2
+      exit 2
+    ;;
+  esac
+  restore_state
+  trap - EXIT
+}
+
+if [ -n "${PROBE:-}" ]; then
+  run_probe
+  exit 0
+fi
 
 if [ "$CAPTURE_MODE" != "imported" ] && [ "$CAPTURE_MODE" != "controlled" ]; then
   echo "unsupported PROFILE_GAME_POWER_CAPTURE_MODE: $CAPTURE_MODE" >&2
@@ -1395,14 +2174,74 @@ for repeat in $(seq 1 "$REPEATS"); do
         collect_cpu_topology "$run_dir/cpu-topology.json"
         snapshot_affinity_restore_state "$run_dir/restore-affinity.json"
         snapshot_cpu_policy >"$run_dir/cpu-policy.before"
+        snapshot_gpu_freq >"$run_dir/gpu-freq.before"
+        snapshot_rapl_pl1 >"$run_dir/rapl-pl1.before"
         provider_tdp >"$run_dir/tdp.before"
 
         background_shaping_variant=""
         foreground_affinity_variant=""
+        foreground_uclamp_variant=""
+        gpu_floor_variant=""
+        sched_ext_variant=""
         case "$policy" in
           off)
             mode="observe"
             cpu_cap_enabled=false
+            policy_args=(--epp "$EPP")
+          ;;
+          target-balance)
+            mode="target-balance"
+            cpu_cap_enabled=false
+            policy_args=(--epp "$EPP")
+          ;;
+          target-balance-gpufloor)
+            mode="target-balance"
+            cpu_cap_enabled=false
+            gpu_floor_variant="gpu-min-freq-floor"
+            policy_args=(--epp "$EPP")
+          ;;
+          target-balance-uclampmin)
+            # C16: run-scoped foreground cpu.uclamp.min=25 floor, force-applied
+            # via the shared guarded writer (evidence: apply/restore artifacts).
+            mode="target-balance"
+            cpu_cap_enabled=false
+            foreground_uclamp_variant="foreground-uclamp-min-25"
+            policy_args=(--epp "$EPP")
+          ;;
+          target-balance-ladder5)
+            # C16: run-scoped ladder S5 unlock via the profiler-only CLI flag.
+            # The daemon service never sets --allow-ladder-step-5.
+            mode="target-balance"
+            cpu_cap_enabled=false
+            policy_args=(--epp "$EPP" --allow-ladder-step-5)
+          ;;
+          v10-battery)
+            # V10 Slice C: full battery ladder (G1 G2 G3 P1 P2 P3 C1 C2). A
+            # whole-ladder BETTER cannot claim a single lane, so export-verdicts
+            # skips it unless an explicit actuator list is declared.
+            mode="target-balance"
+            cpu_cap_enabled=false
+            policy_args=(--epp "$EPP" --persona "$PERSONA")
+          ;;
+          v10-gpu-cap)
+            # V10 Slice C: G rungs only (GPU max_freq cap), one-lane isolation via
+            # the profiler-only --trim-rungs flag. Maps to actuator "gpu-cap".
+            mode="target-balance"
+            cpu_cap_enabled=false
+            policy_args=(--epp "$EPP" --persona "$PERSONA" --trim-rungs G)
+          ;;
+          v10-soft-pl1)
+            # V10 Slice C: P rungs only (soft-PL1 overlay). Maps to "soft-pl1".
+            mode="target-balance"
+            cpu_cap_enabled=false
+            policy_args=(--epp "$EPP" --persona "$PERSONA" --trim-rungs P)
+          ;;
+          scx-lavd)
+            # scx_lavd IS the candidate; the CPU governor runs with off/observe
+            # semantics for the capture window (design section 9 item 3).
+            mode="observe"
+            cpu_cap_enabled=false
+            sched_ext_variant="scx-lavd"
             policy_args=(--epp "$EPP")
           ;;
           gpu-priority)
@@ -1488,6 +2327,27 @@ for repeat in $(seq 1 "$REPEATS"); do
           restore_background_shaping_variant "$run_dir" || true
           exit 1
         fi
+        if ! apply_foreground_uclamp_variant "$run_dir" "$foreground_uclamp_variant"; then
+          restore_foreground_uclamp_variant "$run_dir" || true
+          restore_foreground_affinity_variant "$run_dir" || true
+          restore_background_shaping_variant "$run_dir" || true
+          exit 1
+        fi
+        if ! apply_gpu_floor_variant "$run_dir" "$gpu_floor_variant"; then
+          restore_gpu_floor_variant "$run_dir" || true
+          restore_foreground_uclamp_variant "$run_dir" || true
+          restore_foreground_affinity_variant "$run_dir" || true
+          restore_background_shaping_variant "$run_dir" || true
+          exit 1
+        fi
+        if ! start_scx_lavd_variant "$run_dir" "$sched_ext_variant"; then
+          stop_scx_lavd_variant "$run_dir" || true
+          restore_gpu_floor_variant "$run_dir" || true
+          restore_foreground_uclamp_variant "$run_dir" || true
+          restore_foreground_affinity_variant "$run_dir" || true
+          restore_background_shaping_variant "$run_dir" || true
+          exit 1
+        fi
         start_mangohud_capture "$run_dir"
         live_frame_performance_csv=""
         if [ "$CAPTURE_MODE" = "controlled" ]; then
@@ -1542,6 +2402,9 @@ for repeat in $(seq 1 "$REPEATS"); do
           wait "$thread_affinity_pid" || true
           wait "$thread_schedstat_pid" || true
           wait "$process_cgroups_pid" || true
+          stop_scx_lavd_variant "$run_dir" || true
+          restore_gpu_floor_variant "$run_dir" || true
+          restore_foreground_uclamp_variant "$run_dir" || true
           restore_foreground_affinity_variant "$run_dir" || true
           restore_background_shaping_variant "$run_dir" || true
           exit 1
@@ -1552,6 +2415,9 @@ for repeat in $(seq 1 "$REPEATS"); do
         wait "$thread_affinity_pid" || true
         wait "$thread_schedstat_pid" || true
         wait "$process_cgroups_pid" || true
+        stop_scx_lavd_variant "$run_dir" || restored=false
+        restore_gpu_floor_variant "$run_dir" || restored=false
+        restore_foreground_uclamp_variant "$run_dir" || restored=false
         restore_foreground_affinity_variant "$run_dir" || restored=false
         restore_background_shaping_variant "$run_dir" || restored=false
         if [ "$CAPTURE_MODE" = "controlled" ]; then
@@ -1611,9 +2477,24 @@ for repeat in $(seq 1 "$REPEATS"); do
         collect_mangohud_csv "$run_dir"
 
         snapshot_cpu_policy >"$run_dir/cpu-policy.after"
+        snapshot_gpu_freq >"$run_dir/gpu-freq.after"
+        snapshot_rapl_pl1 >"$run_dir/rapl-pl1.after"
         provider_tdp >"$run_dir/tdp.after"
         if ! diff -u "$run_dir/cpu-policy.before" "$run_dir/cpu-policy.after" \
           >"$run_dir/cpu-policy.diff"; then
+          restored=false
+        fi
+        # V10 Slice C item 3: the daemon's GPU cap + soft-PL1 overlay write GT
+        # max_freq and RAPL constraint_0 directly; a before/after mismatch means
+        # the daemon did not restore them and invalidates the run. D4: tolerate
+        # autonomous SLPC min_freq drift on untouched GTs (not our residue) while
+        # still hard-failing on any max_freq mismatch or larger min delta.
+        if ! compare_gpu_freq_snapshots \
+          "$run_dir/gpu-freq.before" "$run_dir/gpu-freq.after" "$run_dir/gpu-freq.diff"; then
+          restored=false
+        fi
+        if ! diff -u "$run_dir/rapl-pl1.before" "$run_dir/rapl-pl1.after" \
+          >"$run_dir/rapl-pl1.diff"; then
           restored=false
         fi
 
@@ -1691,6 +2572,19 @@ PY
         if [ "$policy" = "gpu-priority-cpu-cap" ]; then
           runtime_contract_args+=(--require-cpu-cap-action)
         fi
+        # V10 candidates emit telemetry v3 (persona + rung/feed fields), a
+        # superset of the v2 target-balance contract, so require the v3 contract
+        # for them and the v2 contract for the other target-balance policies.
+        case "$policy" in
+          v10-*)
+            runtime_contract_args+=(--require-v10-contract)
+          ;;
+          *)
+            if [ "$mode" = "target-balance" ]; then
+              runtime_contract_args+=(--require-target-balance-contract)
+            fi
+          ;;
+        esac
         if [ -n "${live_frame_performance_csv:-}" ]; then
           runtime_contract_args+=(--require-frame-performance)
         fi

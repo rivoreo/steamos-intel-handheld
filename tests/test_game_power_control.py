@@ -241,3 +241,108 @@ def test_set_runtime_mode_drops_invalid_saved_fps_target_override(tmp_path):
     assert status.mode == "automatic"
     assert status.fps_target_override.status == "auto"
     assert "fps_target_override" not in raw
+
+
+# ---------------------------------------------------------------------------
+# V10 frame-limiter helper (contract 1.6)
+# ---------------------------------------------------------------------------
+import subprocess  # noqa: E402
+
+
+def _fake_runner(*, help_text="", set_returncode=0, set_stdout="ok", set_stderr=""):
+    calls = []
+
+    def runner(argv):
+        argv = list(argv)
+        calls.append(argv)
+        if argv == ["--help"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=help_text, stderr="")
+        return subprocess.CompletedProcess(
+            argv, set_returncode, stdout=set_stdout, stderr=set_stderr
+        )
+
+    runner.calls = calls
+    return runner
+
+
+HELP_WITH_LIMIT = "commands:\n  debug_set_fps_limit <n>\n  composite_force <n>\n"
+HELP_WITHOUT_LIMIT = "commands:\n  composite_force <n>\n"
+
+
+def test_validate_limiter_fps_accepts_range_and_clear():
+    assert game_power_control.validate_limiter_fps(0) == 0
+    assert game_power_control.validate_limiter_fps(30) == 30
+    assert game_power_control.validate_limiter_fps(60) == 60
+    assert game_power_control.validate_limiter_fps(120) == 120
+
+
+@pytest.mark.parametrize("bad", [25, 33, 125, -5, True, 60.0, "60"])
+def test_validate_limiter_fps_rejects_off_step_and_types(bad):
+    with pytest.raises(ValueError, match="unsupported limiter FPS"):
+        game_power_control.validate_limiter_fps(bad)
+
+
+def test_limiter_status_unsupported_when_command_absent():
+    runner = _fake_runner(help_text=HELP_WITHOUT_LIMIT)
+    status = game_power_control.limiter_status(runner=runner)
+    assert status.status == "unsupported"
+    assert status.supported is False
+    assert runner.calls == [["--help"]]
+
+
+def test_limiter_status_unknown_when_supported_but_unreadable():
+    runner = _fake_runner(help_text=HELP_WITH_LIMIT)
+    status = game_power_control.limiter_status(runner=runner)
+    assert status.status == "unknown"
+    assert status.supported is True
+    assert status.fps is None
+
+
+def test_limiter_set_invokes_debug_set_fps_limit():
+    runner = _fake_runner(help_text=HELP_WITH_LIMIT)
+    status = game_power_control.limiter_set(60, source="decky", runner=runner)
+    assert status.status == "limited"
+    assert status.fps == 60
+    assert status.supported is True
+    assert ["debug_set_fps_limit", "60"] in runner.calls
+
+
+def test_limiter_clear_sets_zero():
+    runner = _fake_runner(help_text=HELP_WITH_LIMIT)
+    status = game_power_control.limiter_clear(runner=runner)
+    assert status.status == "unlimited"
+    assert status.fps == 0
+    assert ["debug_set_fps_limit", "0"] in runner.calls
+
+
+def test_limiter_set_rejects_invalid_fps_before_shelling_out():
+    runner = _fake_runner(help_text=HELP_WITH_LIMIT)
+    with pytest.raises(ValueError, match="unsupported limiter FPS"):
+        game_power_control.limiter_set(33, runner=runner)
+    assert runner.calls == []
+
+
+def test_limiter_set_raises_when_command_absent():
+    runner = _fake_runner(help_text=HELP_WITHOUT_LIMIT)
+    with pytest.raises(RuntimeError, match="does not expose"):
+        game_power_control.limiter_set(60, runner=runner)
+
+
+def test_limiter_set_raises_on_nonzero_gamescopectl_exit():
+    runner = _fake_runner(
+        help_text=HELP_WITH_LIMIT, set_returncode=1, set_stderr="boom"
+    )
+    with pytest.raises(RuntimeError, match="failed"):
+        game_power_control.limiter_set(60, runner=runner)
+
+
+def test_limiter_cli_status_json_smoke(capsys, monkeypatch):
+    monkeypatch.setattr(
+        game_power_control,
+        "_default_gamescopectl_runner",
+        _fake_runner(help_text=HELP_WITHOUT_LIMIT),
+    )
+    game_power_control.main(["limiter", "status", "--json"])
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["status"] == "unsupported"
+    assert payload["supported"] is False

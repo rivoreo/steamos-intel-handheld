@@ -26,6 +26,7 @@ from steamos_intel_handheld.game_power_profile import (
     build_affinity_advice,
     build_background_shaping_advice,
     build_background_shaping_experiment_plan,
+    build_parser,
     compare_policy_aggregates,
     compare_run_summaries,
     merge_run_summary,
@@ -38,6 +39,7 @@ from steamos_intel_handheld.game_power_profile import (
     resolve_foreground_affinity_candidate,
     restore_background_shaping_writes,
     restore_foreground_affinity_writes,
+    run_summarize,
     summarize_cpu_topology,
     summarize_foreground_affinity_artifacts,
     summarize_pressure_jsonl,
@@ -234,6 +236,97 @@ def test_parse_mangohud_fps_csv_computes_average_and_frame_time_percentiles(tmp_
     assert summary.avg_frametime_ms == 23.75
     assert summary.p95_frametime_ms == 33.3
     assert summary.p99_frametime_ms == 33.3
+
+
+def test_parse_mangohud_fps_csv_skips_system_info_preamble(tmp_path):
+    # mangoapp per-frame logs begin with a two-line "os,cpu,gpu,..." banner
+    # before the real "fps,frametime,..." header; the parser must skip it.
+    path = tmp_path / "mangohud.csv"
+    path.write_text(
+        "os,cpu,gpu,ram,kernel,driver,cpuscheduler\n"
+        "SteamOS,Intel Core Ultra 7 258V,,32365604,6.16.12-valve24.4,,powersave\n"
+        "fps,frametime,cpu_load,gpu_load,elapsed\n"
+        "30,33.3,50,71,514243727\n"
+        "40,25.0,50,71,614426721\n"
+        "50,20.0,50,71,714426721\n"
+        "60,16.7,50,71,814426721\n"
+    )
+
+    summary = parse_mangohud_fps_csv(path)
+
+    assert summary.avg_fps == 45.0
+    assert summary.avg_frametime_ms == 23.75
+    assert summary.p95_frametime_ms == 33.3
+    assert summary.p99_frametime_ms == 33.3
+
+
+def test_run_summarize_merges_raw_frametime_percentiles_into_summary(tmp_path):
+    # The mangoapp *summary* CSV carries lows/97th but no p95/p99 frametime.
+    # With the raw per-frame CSV (system-info preamble) also present, summarize
+    # keeps the summary's lows and backfills p95/p99 from the raw CSV.
+    summary_csv = tmp_path / "mangohud-summary.csv"
+    write_csv(
+        summary_csv,
+        [
+            "0.1% Min FPS",
+            "1% Min FPS",
+            "97% Percentile FPS",
+            "Average FPS",
+            "Average Frame Time",
+        ],
+        [
+            {
+                "0.1% Min FPS": "24.1",
+                "1% Min FPS": "31.2",
+                "97% Percentile FPS": "45.8",
+                "Average FPS": "42.3",
+                "Average Frame Time": "23.6",
+            }
+        ],
+    )
+    raw_csv = tmp_path / "mangohud.csv"
+    raw_csv.write_text(
+        "os,cpu,gpu,ram,kernel,driver,cpuscheduler\n"
+        "SteamOS,Intel Core Ultra 7 258V,,0,6.16,,powersave\n"
+        "fps,frametime,elapsed\n"
+        "30,33.3,1\n"
+        "40,25.0,2\n"
+        "50,20.0,3\n"
+        "60,16.7,4\n"
+    )
+    output = tmp_path / "run"
+    args = build_parser().parse_args(
+        [
+            "summarize",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "17",
+            "--policy",
+            "off",
+            "--capture-mode",
+            "controlled",
+            "--mangohud-csv",
+            str(raw_csv),
+            "--mangohud-summary-csv",
+            str(summary_csv),
+            "--duration-s",
+            "10",
+            "--output",
+            str(output),
+        ]
+    )
+
+    run_summarize(args)
+
+    summary = json.loads((output / "summary.json").read_text())
+    # lows/avg kept from the summary CSV
+    assert summary["avg_fps"] == 42.3
+    assert summary["one_percent_low_fps"] == 31.2
+    assert summary["point_one_percent_low_fps"] == 24.1
+    # p95/p99 backfilled from the raw per-frame CSV
+    assert summary["p95_frametime_ms"] == 33.3
+    assert summary["p99_frametime_ms"] == 33.3
 
 
 def test_parse_gamescope_fps_target_from_argv_uses_focused_limit_before_separator():
@@ -451,6 +544,81 @@ def test_summarize_thread_schedstat_jsonl_ranks_runqueue_wait(tmp_path):
         "cpus_seen": [0, 1],
         "cgroup": "app-steam-app1091500.scope",
     }
+
+
+def test_run_summarize_emits_color_ledger_from_thread_artifacts(tmp_path):
+    mangohud = tmp_path / "mangohud.csv"
+    write_csv(
+        mangohud,
+        ["fps", "frametime"],
+        [{"fps": "30", "frametime": "33.3"}, {"fps": "31", "frametime": "32.0"}],
+    )
+    schedstat = tmp_path / "thread-schedstat.jsonl"
+    fg = "0::/user.slice/app-steam-app1091500-1.scope"
+    schedstat.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {
+                    "threads": [
+                        {
+                            "tid": 101,
+                            "comm": "RenderThread",
+                            "cgroup": fg,
+                            "run_time_ns": 0,
+                            "runqueue_wait_ns": 0,
+                            "timeslices": 0,
+                            "current_cpu": 0,
+                        }
+                    ]
+                },
+                {
+                    "threads": [
+                        {
+                            "tid": 101,
+                            "comm": "RenderThread",
+                            "cgroup": fg,
+                            "run_time_ns": 5_000_000_000,
+                            "runqueue_wait_ns": 60_000_000,
+                            "timeslices": 400,
+                            "current_cpu": 1,
+                        }
+                    ]
+                },
+            ]
+        )
+        + "\n"
+    )
+    output = tmp_path / "run"
+    args = build_parser().parse_args(
+        [
+            "summarize",
+            "--appid",
+            "1091500",
+            "--tdp-w",
+            "17",
+            "--policy",
+            "target-balance",
+            "--mangohud-csv",
+            str(mangohud),
+            "--thread-schedstat-jsonl",
+            str(schedstat),
+            "--duration-s",
+            "10",
+            "--output",
+            str(output),
+        ]
+    )
+
+    run_summarize(args)
+
+    ledger = json.loads((output / "color-ledger.json").read_text())
+    colors = {entry["role_key"]: entry["color"] for entry in ledger["entries"]}
+    assert colors["foreground-game:renderthread"] == "A"
+    entry = ledger["entries"][0]
+    assert entry["actuator_state"] == "advisory"
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["color_ledger_json"] is True
 
 
 def test_summarize_process_cgroups_jsonl_ranks_background_cpu_candidates(tmp_path):
@@ -2021,9 +2189,11 @@ def test_compare_policy_aggregates_marks_pairwise_evidence_gaps_incomplete():
             thermal_end_c=83.0,
         )
     )
+    # D7: START-temperature parity is the (only) thermal parity gate; a start
+    # mismatch still rejects.
     assert_ab_incomplete(
         compare_policy_aggregates(baseline, candidate, min_runs=1),
-        "aggregate thermal medians differ too much",
+        "aggregate start thermal medians differ too much",
     )
 
     wrong_order = "off,gpu-priority-cpu-cap,off"
@@ -2195,6 +2365,89 @@ def test_compare_policy_aggregates_better_includes_claim_scope_at_comparison_jso
     assert (
         "guarded foreground-game artifacts are required for this captured profile only"
         in comparison["human_summary"]
+    )
+
+
+def test_compare_policy_aggregates_thermal_gate_is_start_only_cooler_end_passes():
+    # D7: a power-saving candidate necessarily ends cooler; gating on END temps
+    # made a BETTER power verdict structurally unreachable. With matched START
+    # temps, a candidate that ends 7 C cooler must PASS the thermal gate.
+    baseline = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="off",
+                position="baseline-before",
+                thermal_start_c=61.0,
+                thermal_end_c=70.0,
+            ),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-after",
+                thermal_start_c=61.0,
+                thermal_end_c=70.0,
+            ),
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="gpu-priority",
+                position="candidate",
+                avg_fps=42.0,
+                one_percent_low_fps=33.0,  # +10% 1% low -> BETTER
+                thermal_start_c=61.0,  # matched start
+                thermal_end_c=63.0,  # 7 C cooler at the end
+            )
+        ]
+    )
+
+    verdict = compare_policy_aggregates(baseline, candidate, min_runs=1)
+
+    assert verdict.verdict == PolicyVerdict.BETTER
+    # END delta is reported context, not a rejection reason.
+    assert verdict.thermal_start_delta_c == 0.0
+    assert verdict.thermal_end_delta_c == 7.0
+    assert verdict.thermal_pair_end_delta_max_c == 7.0
+    assert verdict.claim_scope["thermal_end_delta_c"] == 7.0
+    assert verdict.claim_scope["thermal_start_delta_c"] == 0.0
+
+
+def test_compare_policy_aggregates_thermal_gate_still_rejects_start_mismatch():
+    # D7: START-temperature parity (the pairing confound control) is preserved
+    # exactly -- a candidate that STARTS 7 C hotter than its paired baselines is
+    # still rejected even though its ends match.
+    baseline = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="off",
+                position="baseline-before",
+                thermal_start_c=61.0,
+                thermal_end_c=63.0,
+            ),
+            controlled_ab_run(
+                policy="off",
+                position="baseline-after",
+                thermal_start_c=61.0,
+                thermal_end_c=63.0,
+            ),
+        ]
+    )
+    candidate = aggregate_run_summaries(
+        [
+            controlled_ab_run(
+                policy="gpu-priority",
+                position="candidate",
+                avg_fps=42.0,
+                one_percent_low_fps=33.0,
+                thermal_start_c=68.0,  # start mismatch (+7 C)
+                thermal_end_c=63.0,  # ends matched
+            )
+        ]
+    )
+
+    assert_ab_incomplete(
+        compare_policy_aggregates(baseline, candidate, min_runs=1),
+        "aggregate start thermal medians differ too much",
     )
 
 

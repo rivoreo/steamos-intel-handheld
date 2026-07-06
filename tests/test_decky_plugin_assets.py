@@ -282,6 +282,84 @@ def test_game_power_decky_backend_exposes_safe_mode_api():
     assert "LD_LIBRARY_PATH" not in backend
 
 
+def test_game_power_decky_frontend_exposes_v10_persona_and_limiter_intent_copy():
+    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
+    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
+
+    assert '"set_persona"' in frontend
+    assert '"clear_persona"' in frontend
+    assert '"limiter_status"' in frontend
+    assert '"set_limiter"' in frontend
+    assert '"clear_limiter"' in frontend
+
+    required_copy = (
+        "Power intent",
+        "Battery saver",
+        "Quiet (plugged in)",
+        "Performance (plugged in)",
+        "Auto (match power source)",
+        "Framework shipped; tuning constants are provisional.",
+        "Frame limit helper",
+        "Opt-in: caps in-game frames through gamescope. Device-unverified.",
+        "Apply frame limit",
+        "Clear frame limit",
+        "Soft power budget",
+        "Frame feed",
+        "電力取向",
+        "電池省電",
+        "安靜（外接電源）",
+        "效能（外接電源）",
+        "自動（依電源）",
+        "影格上限輔助",
+        "選用：透過 gamescope 設定遊戲影格上限。尚未在裝置驗證。",
+        "套用影格上限",
+        "動態功耗預算",
+        "影格資料流",
+    )
+    for text in required_copy:
+        assert text in frontend
+        assert text in bundled
+
+
+def test_game_power_decky_frontend_v10_copy_avoids_raw_knob_vocabulary():
+    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
+    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
+
+    for forbidden in (
+        "P-core",
+        "E-core",
+        "pcore",
+        "ecore",
+        "frequency",
+        "freq",
+        "threshold",
+        "uclamp",
+        "CPUWeight",
+        "PL2",
+        "Tau",
+        "affinity",
+    ):
+        assert forbidden not in frontend
+        assert forbidden not in bundled
+
+
+def test_game_power_decky_backend_exposes_persona_and_limiter_api():
+    backend = (GAME_POWER_PLUGIN / "main.py").read_text()
+
+    assert "async def set_persona" in backend
+    assert "async def clear_persona" in backend
+    assert "async def limiter_status" in backend
+    assert "async def set_limiter" in backend
+    assert "async def clear_limiter" in backend
+    # The limiter helper hops to the gamescope session user; the daemon never
+    # calls it. Root Decky backend uses the same runuser + env shape as scripts.
+    assert "runuser" in backend
+    assert "XDG_RUNTIME_DIR=" in backend
+    assert "DBUS_SESSION_BUS_ADDRESS=" in backend
+    assert '"set-persona"' in backend
+    assert '"clear-persona"' in backend
+
+
 def test_game_power_decky_frontend_exposes_safe_fps_slider_not_raw_policy_knobs():
     frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
     bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()

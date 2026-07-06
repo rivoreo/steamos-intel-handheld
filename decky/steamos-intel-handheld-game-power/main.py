@@ -2,9 +2,9 @@ import asyncio
 import json
 import math
 import os
+import pwd
 import time
 from pathlib import Path
-
 
 SERVICE = "steamos-intel-handheld-power-control.service"
 GAME_POWER = "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power"
@@ -17,6 +17,18 @@ VALID_MODES = {"automatic", "observe", "off"}
 FPS_TARGET_MIN = 30
 FPS_TARGET_MAX = 120
 FPS_TARGET_STEP = 5
+# V10 persona intents (plan section 0). Validated locally so an unsupported
+# value fails closed in the backend, exactly like validate_mode, before any CLI
+# process is spawned.
+SUPPORTED_PERSONAS = ("battery", "ac-quiet", "ac-performance")
+FRAME_FEED_STATES = ("live", "stale", "absent")
+# The frame limiter helper (control CLI `limiter` subcommand, contract 1.6)
+# drives gamescope's own control channel and MUST run inside the gamescope
+# session user's bus, like the display-workaround service. The Decky backend
+# runs as root, so it hops to the session user with the same runuser + env
+# shape the on-device scripts use.
+SESSION_USER = "deck"
+SESSION_USER_FALLBACK_UID = 1000
 
 
 def _clean_env() -> dict[str, str]:
@@ -66,6 +78,42 @@ def validate_fps_target(fps) -> int:
             f"{FPS_TARGET_MIN} and {FPS_TARGET_MAX} in {FPS_TARGET_STEP} FPS steps"
         )
     return fps
+
+
+def validate_persona(persona) -> str:
+    if isinstance(persona, str) and persona in SUPPORTED_PERSONAS:
+        return persona
+    raise ValueError(
+        "unsupported persona: expected one of " + ", ".join(SUPPORTED_PERSONAS)
+    )
+
+
+def _session_runtime_dir() -> str:
+    try:
+        uid = pwd.getpwnam(SESSION_USER).pw_uid
+    except KeyError:
+        uid = SESSION_USER_FALLBACK_UID
+    return f"/run/user/{uid}"
+
+
+def _limiter_command(action: str, fps: int | None = None) -> tuple[str, ...]:
+    runtime_dir = _session_runtime_dir()
+    cmd = [
+        "runuser",
+        "-u",
+        SESSION_USER,
+        "--",
+        "env",
+        f"XDG_RUNTIME_DIR={runtime_dir}",
+        f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime_dir}/bus",
+        GAME_POWER_CONTROL,
+        "limiter",
+        action,
+    ]
+    if fps is not None:
+        cmd.append(str(fps))
+    cmd += ["--source", "decky", "--json"]
+    return tuple(cmd)
 
 
 def _parse_systemctl_show(output: str) -> dict[str, str]:
@@ -216,6 +264,13 @@ def _runtime_snapshot_unavailable(reason: str) -> dict:
         "render_busy": None,
         "learning": _default_learning_state(),
         "evidence_readiness": _default_evidence_readiness(reason),
+        "phase": None,
+        "phase_reason_codes": [],
+        "ladder_step": None,
+        "color_ledger": None,
+        "verdict_ledger_health": None,
+        "gated_lanes": None,
+        **_blank_v10_fields(),
         "stale": True,
         "error": reason,
     }
@@ -223,6 +278,158 @@ def _runtime_snapshot_unavailable(reason: str) -> dict:
 
 def _dict_or_default(value, default: dict) -> dict:
     return value if isinstance(value, dict) else default
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _str_list(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _public_phase(row: dict):
+    phase = row.get("phase")
+    return phase if isinstance(phase, str) else None
+
+
+def _public_ladder_step(row: dict):
+    step = row.get("ladder_step")
+    return step if _is_int(step) else None
+
+
+def _compact_color_ledger(row: dict):
+    ledger = row.get("color_ledger")
+    if not isinstance(ledger, dict):
+        return None
+    entries = ledger.get("entries")
+    if not isinstance(entries, list):
+        entries = []
+    summary: dict[str, dict] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        color = entry.get("color")
+        if not isinstance(color, str):
+            continue
+        bucket = summary.setdefault(
+            color,
+            {"color": color, "entry_count": 0, "tid_count": 0, "actuator_states": {}},
+        )
+        bucket["entry_count"] += 1
+        tid_count = entry.get("tid_count")
+        if _is_int(tid_count):
+            bucket["tid_count"] += tid_count
+        state = entry.get("actuator_state")
+        if isinstance(state, str):
+            states = bucket["actuator_states"]
+            states[state] = states.get(state, 0) + 1
+    return {
+        "truncated": bool(ledger.get("truncated")),
+        "colors": [summary[color] for color in sorted(summary)],
+    }
+
+
+def _public_verdict_ledger_health(row: dict):
+    health = row.get("verdict_ledger_health")
+    if not isinstance(health, dict):
+        return None
+    status = health.get("status")
+    if not isinstance(status, str):
+        return None
+    reason = health.get("reason")
+    entry_count = health.get("entry_count")
+    path = health.get("path")
+    return {
+        "status": status,
+        "reason": reason if isinstance(reason, str) else None,
+        "entry_count": entry_count if _is_int(entry_count) else None,
+        "path": path if isinstance(path, str) else None,
+    }
+
+
+def _public_gated_lanes(row: dict):
+    lanes = row.get("gated_lanes")
+    if not isinstance(lanes, dict):
+        return None
+    result: dict[str, dict] = {}
+    for name, lane in lanes.items():
+        if not isinstance(name, str) or not isinstance(lane, dict):
+            continue
+        state = lane.get("state")
+        if not isinstance(state, str):
+            continue
+        public_lane = {"state": state, "reason_codes": _str_list(lane.get("reason_codes"))}
+        variants = lane.get("variants")
+        if isinstance(variants, list):
+            public_lane["variants"] = _str_list(variants)
+        step = lane.get("step")
+        if _is_int(step):
+            public_lane["step"] = step
+        result[name] = public_lane
+    return result or None
+
+
+def _blank_v10_fields() -> dict:
+    return {
+        "persona": None,
+        "soft_pl1_w": None,
+        "gpu_freq_caps": None,
+        "boost_active": None,
+        "boost_reason": None,
+        "trim_rungs_active": None,
+        "frame_feed_status": None,
+        "limiter_state": None,
+    }
+
+
+def _public_gpu_freq_caps(row: dict):
+    caps = row.get("gpu_freq_caps")
+    if not isinstance(caps, dict):
+        return None
+    min_mhz = caps.get("min_mhz")
+    max_mhz = caps.get("max_mhz")
+    public = {
+        "min_mhz": min_mhz if _is_int(min_mhz) else None,
+        "max_mhz": max_mhz if _is_int(max_mhz) else None,
+    }
+    if public["min_mhz"] is None and public["max_mhz"] is None:
+        return None
+    return public
+
+
+def _public_v10_fields(row: dict) -> dict:
+    """Extract the telemetry v3 fields (contract 1.7) defensively.
+
+    Populated only by target-balance decisions, so the gpu-priority default,
+    stale snapshots, and off/observe leave them blank (same evidence-gating
+    pattern as the V9 additive fields). ``persona`` gates the whole block: a
+    missing persona means a gpu-priority snapshot, so everything stays blank.
+    """
+
+    persona = row.get("persona")
+    if not isinstance(persona, str):
+        return _blank_v10_fields()
+    soft_pl1_w = row.get("soft_pl1_w")
+    boost_active = row.get("boost_active")
+    boost_reason = row.get("boost_reason")
+    trim_rungs = row.get("trim_rungs_active")
+    frame_feed_status = row.get("frame_feed_status")
+    limiter_state = row.get("limiter_state")
+    return {
+        "persona": persona,
+        "soft_pl1_w": soft_pl1_w if _is_int(soft_pl1_w) else None,
+        "gpu_freq_caps": _public_gpu_freq_caps(row),
+        "boost_active": boost_active if isinstance(boost_active, bool) else None,
+        "boost_reason": boost_reason if isinstance(boost_reason, str) else None,
+        "trim_rungs_active": _str_list(trim_rungs) if isinstance(trim_rungs, list) else None,
+        "frame_feed_status": (
+            frame_feed_status if frame_feed_status in FRAME_FEED_STATES else None
+        ),
+        "limiter_state": limiter_state if isinstance(limiter_state, str) else None,
+    }
 
 
 def _valid_timestamp(value) -> bool:
@@ -334,12 +541,26 @@ def _public_runtime_snapshot(row: dict) -> dict:
     }:
         fps_target = _default_target_state()
         frame_source = _default_frame_source_state()
+        phase = None
+        phase_reason_codes: list[str] = []
+        ladder_step = None
+        color_ledger = None
+        verdict_ledger_health = None
+        gated_lanes = None
+        v10_fields = _blank_v10_fields()
     else:
         fps_target = _dict_or_default(row.get("fps_target"), _default_target_state())
         frame_source = _dict_or_default(
             row.get("frame_source"),
             _default_frame_source_state(),
         )
+        phase = _public_phase(row)
+        phase_reason_codes = _str_list(row.get("phase_reason_codes"))
+        ladder_step = _public_ladder_step(row)
+        color_ledger = _compact_color_ledger(row)
+        verdict_ledger_health = _public_verdict_ledger_health(row)
+        gated_lanes = _public_gated_lanes(row)
+        v10_fields = _public_v10_fields(row)
     return {
         "schema_version": row.get("schema_version", RUNTIME_SNAPSHOT_SCHEMA),
         "timestamp_monotonic_s": timestamp,
@@ -361,6 +582,13 @@ def _public_runtime_snapshot(row: dict) -> dict:
         "render_busy": row.get("render_busy"),
         "learning": _dict_or_default(row.get("learning"), _default_learning_state()),
         "evidence_readiness": evidence_readiness,
+        "phase": phase,
+        "phase_reason_codes": phase_reason_codes,
+        "ladder_step": ladder_step,
+        "color_ledger": color_ledger,
+        "verdict_ledger_health": verdict_ledger_health,
+        "gated_lanes": gated_lanes,
+        **v10_fields,
         "stale": stale,
         "error": error,
     }
@@ -507,6 +735,35 @@ class Plugin:
             "decky",
             "--json",
         )
+        return json.loads(output)
+
+    async def set_persona(self, persona: str) -> dict:
+        persona = validate_persona(persona)
+        output = await _run_command(
+            GAME_POWER_CONTROL,
+            "set-persona",
+            persona,
+            "--source",
+            "decky",
+            "--json",
+        )
+        return json.loads(output)
+
+    async def clear_persona(self) -> dict:
+        output = await _run_command(GAME_POWER_CONTROL, "clear-persona", "--json")
+        return json.loads(output)
+
+    async def limiter_status(self) -> dict:
+        output = await _run_command(*_limiter_command("status"))
+        return json.loads(output)
+
+    async def set_limiter(self, fps) -> dict:
+        fps = validate_fps_target(fps)
+        output = await _run_command(*_limiter_command("set", fps))
+        return json.loads(output)
+
+    async def clear_limiter(self) -> dict:
+        output = await _run_command(*_limiter_command("clear"))
         return json.loads(output)
 
     async def restore_defaults(self) -> dict:

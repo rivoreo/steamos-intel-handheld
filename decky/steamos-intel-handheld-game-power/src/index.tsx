@@ -50,6 +50,32 @@ type EvidenceReadiness = {
   reasons: string[];
 };
 
+type ColorLedgerSummary = {
+  color: string;
+  entry_count: number;
+  tid_count: number;
+  actuator_states: Record<string, number>;
+};
+
+type ColorLedger = {
+  truncated: boolean;
+  colors: ColorLedgerSummary[];
+};
+
+type VerdictLedgerHealth = {
+  status: string;
+  reason: string | null;
+  entry_count: number | null;
+  path: string | null;
+};
+
+type GatedLane = {
+  state: string;
+  reason_codes: string[];
+  variants?: string[];
+  step?: number;
+};
+
 type RuntimeSnapshot = {
   schema_version: string;
   timestamp_monotonic_s: number | null;
@@ -71,8 +97,40 @@ type RuntimeSnapshot = {
   render_busy: number | null;
   learning: LearningState;
   evidence_readiness: EvidenceReadiness;
+  phase?: string | null;
+  phase_reason_codes?: string[];
+  ladder_step?: number | null;
+  color_ledger?: ColorLedger | null;
+  verdict_ledger_health?: VerdictLedgerHealth | null;
+  gated_lanes?: Record<string, GatedLane> | null;
+  persona?: string | null;
+  soft_pl1_w?: number | null;
+  boost_active?: boolean | null;
+  boost_reason?: string | null;
+  trim_rungs_active?: string[] | null;
+  frame_feed_status?: string | null;
+  limiter_state?: string | null;
   stale: boolean;
   error: string | null;
+};
+
+type PersonaOverride = {
+  status: string;
+  persona: string | null;
+  source: string | null;
+  supported: string[];
+};
+
+type LimiterStatus = {
+  status: string;
+  fps: number | null;
+  supported: boolean;
+  source: string | null;
+  raw?: string | null;
+  supported_min?: number;
+  supported_max?: number;
+  supported_step?: number;
+  clear_fps?: number;
 };
 
 type ServiceStatus = {
@@ -100,7 +158,10 @@ type ControlStatus = {
   source: string | null;
   supported_modes: string[];
   fps_target_override: FpsTargetOverride;
+  persona_override?: PersonaOverride;
 };
+
+type Persona = "battery" | "ac-quiet" | "ac-performance";
 
 type StatusPayload = {
   service: ServiceStatus;
@@ -131,6 +192,11 @@ const setFpsTarget = callable<[fps: number | null], ControlStatus>("set_fps_targ
 const restoreDefaults = callable<[], { restored: boolean; policy_label: string }>(
   "restore_defaults",
 );
+const setPersona = callable<[persona: Persona], ControlStatus>("set_persona");
+const clearPersona = callable<[], ControlStatus>("clear_persona");
+const getLimiter = callable<[], LimiterStatus>("limiter_status");
+const applyLimiterFps = callable<[fps: number], LimiterStatus>("set_limiter");
+const clearLimiterFps = callable<[], LimiterStatus>("clear_limiter");
 
 type LocaleKey = "en" | "zhHant";
 
@@ -166,7 +232,37 @@ type Copy = {
   applying: string;
   restored: string;
   evidenceLabel: string;
+  balanceLabel: string;
+  phaseLabel: string;
+  ladderLabel: string;
+  colorsLabel: string;
+  lanesLabel: string;
+  verdictLabel: string;
+  truncatedNote: string;
+  none: string;
+  personaTitle: string;
+  personaCurrent: string;
+  personaAuto: string;
+  personaProvisional: string;
+  personaLabels: Record<string, string>;
+  limiterTitle: string;
+  limiterConsentNote: string;
+  limiterApply: string;
+  limiterClear: string;
+  limiterRead: string;
+  limiterStates: Record<string, string>;
+  budgetLabel: string;
+  boostLabel: string;
+  boostStates: Record<string, string>;
+  frameFeedLabel: string;
+  frameFeedStates: Record<string, string>;
+  trimLabel: string;
   evidenceStates: Record<string, string>;
+  phases: Record<string, string>;
+  actuatorStates: Record<string, string>;
+  laneNames: Record<string, string>;
+  laneStates: Record<string, string>;
+  verdictStates: Record<string, string>;
   modes: Record<string, string>;
   modeDescriptions: Record<string, string>;
   telemetryLabels: Record<string, string>;
@@ -212,6 +308,47 @@ const COPY: Record<LocaleKey, Copy> = {
     applying: "Applying...",
     restored: "Using the service default.",
     evidenceLabel: "Local evidence",
+    balanceLabel: "Target balance",
+    phaseLabel: "Phase",
+    ladderLabel: "Trim ladder step",
+    colorsLabel: "Thread colors",
+    lanesLabel: "Gated write lanes",
+    verdictLabel: "Verdict ledger",
+    truncatedNote: "color sampling truncated",
+    none: "none",
+    personaTitle: "Power intent",
+    personaCurrent: "Current intent",
+    personaAuto: "Auto (match power source)",
+    personaProvisional: "Framework shipped; tuning constants are provisional.",
+    personaLabels: {
+      battery: "Battery saver",
+      "ac-quiet": "Quiet (plugged in)",
+      "ac-performance": "Performance (plugged in)",
+    },
+    limiterTitle: "Frame limit helper",
+    limiterConsentNote: "Opt-in: caps in-game frames through gamescope. Device-unverified.",
+    limiterApply: "Apply frame limit",
+    limiterClear: "Clear frame limit",
+    limiterRead: "Check frame limit",
+    limiterStates: {
+      limited: "Frame limit active",
+      unlimited: "No frame limit",
+      unknown: "Frame limit helper available",
+      unsupported: "Frame limit helper unavailable",
+    },
+    budgetLabel: "Soft power budget",
+    boostLabel: "Boost",
+    boostStates: {
+      active: "active",
+      idle: "idle",
+    },
+    frameFeedLabel: "Frame feed",
+    frameFeedStates: {
+      live: "live",
+      stale: "stale",
+      absent: "absent",
+    },
+    trimLabel: "Active trims",
     evidenceStates: {
       "target-aware-live": "Local target/frame evidence ready",
       "power-signals-only": "Local evidence: power signals only",
@@ -219,6 +356,39 @@ const COPY: Record<LocaleKey, Copy> = {
       stopped: "Game Power stopped",
       "control-invalid": "Local evidence unavailable",
       unavailable: "Local evidence unavailable",
+    },
+    phases: {
+      "no-game": "No foreground game",
+      loading: "Loading (constraints released)",
+      "below-target-cpu-bound": "Below target, CPU-bound",
+      "below-target-gpu-bound": "Below target, GPU-bound",
+      "at-target": "At target",
+      "above-target": "Above target (trimming)",
+      "no-target": "No FPS target",
+      unknown: "Unknown",
+    },
+    actuatorStates: {
+      active: "active",
+      advisory: "advisory",
+      blocked: "blocked",
+    },
+    laneNames: {
+      foreground: "Foreground boost",
+      background: "Background easing",
+      ladder: "Deep trim",
+      other: "Write lane",
+    },
+    laneStates: {
+      active: "active",
+      blocked: "blocked (no verdict)",
+      released: "released (loading)",
+    },
+    verdictStates: {
+      ready: "verdicts loaded",
+      unavailable: "no verdict ledger",
+      missing: "verdict file missing",
+      corrupt: "verdict file corrupt",
+      invalid: "verdict file invalid",
     },
     modes: {
       automatic: "Balance to FPS target",
@@ -314,6 +484,47 @@ const COPY: Record<LocaleKey, Copy> = {
     applying: "正在套用...",
     restored: "已切回服務預設。",
     evidenceLabel: "本機證據",
+    balanceLabel: "目標平衡",
+    phaseLabel: "階段",
+    ladderLabel: "降頻階梯步數",
+    colorsLabel: "執行緒著色",
+    lanesLabel: "受管制的寫入通道",
+    verdictLabel: "裁決紀錄",
+    truncatedNote: "著色取樣已截斷",
+    none: "無",
+    personaTitle: "電力取向",
+    personaCurrent: "目前取向",
+    personaAuto: "自動（依電源）",
+    personaProvisional: "框架已上線；調校常數仍為暫定值。",
+    personaLabels: {
+      battery: "電池省電",
+      "ac-quiet": "安靜（外接電源）",
+      "ac-performance": "效能（外接電源）",
+    },
+    limiterTitle: "影格上限輔助",
+    limiterConsentNote: "選用：透過 gamescope 設定遊戲影格上限。尚未在裝置驗證。",
+    limiterApply: "套用影格上限",
+    limiterClear: "取消影格上限",
+    limiterRead: "檢查影格上限",
+    limiterStates: {
+      limited: "影格上限啟用中",
+      unlimited: "沒有影格上限",
+      unknown: "影格上限輔助可用",
+      unsupported: "影格上限輔助不可用",
+    },
+    budgetLabel: "動態功耗預算",
+    boostLabel: "衝刺",
+    boostStates: {
+      active: "啟用中",
+      idle: "待命",
+    },
+    frameFeedLabel: "影格資料流",
+    frameFeedStates: {
+      live: "即時",
+      stale: "過期",
+      absent: "無",
+    },
+    trimLabel: "生效的節流",
     evidenceStates: {
       "target-aware-live": "本機 FPS 目標與影格資料可用",
       "power-signals-only": "本機證據：僅有功耗訊號",
@@ -321,6 +532,39 @@ const COPY: Record<LocaleKey, Copy> = {
       stopped: "遊戲電力已停止",
       "control-invalid": "本機證據不可用",
       unavailable: "本機證據不可用",
+    },
+    phases: {
+      "no-game": "沒有前景遊戲",
+      loading: "載入中（已釋放限制）",
+      "below-target-cpu-bound": "低於目標，CPU 受限",
+      "below-target-gpu-bound": "低於目標，GPU 受限",
+      "at-target": "已達目標",
+      "above-target": "高於目標（正在降頻）",
+      "no-target": "沒有 FPS 目標",
+      unknown: "未知",
+    },
+    actuatorStates: {
+      active: "啟用",
+      advisory: "僅建議",
+      blocked: "封鎖",
+    },
+    laneNames: {
+      foreground: "前景提升",
+      background: "背景讓路",
+      ladder: "深層降頻",
+      other: "寫入通道",
+    },
+    laneStates: {
+      active: "啟用",
+      blocked: "封鎖（無裁決）",
+      released: "已釋放（載入中）",
+    },
+    verdictStates: {
+      ready: "已載入裁決",
+      unavailable: "沒有裁決紀錄",
+      missing: "缺少裁決檔案",
+      corrupt: "裁決檔案損毀",
+      invalid: "裁決檔案無效",
     },
     modes: {
       automatic: "依 FPS 目標自動平衡",
@@ -568,6 +812,152 @@ function runtimeHeadline(
   return t.telemetryLabels.powerSignals;
 }
 
+function phaseText(t: Copy, phase: string | null | undefined): string {
+  if (!phase) {
+    return t.none;
+  }
+  return t.phases[phase] ?? phase;
+}
+
+function colorLedgerText(t: Copy, color: ColorLedgerSummary): string {
+  const states = Object.entries(color.actuator_states)
+    .map(([state, count]) => `${t.actuatorStates[state] ?? state}${count > 1 ? ` x${count}` : ""}`)
+    .join(", ");
+  const tail = states ? ` (${states})` : "";
+  return `${color.color}: ${color.tid_count} TID / ${color.entry_count} role${tail}`;
+}
+
+function laneLabelKey(name: string): string {
+  if (name.includes("foreground")) {
+    return "foreground";
+  }
+  if (name.includes("background")) {
+    return "background";
+  }
+  if (name.includes("ladder")) {
+    return "ladder";
+  }
+  return "other";
+}
+
+function laneText(t: Copy, name: string, lane: GatedLane): string {
+  const label = t.laneNames[laneLabelKey(name)] ?? t.laneNames.other;
+  const state = t.laneStates[lane.state] ?? lane.state;
+  const why = lane.reason_codes.length ? ` - ${lane.reason_codes.join(", ")}` : "";
+  return `${label}: ${state}${why}`;
+}
+
+function verdictText(t: Copy, health: VerdictLedgerHealth): string {
+  const state = t.verdictStates[health.status] ?? health.status;
+  const count = health.entry_count === null ? "" : ` (${health.entry_count})`;
+  return `${state}${count}`;
+}
+
+function personaLabel(t: Copy, persona: string | null | undefined): string {
+  if (!persona) {
+    return t.personaAuto;
+  }
+  return t.personaLabels[persona] ?? persona;
+}
+
+function activePersona(control: ControlStatus | null): string | null {
+  const override = control?.persona_override;
+  if (override?.status === "manual" && override.persona) {
+    return override.persona;
+  }
+  return null;
+}
+
+function frameFeedText(t: Copy, status: string | null | undefined): string {
+  if (!status) {
+    return t.none;
+  }
+  return t.frameFeedStates[status] ?? status;
+}
+
+function limiterStateText(t: Copy, limiter: LimiterStatus | null): string {
+  if (!limiter) {
+    return "-";
+  }
+  const label = t.limiterStates[limiter.status] ?? limiter.status;
+  return limiter.fps ? `${label}: ${limiter.fps} FPS` : label;
+}
+
+const TargetBalanceLiveRow: FC<{ t: Copy; runtime: RuntimeSnapshot | null }> = ({ t, runtime }) => {
+  if (!runtime || runtime.stale || runtime.error || !runtime.persona) {
+    return null;
+  }
+  const { soft_pl1_w, boost_active, frame_feed_status, trim_rungs_active } = runtime;
+  const boostText = boost_active ? t.boostStates.active : t.boostStates.idle;
+  const trims = trim_rungs_active && trim_rungs_active.length ? trim_rungs_active.join(", ") : t.none;
+  return (
+    <>
+      <div style={detailStyle}>
+        {t.personaCurrent}: {personaLabel(t, runtime.persona)}
+      </div>
+      <div style={detailStyle}>
+        {t.package}: {fmtWatts(runtime.package_w)} / {t.budgetLabel}:{" "}
+        {soft_pl1_w === null || soft_pl1_w === undefined ? t.none : fmtWatts(soft_pl1_w)}
+      </div>
+      <div style={detailStyle}>
+        {t.boostLabel}: {boostText}
+      </div>
+      <div style={detailStyle}>
+        {t.frameFeedLabel}: {frameFeedText(t, frame_feed_status)}
+      </div>
+      <div style={detailStyle}>
+        {t.trimLabel}: {trims}
+      </div>
+    </>
+  );
+};
+
+const TargetBalanceDetails: FC<{ t: Copy; runtime: RuntimeSnapshot | null }> = ({ t, runtime }) => {
+  if (!runtime || runtime.stale || runtime.error) {
+    return null;
+  }
+  const { phase, ladder_step, color_ledger, verdict_ledger_health, gated_lanes } = runtime;
+  if (
+    phase === undefined ||
+    phase === null ||
+    (ladder_step === undefined || ladder_step === null) &&
+      !color_ledger &&
+      !verdict_ledger_health &&
+      !gated_lanes
+  ) {
+    return null;
+  }
+  const lanes = gated_lanes ? Object.entries(gated_lanes) : [];
+  return (
+    <>
+      <div style={detailStyle}>
+        {t.balanceLabel} - {t.phaseLabel}: {phaseText(t, phase)}
+      </div>
+      {ladder_step !== undefined && ladder_step !== null ? (
+        <div style={detailStyle}>
+          {t.ladderLabel}: S{ladder_step}
+        </div>
+      ) : null}
+      {verdict_ledger_health ? (
+        <div style={detailStyle}>
+          {t.verdictLabel}: {verdictText(t, verdict_ledger_health)}
+        </div>
+      ) : null}
+      {color_ledger && color_ledger.colors.length ? (
+        <div style={detailStyle}>
+          {t.colorsLabel}: {color_ledger.colors.map((color) => colorLedgerText(t, color)).join(" | ")}
+          {color_ledger.truncated ? ` (${t.truncatedNote})` : ""}
+        </div>
+      ) : null}
+      {lanes.length ? (
+        <div style={detailStyle}>
+          {t.lanesLabel}: {lanes.map(([name, lane]) => laneText(t, name, lane)).join(" | ")}
+        </div>
+      ) : null}
+    </>
+  );
+};
+
 const PluginTitle: FC = () => {
   const t = COPY[useLocale()];
   return <div className={staticClasses.Title}>{t.pluginName}</div>;
@@ -580,6 +970,7 @@ const GamePowerPanel: FC = () => {
   const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [sample, setSample] = useState<SamplePayload | null>(null);
   const [manualFps, setManualFps] = useState(40);
+  const [limiter, setLimiter] = useState<LimiterStatus | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -690,10 +1081,61 @@ const GamePowerPanel: FC = () => {
     }
   };
 
+  const applyPersona = async (persona: Persona | null) => {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setNotice(t.applying);
+    setError(null);
+    try {
+      if (persona === null) {
+        await clearPersona();
+      } else {
+        await setPersona(persona);
+      }
+      const statusResult = await getStatus();
+      setStatus(statusResult.service);
+      setControl(statusResult.control);
+      setRuntime(statusResult.runtime);
+      setNotice(null);
+    } catch (error) {
+      setError(errorText(error));
+      setNotice(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runLimiter = async (action: "read" | "apply" | "clear") => {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setNotice(action === "read" ? null : t.applying);
+    setError(null);
+    try {
+      if (action === "apply") {
+        setLimiter(await applyLimiterFps(manualFps));
+      } else if (action === "clear") {
+        setLimiter(await clearLimiterFps());
+      } else {
+        setLimiter(await getLimiter());
+      }
+      setNotice(null);
+    } catch (error) {
+      setError(errorText(error));
+      setNotice(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     load();
   }, []);
 
+  const currentPersona = activePersona(control);
   const runtimeTitle = runtime?.appid ? `${t.game}: ${runtime.appid}` : t.noSample;
   const probeTitle = sample?.appid ? `${t.game}: ${sample.appid}` : t.noSample;
   const supportedMin = control?.fps_target_override.supported_min ?? 30;
@@ -793,6 +1235,61 @@ const GamePowerPanel: FC = () => {
         </PanelSectionRow>
       </PanelSection>
 
+      <PanelSection title={t.personaTitle}>
+        <PanelSectionRow>
+          <div style={blockStyle}>
+            <div style={detailStyle}>
+              {t.personaCurrent}: {currentPersona ? personaLabel(t, currentPersona) : t.personaAuto}
+            </div>
+            <div style={detailStyle}>{t.personaProvisional}</div>
+          </div>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => applyPersona("battery")}>
+            {busy ? t.applying : t.personaLabels.battery}
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => applyPersona("ac-quiet")}>
+            {busy ? t.applying : t.personaLabels["ac-quiet"]}
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => applyPersona("ac-performance")}>
+            {busy ? t.applying : t.personaLabels["ac-performance"]}
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => applyPersona(null)}>
+            {busy ? t.applying : t.personaAuto}
+          </ButtonItem>
+        </PanelSectionRow>
+      </PanelSection>
+
+      <PanelSection title={t.limiterTitle}>
+        <PanelSectionRow>
+          <div style={blockStyle}>
+            <div style={detailStyle}>{t.limiterConsentNote}</div>
+            <div style={detailStyle}>{limiterStateText(t, limiter)}</div>
+          </div>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => runLimiter("read")}>
+            {busy ? t.applying : t.limiterRead}
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => runLimiter("apply")}>
+            {busy ? t.applying : `${t.limiterApply}: ${manualFps} FPS`}
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => runLimiter("clear")}>
+            {busy ? t.applying : t.limiterClear}
+          </ButtonItem>
+        </PanelSectionRow>
+      </PanelSection>
+
       <PanelSection title={t.telemetry}>
         <PanelSectionRow>
           <div style={blockStyle}>
@@ -821,6 +1318,8 @@ const GamePowerPanel: FC = () => {
                 <div style={detailStyle}>
                   {t.learning}: {learningText(t, runtime.learning)}
                 </div>
+                <TargetBalanceLiveRow t={t} runtime={runtime} />
+                <TargetBalanceDetails t={t} runtime={runtime} />
               </>
             ) : (
               <div style={detailStyle}>{busy ? t.loading : t.noSample}</div>

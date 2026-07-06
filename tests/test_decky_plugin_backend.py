@@ -396,6 +396,372 @@ def runtime_snapshot_row(**updates) -> dict:
     return row
 
 
+def target_balance_v9_fields() -> dict:
+    return {
+        "phase": "at-target",
+        "phase_reason_codes": ["target-satisfied", "p95-guard-ok"],
+        "ladder_step": 3,
+        "color_ledger": {
+            "truncated": True,
+            "entries": [
+                {
+                    "role_key": "foreground-game:worker-thread",
+                    "color": "A",
+                    "tid_count": 2,
+                    "cpu_time_ms_per_s": 640.0,
+                    "runqueue_wait_ms_per_s": 31.5,
+                    "cpus_seen": [0, 1, 2, 3],
+                    "actuator": "uclamp-min",
+                    "actuator_state": "active",
+                    "blocking_reason_codes": [],
+                },
+                {
+                    "role_key": "foreground-game:render-thread",
+                    "color": "A",
+                    "tid_count": 1,
+                    "cpu_time_ms_per_s": 210.0,
+                    "runqueue_wait_ms_per_s": 4.0,
+                    "cpus_seen": [2, 3],
+                    "actuator": "observe-only",
+                    "actuator_state": "advisory",
+                    "blocking_reason_codes": [],
+                },
+                {
+                    "role_key": "background-helper:updater",
+                    "color": "D",
+                    "tid_count": 3,
+                    "cpu_time_ms_per_s": 12.0,
+                    "runqueue_wait_ms_per_s": 0.0,
+                    "cpus_seen": [4, 5],
+                    "actuator": "bg-weight",
+                    "actuator_state": "blocked",
+                    "blocking_reason_codes": ["no-verdict-for-context"],
+                },
+            ],
+        },
+        "verdict_ledger_health": {
+            "status": "ready",
+            "reason": None,
+            "entry_count": 4,
+            "path": "/var/lib/steamos-intel-handheld/game-power-verdicts.json",
+        },
+        "gated_lanes": {
+            "foreground_uclamp_min": {"state": "active", "reason_codes": []},
+            "background_shaping": {
+                "state": "blocked",
+                "reason_codes": ["no-verdict-for-context"],
+                "variants": ["cpu-weight-80"],
+            },
+            "ladder_deep_step": {"state": "blocked", "reason_codes": ["no-verdict-for-context"]},
+        },
+    }
+
+
+def target_balance_v10_fields() -> dict:
+    return {
+        "persona": "battery",
+        "soft_pl1_w": 11,
+        "gpu_freq_caps": {"min_mhz": None, "max_mhz": 1350},
+        "boost_active": False,
+        "boost_reason": None,
+        "trim_rungs_active": ["G1", "P1"],
+        "frame_feed_status": "live",
+        "limiter_state": "unknown",
+    }
+
+
+def test_game_power_backend_unavailable_snapshot_includes_blank_v10_fields():
+    backend = load_game_power_backend()
+
+    result = backend._runtime_snapshot_unavailable("missing-runtime-snapshot")
+
+    assert result["persona"] is None
+    assert result["soft_pl1_w"] is None
+    assert result["gpu_freq_caps"] is None
+    assert result["boost_active"] is None
+    assert result["boost_reason"] is None
+    assert result["trim_rungs_active"] is None
+    assert result["frame_feed_status"] is None
+    assert result["limiter_state"] is None
+
+
+def test_game_power_backend_public_snapshot_exposes_v10_target_balance_fields(monkeypatch):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+
+    result = backend._public_runtime_snapshot(
+        runtime_snapshot_row(**target_balance_v10_fields())
+    )
+
+    assert result["persona"] == "battery"
+    assert result["soft_pl1_w"] == 11
+    assert result["gpu_freq_caps"] == {"min_mhz": None, "max_mhz": 1350}
+    assert result["boost_active"] is False
+    assert result["boost_reason"] is None
+    assert result["trim_rungs_active"] == ["G1", "P1"]
+    assert result["frame_feed_status"] == "live"
+    assert result["limiter_state"] == "unknown"
+
+
+def test_game_power_backend_public_snapshot_degrades_without_v10_fields(monkeypatch):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+
+    result = backend._public_runtime_snapshot(runtime_snapshot_row())
+
+    assert result["persona"] is None
+    assert result["soft_pl1_w"] is None
+    assert result["gpu_freq_caps"] is None
+    assert result["boost_active"] is None
+    assert result["trim_rungs_active"] is None
+    assert result["frame_feed_status"] is None
+    assert result["limiter_state"] is None
+
+
+def test_game_power_backend_public_snapshot_hides_v10_fields_when_stale(monkeypatch):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 120.1)
+
+    result = backend._public_runtime_snapshot(
+        runtime_snapshot_row(**target_balance_v10_fields())
+    )
+
+    assert result["stale"] is True
+    assert result["persona"] is None
+    assert result["soft_pl1_w"] is None
+    assert result["gpu_freq_caps"] is None
+    assert result["boost_active"] is None
+    assert result["trim_rungs_active"] is None
+    assert result["frame_feed_status"] is None
+    assert result["limiter_state"] is None
+
+
+def test_game_power_backend_public_snapshot_hides_v10_fields_when_off(monkeypatch):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+
+    result = backend._public_runtime_snapshot(
+        runtime_snapshot_row(mode="off", **target_balance_v10_fields())
+    )
+
+    assert result["persona"] is None
+    assert result["frame_feed_status"] is None
+    assert result["limiter_state"] is None
+
+
+def test_game_power_backend_public_snapshot_sanitizes_malformed_v10_fields(monkeypatch):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+
+    result = backend._public_runtime_snapshot(
+        runtime_snapshot_row(
+            persona="battery",
+            soft_pl1_w="eleven",
+            gpu_freq_caps={"min_mhz": "x", "max_mhz": "y"},
+            boost_active="yes",
+            boost_reason=5,
+            trim_rungs_active=["G1", 7, None, "P2"],
+            frame_feed_status="glowing",
+            limiter_state=42,
+        )
+    )
+
+    assert result["persona"] == "battery"
+    assert result["soft_pl1_w"] is None
+    assert result["gpu_freq_caps"] is None
+    assert result["boost_active"] is None
+    assert result["boost_reason"] is None
+    assert result["trim_rungs_active"] == ["G1", "P2"]
+    assert result["frame_feed_status"] is None
+    assert result["limiter_state"] is None
+
+
+def test_game_power_backend_status_surfaces_v10_fields_from_snapshot(monkeypatch, tmp_path):
+    backend = load_game_power_backend()
+    snapshot_path = tmp_path / "game-power-runtime.json"
+    snapshot_path.write_text(
+        json.dumps(runtime_snapshot_row(**target_balance_v10_fields())) + "\n"
+    )
+    monkeypatch.setattr(backend, "RUNTIME_SNAPSHOT", str(snapshot_path))
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        if cmd[0] == "systemctl":
+            return FakeCommandProcess(stdout=b"ActiveState=active\nSubState=running\n")
+        return FakeCommandProcess(stdout=b'{"mode": "default", "override_active": false}')
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = asyncio.run(backend.Plugin().get_status())
+
+    assert result["runtime"]["persona"] == "battery"
+    assert result["runtime"]["soft_pl1_w"] == 11
+    assert result["runtime"]["frame_feed_status"] == "live"
+    assert result["runtime"]["limiter_state"] == "unknown"
+
+
+def test_game_power_backend_set_persona_calls_control_cli(monkeypatch):
+    backend = load_game_power_backend()
+    calls = []
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return FakeCommandProcess(
+            stdout=b'{"persona_override": {"status": "manual", "persona": "ac-quiet"}}'
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = asyncio.run(backend.Plugin().set_persona("ac-quiet"))
+
+    assert result["persona_override"]["persona"] == "ac-quiet"
+    assert [call[0] for call in calls] == [
+        (
+            backend.GAME_POWER_CONTROL,
+            "set-persona",
+            "ac-quiet",
+            "--source",
+            "decky",
+            "--json",
+        )
+    ]
+
+
+def test_game_power_backend_rejects_invalid_persona_without_spawning(monkeypatch):
+    backend = load_game_power_backend()
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        raise AssertionError(f"unexpected spawn: {cmd}")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    for persona in ("turbo", "", "BATTERY", 42, None):
+        try:
+            asyncio.run(backend.Plugin().set_persona(persona))
+        except ValueError as exc:
+            assert "unsupported persona" in str(exc)
+        else:
+            raise AssertionError(f"{persona!r} unexpectedly accepted")
+
+
+def test_game_power_backend_clear_persona_calls_control_cli(monkeypatch):
+    backend = load_game_power_backend()
+    calls = []
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return FakeCommandProcess(
+            stdout=b'{"persona_override": {"status": "auto", "persona": null}}'
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = asyncio.run(backend.Plugin().clear_persona())
+
+    assert result["persona_override"]["status"] == "auto"
+    assert [call[0] for call in calls] == [
+        (backend.GAME_POWER_CONTROL, "clear-persona", "--json")
+    ]
+
+
+def test_game_power_backend_limiter_runs_control_cli_as_session_user(monkeypatch):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend, "_session_runtime_dir", lambda: "/run/user/1000")
+    calls = []
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return FakeCommandProcess(
+            stdout=b'{"status": "unknown", "supported": true, "fps": null}'
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    status = asyncio.run(backend.Plugin().limiter_status())
+    applied = asyncio.run(backend.Plugin().set_limiter(40))
+    cleared = asyncio.run(backend.Plugin().clear_limiter())
+
+    assert status["status"] == "unknown"
+    assert applied["supported"] is True
+    assert cleared["status"] == "unknown"
+    assert [call[0] for call in calls] == [
+        (
+            "runuser",
+            "-u",
+            "deck",
+            "--",
+            "env",
+            "XDG_RUNTIME_DIR=/run/user/1000",
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+            backend.GAME_POWER_CONTROL,
+            "limiter",
+            "status",
+            "--source",
+            "decky",
+            "--json",
+        ),
+        (
+            "runuser",
+            "-u",
+            "deck",
+            "--",
+            "env",
+            "XDG_RUNTIME_DIR=/run/user/1000",
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+            backend.GAME_POWER_CONTROL,
+            "limiter",
+            "set",
+            "40",
+            "--source",
+            "decky",
+            "--json",
+        ),
+        (
+            "runuser",
+            "-u",
+            "deck",
+            "--",
+            "env",
+            "XDG_RUNTIME_DIR=/run/user/1000",
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+            backend.GAME_POWER_CONTROL,
+            "limiter",
+            "clear",
+            "--source",
+            "decky",
+            "--json",
+        ),
+    ]
+
+
+def test_game_power_backend_rejects_invalid_limiter_fps_without_spawning(monkeypatch):
+    backend = load_game_power_backend()
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        raise AssertionError(f"unexpected spawn: {cmd}")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    for fps in (0, 29, 37, 121, "40", None):
+        try:
+            asyncio.run(backend.Plugin().set_limiter(fps))
+        except ValueError as exc:
+            assert "unsupported FPS target" in str(exc)
+        else:
+            raise AssertionError(f"{fps!r} unexpectedly accepted")
+
+
+def test_game_power_backend_session_runtime_dir_falls_back_when_no_session_user(monkeypatch):
+    backend = load_game_power_backend()
+
+    def raise_key_error(_name):
+        raise KeyError("deck")
+
+    monkeypatch.setattr(backend.pwd, "getpwnam", raise_key_error)
+
+    assert backend._session_runtime_dir() == "/run/user/1000"
+
+
 def test_game_power_backend_runtime_snapshot_defaults_evidence_readiness():
     backend = load_game_power_backend()
 
@@ -631,3 +997,149 @@ def test_game_power_backend_restore_removes_only_plugin_dropin(monkeypatch):
         "restore-defaults",
         "--json",
     )
+
+
+def test_game_power_backend_unavailable_snapshot_includes_v9_fields():
+    backend = load_game_power_backend()
+
+    result = backend._runtime_snapshot_unavailable("missing-runtime-snapshot")
+
+    assert result["phase"] is None
+    assert result["phase_reason_codes"] == []
+    assert result["ladder_step"] is None
+    assert result["color_ledger"] is None
+    assert result["verdict_ledger_health"] is None
+    assert result["gated_lanes"] is None
+
+
+def test_game_power_backend_public_snapshot_exposes_v9_target_balance_fields(monkeypatch):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+
+    result = backend._public_runtime_snapshot(
+        runtime_snapshot_row(**target_balance_v9_fields())
+    )
+
+    assert result["phase"] == "at-target"
+    assert result["phase_reason_codes"] == ["target-satisfied", "p95-guard-ok"]
+    assert result["ladder_step"] == 3
+
+    ledger = result["color_ledger"]
+    assert ledger["truncated"] is True
+    assert ledger["colors"] == [
+        {
+            "color": "A",
+            "entry_count": 2,
+            "tid_count": 3,
+            "actuator_states": {"active": 1, "advisory": 1},
+        },
+        {
+            "color": "D",
+            "entry_count": 1,
+            "tid_count": 3,
+            "actuator_states": {"blocked": 1},
+        },
+    ]
+
+    assert result["verdict_ledger_health"] == {
+        "status": "ready",
+        "reason": None,
+        "entry_count": 4,
+        "path": "/var/lib/steamos-intel-handheld/game-power-verdicts.json",
+    }
+
+    lanes = result["gated_lanes"]
+    assert lanes["foreground_uclamp_min"] == {"state": "active", "reason_codes": []}
+    assert lanes["background_shaping"] == {
+        "state": "blocked",
+        "reason_codes": ["no-verdict-for-context"],
+        "variants": ["cpu-weight-80"],
+    }
+    assert lanes["ladder_deep_step"] == {
+        "state": "blocked",
+        "reason_codes": ["no-verdict-for-context"],
+    }
+
+
+def test_game_power_backend_public_snapshot_degrades_without_v9_fields(monkeypatch):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+
+    result = backend._public_runtime_snapshot(runtime_snapshot_row())
+
+    assert result["phase"] is None
+    assert result["phase_reason_codes"] == []
+    assert result["ladder_step"] is None
+    assert result["color_ledger"] is None
+    assert result["verdict_ledger_health"] is None
+    assert result["gated_lanes"] is None
+
+
+def test_game_power_backend_public_snapshot_hides_v9_fields_when_stale(monkeypatch):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 120.1)
+
+    result = backend._public_runtime_snapshot(
+        runtime_snapshot_row(**target_balance_v9_fields())
+    )
+
+    assert result["stale"] is True
+    assert result["phase"] is None
+    assert result["phase_reason_codes"] == []
+    assert result["ladder_step"] is None
+    assert result["color_ledger"] is None
+    assert result["verdict_ledger_health"] is None
+    assert result["gated_lanes"] is None
+
+
+def test_game_power_backend_public_snapshot_sanitizes_malformed_v9_fields(monkeypatch):
+    backend = load_game_power_backend()
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+
+    result = backend._public_runtime_snapshot(
+        runtime_snapshot_row(
+            phase=123,
+            phase_reason_codes="not-a-list",
+            ladder_step=True,
+            color_ledger={"truncated": 0, "entries": [None, {"color": 5}, "junk"]},
+            verdict_ledger_health={"reason": "x"},
+            gated_lanes={
+                "foreground_uclamp_min": {"reason_codes": ["only-codes"]},
+                "background_shaping": "not-a-dict",
+                "ladder_deep_step": {"state": "blocked", "reason_codes": [1, "ok"]},
+            },
+        )
+    )
+
+    assert result["phase"] is None
+    assert result["phase_reason_codes"] == []
+    assert result["ladder_step"] is None
+    assert result["color_ledger"] == {"truncated": False, "colors": []}
+    assert result["verdict_ledger_health"] is None
+    assert result["gated_lanes"] == {
+        "ladder_deep_step": {"state": "blocked", "reason_codes": ["ok"]},
+    }
+
+
+def test_game_power_backend_status_surfaces_v9_fields_from_snapshot(monkeypatch, tmp_path):
+    backend = load_game_power_backend()
+    snapshot_path = tmp_path / "game-power-runtime.json"
+    snapshot_path.write_text(
+        json.dumps(runtime_snapshot_row(**target_balance_v9_fields())) + "\n"
+    )
+    monkeypatch.setattr(backend, "RUNTIME_SNAPSHOT", str(snapshot_path))
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 101.0)
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        if cmd[0] == "systemctl":
+            return FakeCommandProcess(stdout=b"ActiveState=active\nSubState=running\n")
+        return FakeCommandProcess(stdout=b'{"mode": "default", "override_active": false}')
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = asyncio.run(backend.Plugin().get_status())
+
+    assert result["runtime"]["phase"] == "at-target"
+    assert result["runtime"]["ladder_step"] == 3
+    assert result["runtime"]["color_ledger"]["colors"][0]["color"] == "A"
+    assert result["runtime"]["gated_lanes"]["foreground_uclamp_min"]["state"] == "active"

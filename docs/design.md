@@ -110,6 +110,100 @@ policy recommendation. Controlled capture plus exact restore is required before
 the profiler can classify a policy as better, rejected, or inconclusive for a
 specific TDP and game scene.
 
+### Target-balance mode (V9)
+
+The V9 `target-balance` policy makes the FPS target the control contract instead
+of maximizing raw frames. Full design lives in
+`docs/game-power-v9-ultimate-design.md`. What ships in the daemon and the Decky
+panel: a phase state machine, a convergence trim ladder that returns surplus CPU
+turbo to package/iGPU headroom once the target is sustained, a thread color
+ledger that maps roles to a least-invasive actuator, and verdict-gated write
+lanes (foreground `cpu.uclamp.min` floor and background cgroup shaping). All of
+these are additive to the existing telemetry; the public modes (`automatic`,
+`observe`, `off`) and the manual FPS target contract are unchanged, and the
+`gpu-priority` decision path is byte-identical.
+
+Fail-closed is the default posture. The daemon loads the verdict ledger
+(`/var/lib/steamos-intel-handheld/game-power-verdicts.json`, `/run` fallback)
+read-only; a missing or corrupt ledger disables every gated lane and each lane
+reports a machine-readable why-not reason code. A lane unlocks only on an exact
+context match (AppID, FPS target, topology fingerprint, policy version, TDP
+bucket) against a `BETTER` verdict exported from controlled profiler evidence.
+The installed service default stays `gpu-priority` until controlled device
+evidence accepts `target-balance`; the GPU min-frequency floor, `scx-lavd`, and
+compact foreground affinity stay profiler-only lanes with no daemon integration.
+P-core classification tolerates within-class capacity spread (a policy is PCORE
+at >= 85% of the max capacity, so Lunar Lake's 1005-capacity cpu0/1 classify
+with the 1024-capacity cpu2/3); the V6 measured cpu-cap evidence predates this
+classification fix (policy0/1 previously took the E-core cap on this device),
+so `gpu-priority-cpu-cap` A/B claims should be re-validated before new claims.
+
+The Decky backend consumes only the safe control CLI and the daemon runtime
+snapshot. It exposes the additive V9 fields (phase, ladder step, a compact
+per-color actuator summary, verdict-ledger health, and gated-lane states with
+reason codes) as read-only diagnostics that degrade to `None`/absent for the
+`gpu-priority` default, stale snapshots, or `off`/`observe`. The panel frontend
+(`decky/steamos-intel-handheld-game-power/src/index.tsx`) renders these in the
+runtime telemetry section and is rebuilt into `dist/index.js`.
+
+### Demand-shaped power (V10 framework)
+
+The V10 framework (`docs/game-power-v10-direction.md`,
+`docs/game-power-v10-framework-plan.md`) adds the demand-shaping actuators V9
+never touched: a GPU frequency-envelope cap module, a soft-PL1 overlay under the
+TDP backend, a fast boost lane driven by a live mangoapp frame feed, personas
+(`battery`/`ac-quiet`/`ac-performance`), and a consent-gated frame limiter. The
+framework ships with probe-sized defaults for the GPU cap and soft-PL1 rungs
+(every tunable is a config field, not a literal): the 17 W / 60 fps device
+probes measured a GPU-cap pacing plateau down to rp0x0.69 (~1350 MHz) and a
+soft-PL1 knee at slider-2 W, so the battery G-rungs are -12%/-22%/-30% (the
+-45% depth is the verdict-gated `G4CAP` rung, unlocked by a `gpu-cap` BETTER
+verdict) and the P1 rung anchors at least 1 W below the user slider
+(`soft_pl1_p1_slider_margin_w`) so a PL1-pinned scene cannot clamp it into a
+no-op. Remaining constants stay provisional and are tuned via probes P1-P5. All new actuators are reduction-only under user intent and the
+installed service default stays `gpu-priority`; `gpu-priority` decisions remain
+byte-identical because the telemetry v3 fields are emitted only on the
+target-balance path.
+
+A G-rung cap is a *ratio* of `rp0`, applied PER GT from each GT's own `rp0`
+(the render GT tops out at 1950 MHz, the media GT at 1200 MHz — they do not
+share bounds), so a `-12%` rung trims the render GT to 1716 MHz and the media
+GT to 1056 MHz rather than collapsing both to the smaller GT's cap. Telemetry
+`gpu_freq_caps` reports the render-GT values in its flat `min_mhz`/`max_mhz`
+keys plus a `per_gt` breakdown of the values actually written to each GT.
+
+The framework's device-facing surfaces owned by this slice:
+
+- The `gamescope-mangoapp` drop-in
+  (`data/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf`)
+  sets `MANGOAPP_FRAME_FEED=1` so the patched mangoapp exports the FrameFeed
+  contract (`$XDG_RUNTIME_DIR/steamos-intel-handheld/frame-feed.json`, ~2 Hz,
+  atomic). The drop-in stays owned by the `10-mangoapp.toml` restore fragment,
+  not the main manifest.
+- The Decky backend adds `set_persona`/`clear_persona` (validated against the
+  supported personas, fail-closed before spawning) and `limiter_status` /
+  `set_limiter` / `clear_limiter`. The limiter helper must run in the gamescope
+  session bus, so the root Decky backend hops to the session user with
+  `runuser -u deck -- env XDG_RUNTIME_DIR=... DBUS_SESSION_BUS_ADDRESS=...`, the
+  same shape the on-device scripts and display-workaround service use; the
+  daemon itself never calls it. The limiter is device-unverified and reports
+  `unsupported`/`unknown` honestly.
+- The runtime snapshot gains the additive v3 fields (`persona`, `soft_pl1_w`,
+  `gpu_freq_caps`, `boost_active`, `boost_reason`, `trim_rungs_active`,
+  `frame_feed_status`, `limiter_state`), gated exactly like the V9 fields: they
+  blank out when the snapshot is stale/invalid or the mode is the `gpu-priority`
+  default / `off` / `observe`. The frontend renders a persona selector
+  (intent-framed labels, no raw knob vocabulary), a consent frame-limit helper,
+  a live package-vs-soft-budget row with a boost indicator, and a frame-feed
+  status chip, degrading gracefully when the fields are absent.
+
+The V10 probe capture modes (`PROFILE_GAME_POWER_PROBE=pin-baseline` /
+`gpu-cap-sweep` / `soft-pl1-sweep`) and candidate policies (`v10-battery`,
+`v10-gpu-cap`, `v10-soft-pl1`) reuse the existing `game-power-profile-device`
+harness check, which already runs `scripts/profile-game-power-on-device.sh`
+(the probe modes are env-selected inputs to that same command), so no new
+guarded check is added.
+
 ## Boundaries
 
 - Hardware access is isolated in `TdpBackend`.
