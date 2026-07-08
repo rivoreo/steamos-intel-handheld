@@ -82,14 +82,17 @@ without making hardware, QEMU, release, or network work run automatically.
 ## Hook Reminders
 
 `.codex/hooks.json` wires `scripts/harness-hook.py` into `SessionStart`,
-`PreToolUse`, `Stop`, and `SubagentStop`. The hook is read-only and does not run checks:
-it does not change repository state, calls
-`scripts/harness.py status --json`, and reports pending verification.
+`UserPromptSubmit`, `PreToolUse`, `Stop`, and `SubagentStop`. The hook is
+read-only and does not run checks: it does not change repository state, calls
+`scripts/harness.py status --json`, reports pending verification, and injects
+advisory context for matched repo-local skills.
 
 On `PreToolUse`, `git commit` is denied while verification is pending and the
 response names the trusted suite to run. On `Stop` and `SubagentStop`, pending
-local verification blocks once per unchanged pending state. The hook writes only
-dedupe state under the OS temp directory.
+local verification blocks once per unchanged pending state. On
+`UserPromptSubmit`, prompt/requirements tasks can load
+`.codex/skills/model-tier-prompting/SKILL.md` or `.codex/skills/refine/SKILL.md`
+as needed. The hook writes only dedupe state under the OS temp directory.
 
 ## Local loop
 

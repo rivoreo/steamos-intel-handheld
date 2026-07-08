@@ -293,12 +293,96 @@ def test_harness_hook_pretooluse_allows_git_non_commit_subcommands(tmp_path):
         assert result.stdout == ""
 
 
+def test_harness_hook_user_prompt_submit_injects_model_tier_prompting_skill(tmp_path):
+    fixture = tmp_path / "repo"
+    write_hook_fixture(fixture)
+
+    result = run_hook(
+        fixture,
+        tmp_path / "state",
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "prompt-model-tier",
+            "prompt": (
+                "[$model-tier-prompting](.codex/skills/model-tier-prompting/SKILL.md) "
+                "幫我改寫子代理 prompt"
+            ),
+        },
+    )
+
+    assert result.returncode == 0
+    response = json.loads(result.stdout)
+    context = response["hookSpecificOutput"]["additionalContext"]
+    assert "model-tier-prompting" in context
+    assert ".codex/skills/model-tier-prompting/SKILL.md" in context
+    assert ".codex/skills/refine/SKILL.md" not in context
+
+
+def test_harness_hook_user_prompt_submit_injects_refine_skill(tmp_path):
+    fixture = tmp_path / "repo"
+    write_hook_fixture(fixture)
+
+    result = run_hook(
+        fixture,
+        tmp_path / "state",
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "prompt-refine",
+            "prompt": "幫我把這個模糊需求展開成可施工的任務書",
+        },
+    )
+
+    assert result.returncode == 0
+    response = json.loads(result.stdout)
+    context = response["hookSpecificOutput"]["additionalContext"]
+    assert "refine" in context
+    assert ".codex/skills/refine/SKILL.md" in context
+
+
+def test_harness_hook_dedupes_skill_injection_per_session(tmp_path):
+    fixture = tmp_path / "repo"
+    write_hook_fixture(fixture)
+    state_dir = tmp_path / "state"
+
+    first = run_hook(
+        fixture,
+        state_dir,
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "prompt-dedupe",
+            "prompt": "幫我改寫一個派給子代理的 prompt",
+        },
+    )
+    second = run_hook(
+        fixture,
+        state_dir,
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "prompt-dedupe",
+            "prompt": "再看一下這個 prompt 給便宜模型會不會太開放",
+        },
+    )
+
+    assert first.returncode == 0
+    assert "model-tier-prompting" in json.loads(first.stdout)["hookSpecificOutput"][
+        "additionalContext"
+    ]
+    assert second.returncode == 0
+    assert second.stdout == ""
+
+
 def test_codex_hooks_config_wires_safe_harness_events():
     hooks = json.loads((ROOT / ".codex/hooks.json").read_text())
 
     wired_events = hooks["hooks"]
-    assert set(wired_events) == {"SessionStart", "PreToolUse", "Stop", "SubagentStop"}
-    for event in ("SessionStart", "PreToolUse", "Stop", "SubagentStop"):
+    assert set(wired_events) == {
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "Stop",
+        "SubagentStop",
+    }
+    for event in ("SessionStart", "UserPromptSubmit", "PreToolUse", "Stop", "SubagentStop"):
         command = wired_events[event][0]["hooks"][0]["command"]
         assert command == "scripts/harness-hook.py --platform codex"
         assert "sweep" not in command

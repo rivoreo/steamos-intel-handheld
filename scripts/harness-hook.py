@@ -16,6 +16,40 @@ from typing import Any, Optional
 ROOT = Path(__file__).resolve().parents[1]
 STATE_VERSION = 1
 
+SKILL_CATALOG = [
+    {
+        "name": "model-tier-prompting",
+        "path": ".codex/skills/model-tier-prompting/SKILL.md",
+        "summary": (
+            "Tier-aware prompt design/rewrite for subagent prompts, cross-model "
+            "migration, and prompt behavior diagnosis."
+        ),
+        "patterns": [
+            r"model-tier-prompting",
+            r"prompt(?:ing)?|提示詞|提示词",
+            r"子代理|sub-?agent|派工|委派",
+            r"frontier|workhorse|haiku|mini|flash",
+            r"reasoning[_ -]?effort|verbosity|effort",
+            r"模型.*(分層|分层|層級|层级|遷移|迁移|改寫|改写)",
+            r"不聽話|不听话|太囉嗦|太啰嗦|虛報|虚报|過度工程|过度工程|召回率|refusal",
+        ],
+    },
+    {
+        "name": "refine",
+        "path": ".codex/skills/refine/SKILL.md",
+        "summary": (
+            "Expand rough ideas into a confirmable task brief with intent, "
+            "acceptance criteria, boundaries, and execution advice."
+        ),
+        "patterns": [
+            r"(?:^|\s)/refine(?:\s|$)",
+            r"\brefine\b",
+            r"展開成|展开成|寫清楚|写清楚|任務書|任务书|需求.*(展開|展开|整理|寫清楚|写清楚)",
+            r"粗略想法|模糊需求|可開工|可施工|驗收標準|验收标准|本次不做|開放問題|开放问题",
+        ],
+    },
+]
+
 
 def read_stdin_json() -> dict[str, Any]:
     if sys.stdin.isatty():
@@ -56,6 +90,7 @@ def load_state(path: Optional[Path]) -> dict[str, Any]:  # noqa: UP045
             "version": STATE_VERSION,
             "session_notice_keys": {},
             "stop_block_keys": {},
+            "skill_notice_keys": {},
         }
     try:
         state = json.loads(path.read_text())
@@ -66,9 +101,11 @@ def load_state(path: Optional[Path]) -> dict[str, Any]:  # noqa: UP045
             "version": STATE_VERSION,
             "session_notice_keys": {},
             "stop_block_keys": {},
+            "skill_notice_keys": {},
         }
     state.setdefault("session_notice_keys", {})
     state.setdefault("stop_block_keys", {})
+    state.setdefault("skill_notice_keys", {})
     return state
 
 
@@ -156,6 +193,77 @@ def command_from_tool_input(tool_input: Any) -> str:
         if isinstance(value, str):
             return value
     return ""
+
+
+def hook_text(payload: dict[str, Any]) -> str:
+    tool_input = hook_tool_input(payload)
+    parts: list[str] = []
+    for key in ("prompt", "user_prompt", "userPrompt", "message", "text"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    if isinstance(tool_input, str):
+        parts.append(tool_input)
+    elif isinstance(tool_input, dict):
+        for key in ("cmd", "command", "shell_command", "shellCommand", "file_path", "path"):
+            value = tool_input.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+        edits = tool_input.get("edits")
+        if isinstance(edits, list):
+            for edit in edits:
+                if isinstance(edit, dict):
+                    for key in ("file_path", "old_string", "new_string"):
+                        value = edit.get(key)
+                        if isinstance(value, str):
+                            parts.append(value)
+    return "\n".join(parts)
+
+
+def skill_response(
+    event: str,
+    payload: dict[str, Any],
+    state: dict[str, Any],
+) -> Optional[dict[str, Any]]:  # noqa: UP045
+    if not re.fullmatch(r"(UserPromptSubmit|PreToolUse)", event, flags=re.IGNORECASE):
+        return None
+
+    text = hook_text(payload)
+    matched: list[dict[str, Any]] = []
+    skill_notice_keys = state.setdefault("skill_notice_keys", {})
+    for skill in SKILL_CATALOG:
+        if skill_notice_keys.get(skill["name"]):
+            continue
+        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in skill["patterns"]):
+            matched.append(skill)
+
+    if not matched:
+        return None
+
+    for skill in matched:
+        skill_notice_keys[skill["name"]] = True
+
+    lines = [
+        f"SteamOS Skill Hook matched {event}.",
+        (
+            "Before responding, reading more files, or editing, load and follow "
+            "these SKILL.md files if they are not already active:"
+        ),
+        *[
+            f"- {skill['name']}: {skill['path']} ({skill['summary']})"
+            for skill in matched
+        ],
+        (
+            "Usage rule: If there is even a 1% chance a matched skill applies, "
+            "read it first and explicitly follow it."
+        ),
+    ]
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": event,
+            "additionalContext": "\n".join(lines),
+        }
+    }
 
 
 def is_git_commit_command(command: str) -> bool:
@@ -304,6 +412,8 @@ def main(argv: Optional[list[str]] = None) -> int:  # noqa: UP045
     status, error = run_status(args.root.resolve())
     key = pending_key(status, error)
     response = build_response(event, payload, status, state, key, error)
+    if response is None:
+        response = skill_response(event, payload, state)
     save_state(state_path, state)
     if response:
         print(json.dumps(response, sort_keys=True))

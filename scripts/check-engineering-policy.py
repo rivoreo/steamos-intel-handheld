@@ -38,7 +38,13 @@ ALLOWED_TIERS = ("required", "guarded")
 ALLOWED_EXPECTATIONS = ("pass", "blocked", "known-fail")
 KNOWN_FAIL_FIELDS = ("failure_signature", "quarantine_reason", "quarantine_expires")
 CONTROL_PLANE_FIELDS = ("trusted_suite", "iteration_hint", "report_path")
-SAFE_CODEX_HOOK_EVENTS = ("SessionStart", "PreToolUse", "Stop", "SubagentStop")
+SAFE_CODEX_HOOK_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "Stop",
+    "SubagentStop",
+)
 SAFE_CODEX_HOOK_COMMAND = "scripts/harness-hook.py --platform codex"
 
 

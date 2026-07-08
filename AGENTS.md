@@ -41,6 +41,15 @@
 - For focused TDD, run the smallest relevant `.venv/bin/python -m pytest ...`
   command first, then the required sweep. Do not stop after the focused test.
 
+## Repo Skills
+
+Local Codex skills live in `.codex/skills/`:
+
+- `model-tier-prompting` for writing or rewriting prompts across model tiers,
+  including subagent prompts and cross-model migration.
+- `refine` for expanding rough ideas into a confirmable task brief before
+  implementation.
+
 ## Heavy Checks
 
 - Do not run device, QEMU, release, or network-heavy checks unless the user

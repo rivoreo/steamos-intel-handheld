@@ -1,0 +1,23 @@
+{
+  "skill_name": "model-tier-prompting",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我要派一個子代理去把 docs/ 目錄下 40 個 markdown 檔的 frontmatter 統一成新 schema（加 updated 欄位、把 tags 從逗號字串改成陣列）。為了省錢我想用最便宜的模型跑。幫我把派工 prompt 寫好。",
+      "expected_output": "產出的派工 prompt 應為經濟層過程式風格：含編號步驟、輸入→輸出範例（frontmatter before/after）、前置分支判斷（缺 frontmatter / tags 已是陣列怎麼辦）、明確停止條件、輸出契約（處理數/跳過清單/驗證輸出）。不應是三句話意圖式派工。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "這是我們兩年前為舊模型寫的 code review system prompt（附下），現在要遷到新一代旗艦模型。裡面有 'think step by step and show your reasoning first'、'only report high-severity issues, be conservative'、'after every 3 files summarize your progress'。幫我改。",
+      "expected_output": "應識別並移除三個反模式：推理復述（refusal 風險）、召回率殺手（改成覆蓋率+下游過濾或操作性標準）、強制進度節拍（直接刪）。應補充意圖/邊界類內容，並建議用真實案例或 eval 驗證改動（召回率/精確率），不憑感覺。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "我們產品同一個摘要功能會在設定裡讓用戶選模型：頂級旗艦、主力檔、還有一個開源便宜模型。現在三個模型共用同一段 system prompt，便宜模型輸出格式常跑飛，旗艦又囉嗦。怎麼辦？",
+      "expected_output": "應指出「一份提示服務所有模型」反模式，建議骨架共用+厚度分層：經濟層加格式契約與範例（必要時結構化輸出），frontier 層刪腳手架加簡潔的正面範例；並建議每層配回歸驗證。不應只給一份「折衷」的單一 prompt。",
+      "files": []
+    }
+  ]
+}

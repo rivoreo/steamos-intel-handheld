@@ -169,6 +169,7 @@ evidence_artifacts = ["fixture-output"]
 
     assert result.returncode == 1
     assert ".codex/hooks.json is missing SessionStart harness hook" in result.stderr
+    assert ".codex/hooks.json is missing UserPromptSubmit harness hook" in result.stderr
     assert ".codex/hooks.json is missing PreToolUse harness hook" in result.stderr
     assert ".codex/hooks.json is missing SubagentStop harness hook" in result.stderr
 
