@@ -27,6 +27,7 @@ cooldown_rule="${PROFILE_GAME_POWER_COOLDOWN_RULE:-fixed-60s}"
 frame_performance_window_samples="${PROFILE_GAME_POWER_FRAME_PERFORMANCE_WINDOW_SAMPLES:-20}"
 frame_performance_min_samples="${PROFILE_GAME_POWER_FRAME_PERFORMANCE_MIN_SAMPLES:-12}"
 frame_performance_live_timeout_s="${PROFILE_GAME_POWER_FRAME_PERFORMANCE_LIVE_TIMEOUT_S:-15}"
+frame_feed_file="${PROFILE_GAME_POWER_FRAME_FEED_FILE:-/run/user/1000/steamos-intel-handheld/frame-feed.json}"
 target_satisfied_tdps="${PROFILE_GAME_POWER_TARGET_SATISFIED_TDPS:-22}"
 affinity_plan_json="${PROFILE_GAME_POWER_AFFINITY_PLAN_JSON:-}"
 gpu_floor_mhz="${PROFILE_GAME_POWER_GPU_FLOOR_MHZ:-1600}"
@@ -64,6 +65,7 @@ COOLDOWN_RULE='$cooldown_rule' \
 FRAME_PERFORMANCE_WINDOW_SAMPLES='$frame_performance_window_samples' \
 FRAME_PERFORMANCE_MIN_SAMPLES='$frame_performance_min_samples' \
 FRAME_PERFORMANCE_LIVE_TIMEOUT_S='$frame_performance_live_timeout_s' \
+FRAME_FEED_FILE='$frame_feed_file' \
 TARGET_SATISFIED_TDPS='$target_satisfied_tdps' \
 AFFINITY_PLAN_JSON='$remote_affinity_plan_json' \
 GPU_FLOOR_MHZ='$gpu_floor_mhz' \
@@ -319,7 +321,7 @@ set_service_game_power_mode() {
   cat >/run/systemd/system/steamos-intel-handheld-power-control.service.d/50-game-power-profile.conf <<EOF
 [Service]
 ExecStart=
-ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control wait-and-serve --user deck --bus system --apply-rapl --apply-msi-claw-ec --ec-write-debounce-ms 750 --tdp-policy auto --msi-claw-ec-shift-policy tdp-threshold --prepare-mangohud-sensors --game-power-mode $mode --game-power-control-file $PROFILE_CONTROL_FILE --game-power-hint-cache /var/lib/steamos-intel-handheld/game-power-hints.json --min-w 8 --max-w 30 --short-limit-max-w 37 --state-file /var/lib/steamos-intel-handheld/tdp_w
+ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control wait-and-serve --user deck --bus system --apply-rapl --apply-msi-claw-ec --ec-write-debounce-ms 750 --tdp-policy auto --msi-claw-ec-shift-policy tdp-threshold --prepare-mangohud-sensors --game-power-mode $mode --game-power-control-file $PROFILE_CONTROL_FILE --game-power-frame-feed-file $FRAME_FEED_FILE --game-power-hint-cache /var/lib/steamos-intel-handheld/game-power-hints.json --min-w 8 --max-w 30 --short-limit-max-w 37 --state-file /var/lib/steamos-intel-handheld/tdp_w
 EOF
   systemctl daemon-reload
   systemctl restart steamos-intel-handheld-power-control.service
@@ -376,6 +378,8 @@ setup_mangohud_controlled_capture() {
     cat >"$dropin_dir/50-game-power-profile.conf" <<EOF
 [Service]
 WorkingDirectory=/home/deck
+Environment=MANGOAPP_FRAME_FEED=1
+Environment=MANGOAPP_FRAME_FEED_FILE=$FRAME_FEED_FILE
 Environment=MANGOHUD_CONFIG=output_folder=$MANGOHUD_OUTPUT_DIR,log_interval=100,fps_metrics=avg+0.01+0.001,benchmark_percentiles=97+AVG
 EOF
     chown deck:deck "$dropin_dir/50-game-power-profile.conf"
@@ -2393,6 +2397,7 @@ for repeat in $(seq 1 "$REPEATS"); do
           --duration-s "$DURATION_S" \
           --poll-s "$POLL_S" \
           --target-appid "$APPID" \
+          --frame-feed-file "$FRAME_FEED_FILE" \
           --output-format jsonl \
           "${fps_target_runtime_args[@]}" \
           "${frame_performance_runtime_args[@]}" \

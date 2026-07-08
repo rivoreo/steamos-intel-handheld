@@ -5413,12 +5413,13 @@ def _parse_runtime_classification(
 
 
 def _row_has_frame_performance(row: dict[str, object]) -> bool:
+    source = _optional_str(row.get("frame_performance_source"))
     return (
         _finite_positive_float(row.get("frame_avg_fps")) is not None
         and _finite_positive_float(row.get("frame_p95_ms")) is not None
         and _optional_int(row.get("frame_performance_sample_count")) is not None
         and _optional_str(row.get("frame_performance_confidence")) == "high"
-        and _optional_str(row.get("frame_performance_source")) == "mangohud-csv"
+        and source in {"mangohud-csv", "mangoapp-feed"}
     )
 
 

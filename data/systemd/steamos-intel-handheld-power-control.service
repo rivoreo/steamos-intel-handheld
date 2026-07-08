@@ -6,7 +6,7 @@ After=steamos-intel-handheld-restore.service dbus.service systemd-user-sessions.
 [Service]
 Type=simple
 StateDirectory=steamos-intel-handheld
-ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control wait-and-serve --user deck --bus system --apply-rapl --apply-msi-claw-ec --ec-write-debounce-ms 750 --tdp-policy auto --msi-claw-ec-shift-policy tdp-threshold --prepare-mangohud-sensors --game-power-mode gpu-priority --game-power-cpu-cap off --game-power-pcore-max-mhz 3000 --game-power-ecore-max-mhz 2400 --game-power-cpu-cap-core-share-threshold 0.30 --game-power-control-file /run/steamos-intel-handheld/game-power-control.json --game-power-hint-cache /var/lib/steamos-intel-handheld/game-power-hints.json --min-w 8 --max-w 30 --short-limit-max-w 37 --state-file /var/lib/steamos-intel-handheld/tdp_w
+ExecStart=/opt/steamos-intel-handheld/bin/steamos-intel-handheld-power-control wait-and-serve --user deck --bus system --apply-rapl --apply-msi-claw-ec --ec-write-debounce-ms 750 --tdp-policy auto --msi-claw-ec-shift-policy tdp-threshold --prepare-mangohud-sensors --game-power-mode gpu-priority --game-power-cpu-cap off --game-power-pcore-max-mhz 3000 --game-power-ecore-max-mhz 2400 --game-power-cpu-cap-core-share-threshold 0.30 --game-power-control-file /run/steamos-intel-handheld/game-power-control.json --game-power-frame-feed-file /run/user/1000/steamos-intel-handheld/frame-feed.json --game-power-hint-cache /var/lib/steamos-intel-handheld/game-power-hints.json --min-w 8 --max-w 30 --short-limit-max-w 37 --state-file /var/lib/steamos-intel-handheld/tdp_w
 Restart=on-failure
 RestartSec=3
 

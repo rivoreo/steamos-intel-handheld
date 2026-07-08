@@ -249,6 +249,18 @@ def test_gpu_cap_default_ratios_match_probe_plateau():
     assert config.soft_pl1_p3_step_w == 2.0
 
 
+def test_limiter_like_target_can_trim_without_uncapped_headroom():
+    # A 60fps limiter often reports just below 60 even when pacing is healthy;
+    # the ladder should use the p95 guard, not require impossible 63fps headroom.
+    controller = GamePowerController(tb_config())
+
+    decision = controller.evaluate(at_target(avg_fps=59.0, p95=18.0, fps=60.0))
+
+    assert controller.ladder_step == 1
+    assert decision.action == GamePowerAction.TARGET_BALANCE_TRIM
+    assert decision.trim_rungs_active == ["G1"]
+
+
 def test_gpu_cap_never_exceeds_rp0_and_matches_ratio(tmp_path):
     # Climb one rung (G1) -> GPU max_freq = int(rp0 * (1 - 0.12)) = 1716, <= rp0.
     governor, actuator, sysfs = _governor_with_gpu(

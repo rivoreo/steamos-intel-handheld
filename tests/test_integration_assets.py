@@ -51,6 +51,11 @@ def test_power_control_service_enables_game_power_governor_by_default():
     assert "--game-power-ecore-max-mhz 2400" in unit
     assert "--game-power-cpu-cap-core-share-threshold 0.30" in unit
     assert "--game-power-control-file /run/steamos-intel-handheld/game-power-control.json" in unit
+    assert (
+        "--game-power-frame-feed-file "
+        "/run/user/1000/steamos-intel-handheld/frame-feed.json"
+        in unit
+    )
 
 
 def test_restore_service_unit_runs_restore_cli_before_power_control():
@@ -477,6 +482,7 @@ def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
     assert 'set_provider_tdp "$current"' in script
     assert 'trap restore_state EXIT' in script
     assert "--game-power-mode $mode" in script
+    assert "--game-power-frame-feed-file $FRAME_FEED_FILE" in script
     assert "set_service_game_power_mode off" in script
     assert (
         "--game-power-hint-cache /var/lib/steamos-intel-handheld/game-power-hints.json"
@@ -511,6 +517,20 @@ def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
     assert "capture_mode" in script
     assert ".cache/game-power/profiles" in script
     assert '"$target:$remote_root/."' in script
+
+
+def test_game_power_profile_wrapper_wires_frame_feed_path():
+    script = (ROOT / "scripts/profile-game-power-on-device.sh").read_text()
+
+    assert (
+        'frame_feed_file="${PROFILE_GAME_POWER_FRAME_FEED_FILE:-'
+        '/run/user/1000/steamos-intel-handheld/frame-feed.json}"'
+        in script
+    )
+    assert "FRAME_FEED_FILE='$frame_feed_file'" in script
+    assert "Environment=MANGOAPP_FRAME_FEED=1" in script
+    assert "Environment=MANGOAPP_FRAME_FEED_FILE=$FRAME_FEED_FILE" in script
+    assert '--frame-feed-file "$FRAME_FEED_FILE"' in script
 
 
 def test_game_power_profile_wrapper_supports_controlled_mangohud_capture():

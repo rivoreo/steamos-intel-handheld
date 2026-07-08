@@ -906,7 +906,9 @@ class GamePowerConfig:
     hinted_activate_samples: int = 1
     session_hint_contradiction_samples: int = 2
     frame_target: FrameTargetTelemetry | None = None
-    fps_target_satisfied_headroom_ratio: float = 1.05
+    # Limiter-aware: capped games can report slightly below the target while
+    # pacing is still healthy, so p95 carries the quality guard.
+    fps_target_satisfied_headroom_ratio: float = 0.98
     fps_target_satisfied_p95_ratio: float = 1.15
     frame_performance_min_samples: int = 12
     runtime_control_health: dict[str, object] | None = None

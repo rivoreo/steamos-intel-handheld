@@ -4751,6 +4751,36 @@ def test_validate_runtime_telemetry_can_require_frame_performance_and_target_sat
     assert verdict["fps_target_satisfied_samples"] == 1
 
 
+def test_validate_runtime_telemetry_accepts_mangoapp_feed_frame_performance(
+    tmp_path,
+):
+    path = tmp_path / "game-power.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "appid": "1091500",
+                "action": "observe-only",
+                "fps_target": 40.0,
+                "frame_avg_fps": 56.0,
+                "frame_p95_ms": 22.0,
+                "frame_performance_sample_count": 20,
+                "frame_performance_source": "mangoapp-feed",
+                "frame_performance_confidence": "high",
+                "classification": {"primary": "fps-target-satisfied", "advisories": []},
+            }
+        )
+        + "\n"
+    )
+
+    verdict = validate_runtime_telemetry(
+        game_power_jsonl=path,
+        require_frame_performance=True,
+    )
+
+    assert verdict["status"] == "pass"
+    assert verdict["frame_performance_samples"] == 1
+
+
 def test_validate_runtime_telemetry_fails_when_v5_contract_is_missing(tmp_path):
     path = tmp_path / "game-power.jsonl"
     path.write_text(
@@ -4809,7 +4839,7 @@ def test_validate_runtime_telemetry_requires_high_confidence_frame_performance(
         raise AssertionError("expected low-confidence frame telemetry to fail")
 
 
-def test_validate_runtime_telemetry_requires_mangohud_frame_performance_source(
+def test_validate_runtime_telemetry_requires_known_frame_performance_source(
     tmp_path,
 ):
     path = tmp_path / "game-power.jsonl"
