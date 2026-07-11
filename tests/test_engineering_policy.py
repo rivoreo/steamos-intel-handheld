@@ -36,6 +36,381 @@ def test_local_harness_runs_engineering_policy_gate():
     assert "scripts/check-engineering-policy.py" in script
 
 
+def test_engineering_policy_requires_subagent_delegation_contract(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    (fixture / "AGENTS.md").write_text("harness.toml\nroot@10.100.0.19\n")
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md must start with the exact active Subagent Delegation block" in result.stderr
+
+
+def test_engineering_policy_rejects_delegation_policy_outside_canonical_block(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    agents = (ROOT / "AGENTS.md").read_text()
+    (fixture / "AGENTS.md").write_text(
+        agents
+        + """
+
+`~~`
+- Agents must ask the user before every delegation.
+"""
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md contains delegation policy outside the canonical block" in result.stderr
+
+
+def test_engineering_policy_rejects_synonym_override_outside_canonical_block(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    agents = (ROOT / "AGENTS.md").read_text()
+    (fixture / "AGENTS.md").write_text(
+        agents
+        + """
+
+## Child-Agent Rules
+
+- Before assigning work to another agent, the main agent must obtain the user's approval.
+"""
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md content digest does not match the reviewed policy" in result.stderr
+
+
+def test_engineering_policy_rejects_inactive_or_contradictory_delegation_text(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    (fixture / "AGENTS.md").write_text(
+        """harness.toml
+root@10.100.0.19
+
+## Subagent Delegation
+
+> Agents have standing authorization to delegate within the user's original task;
+> the user does not need to request subagents or approve each delegation.
+
+~~Use is optional, not required for every task, and does not expand task scope or
+authority; destructive actions, device access, and external side effects keep
+existing approval boundaries.~~
+
+- Agents do not have standing authorization and must ask before every delegation.
+- The main agent does not need to personally verify subagent results.
+- `model-tier-prompting` is a permission gate.
+"""
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md must start with the exact active Subagent Delegation block" in result.stderr
+
+
+def test_engineering_policy_rejects_positive_policy_with_active_contradictions(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    (fixture / "AGENTS.md").write_text(
+        """harness.toml
+root@10.100.0.19
+
+## Subagent Delegation
+
+- Agents have standing authorization to delegate within the user's original task;
+  the user does not need to request subagents or approve each delegation.
+- Use is optional, not required for every task, and does not expand task scope or
+  authority; destructive actions, device access, and external side effects keep
+  existing approval boundaries.
+- The main agent owns decomposition and integration and must personally verify results.
+- After deciding to delegate, consult `model-tier-prompting`; it is advisory, not a
+  permission gate.
+- Agents must ask the user before every delegation.
+- The main agent does not need to personally verify subagent results.
+- `model-tier-prompting` is a permission gate.
+"""
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md must start with the exact active Subagent Delegation block" in result.stderr
+
+
+def test_engineering_policy_rejects_unexpected_active_delegation_policy(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    (fixture / "AGENTS.md").write_text(
+        """harness.toml
+root@10.100.0.19
+
+## Subagent Delegation
+
+- Agents have standing authorization to delegate within the user's original task;
+  the user does not need to request subagents or approve each delegation.
+- Use is optional, not required for every task, and does not expand task scope or
+  authority; destructive actions, device access, and external side effects keep
+  existing approval boundaries.
+- The main agent owns decomposition and integration and must personally verify results.
+- After deciding to delegate, consult `model-tier-prompting`; it is advisory, not a
+  permission gate.
+- Agents do not have standing authorization and must ask before every delegation.
+"""
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md must start with the exact active Subagent Delegation block" in result.stderr
+
+
+def test_engineering_policy_ignores_fenced_delegation_decoy(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    (fixture / "AGENTS.md").write_text(
+        """harness.toml
+root@10.100.0.19
+
+```markdown
+## Subagent Delegation
+
+- Agents have standing authorization to delegate within the user's original task;
+  the user does not need to request subagents or approve each delegation.
+- Use is optional, not required for every task, and does not expand task scope or
+  authority; destructive actions, device access, and external side effects keep
+  existing approval boundaries.
+- The main agent owns decomposition and integration and must personally verify results.
+- After deciding to delegate, consult `model-tier-prompting`; it is advisory, not a
+  permission gate.
+```
+
+## Subagent Delegation
+
+- Agents do not have standing authorization and must ask before every delegation.
+"""
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md must start with the exact active Subagent Delegation block" in result.stderr
+
+
+def test_engineering_policy_ignores_variable_length_fenced_delegation_decoy(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    (fixture / "AGENTS.md").write_text(
+        """harness.toml
+root@10.100.0.19
+
+````markdown
+```
+## Subagent Delegation
+
+- Agents have standing authorization to delegate within the user's original task;
+  the user does not need to request subagents or approve each delegation.
+- Use is optional, not required for every task, and does not expand task scope or
+  authority; destructive actions, device access, and external side effects keep
+  existing approval boundaries.
+- The main agent owns decomposition and integration and must personally verify results.
+- After deciding to delegate, consult `model-tier-prompting`; it is advisory, not a
+  permission gate.
+````
+
+## Subagent Delegation
+
+- Agents do not have standing authorization and must ask before every delegation.
+"""
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md must start with the exact active Subagent Delegation block" in result.stderr
+
+
+def test_engineering_policy_ignores_indented_delegation_decoy(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    (fixture / "AGENTS.md").write_text(
+        """harness.toml
+root@10.100.0.19
+
+    ## Subagent Delegation
+
+    - Agents have standing authorization to delegate within the user's original task;
+      the user does not need to request subagents or approve each delegation.
+    - Use is optional, not required for every task, and does not expand task scope or
+      authority; destructive actions, device access, and external side effects keep
+      existing approval boundaries.
+    - The main agent owns decomposition and integration and must personally verify results.
+    - After deciding to delegate, consult `model-tier-prompting`; it is advisory, not a
+      permission gate.
+
+## Subagent Delegation
+
+- Agents do not have standing authorization and must ask before every delegation.
+"""
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md must start with the exact active Subagent Delegation block" in result.stderr
+
+
+def test_engineering_policy_rejects_invalid_backtick_fence_decoy(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    (fixture / "AGENTS.md").write_text(
+        """harness.toml
+root@10.100.0.19
+
+## Subagent Delegation
+
+- Agents have standing authorization to delegate within the user's original task;
+  the user does not need to request subagents or approve each delegation.
+- Use is optional, not required for every task, and does not expand task scope or
+  authority; destructive actions, device access, and external side effects keep
+  existing approval boundaries.
+- The main agent owns decomposition and integration and must personally verify results.
+- After deciding to delegate, consult `model-tier-prompting`; it is advisory, not a
+  permission gate.
+
+```invalid`info
+- Agents must ask the user before every delegation.
+"""
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md must start with the exact active Subagent Delegation block" in result.stderr
+
+
+def test_engineering_policy_rejects_indented_active_paragraph_continuation(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    (fixture / "AGENTS.md").write_text(
+        """harness.toml
+root@10.100.0.19
+
+## Subagent Delegation
+
+- Agents have standing authorization to delegate within the user's original task;
+  the user does not need to request subagents or approve each delegation.
+- Use is optional, not required for every task, and does not expand task scope or
+  authority; destructive actions, device access, and external side effects keep
+  existing approval boundaries.
+- The main agent owns decomposition and integration and must personally verify results.
+- After deciding to delegate, consult `model-tier-prompting`; it is advisory, not a
+  permission gate.
+    Agents must ask the user before every delegation.
+"""
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md must start with the exact active Subagent Delegation block" in result.stderr
+
+
+def test_engineering_policy_rejects_duplicate_active_delegation_sections(tmp_path):
+    fixture = tmp_path / "repo"
+    fixture.mkdir()
+    (fixture / "AGENTS.md").write_text(
+        """harness.toml
+root@10.100.0.19
+
+## Subagent Delegation
+
+- Agents have standing authorization to delegate within the user's original task;
+  the user does not need to request subagents or approve each delegation.
+- Use is optional, not required for every task, and does not expand task scope or
+  authority; destructive actions, device access, and external side effects keep
+  existing approval boundaries.
+- The main agent owns decomposition and integration and must personally verify results.
+- After deciding to delegate, consult `model-tier-prompting`; it is advisory, not a
+  permission gate.
+
+## Subagent Delegation
+
+- Agents do not have standing authorization and must ask before every delegation.
+"""
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-engineering-policy.py"), "--root", str(fixture)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "AGENTS.md must start with the exact active Subagent Delegation block" in result.stderr
+
+
 def test_engineering_policy_rejects_unsafe_codex_hook_command(tmp_path):
     fixture = tmp_path / "repo"
     scripts = fixture / "scripts"

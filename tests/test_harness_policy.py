@@ -44,6 +44,26 @@ def test_ai_harness_documents_read_only_hook_reminders():
     assert "does not change repository state" in harness
     assert "scripts/harness-hook.py" in agents
     assert "does not change repository state" in agents
+    assert "evidence_artifact_results" in agents
+    assert "denies `git commit` while required verification is pending" in agents
+    assert "validates declared `evidence_artifacts`" in agents
+
+
+def test_agents_authorize_optional_bounded_subagent_delegation():
+    agents = " ".join((ROOT / "AGENTS.md").read_text().split())
+
+    assert "## Subagent Delegation" in agents
+    assert "standing authorization" in agents
+    assert "original task" in agents
+    assert "does not need to request subagents or approve each delegation" in agents
+    assert "optional, not required for every task" in agents
+    assert "does not expand task scope or authority" in agents
+    assert "destructive actions, device access, and external side effects" in agents
+    assert "main agent" in agents
+    assert "personally verify" in agents
+    assert "After deciding to delegate" in agents
+    assert "model-tier-prompting" in agents
+    assert "not a permission gate" in agents
 
 
 def test_local_harness_runs_shell_syntax_check_and_ci_summary():

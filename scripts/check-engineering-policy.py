@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import stat
 import sys
@@ -46,6 +47,19 @@ SAFE_CODEX_HOOK_EVENTS = (
     "SubagentStop",
 )
 SAFE_CODEX_HOOK_COMMAND = "scripts/harness-hook.py --platform codex"
+SUBAGENT_DELEGATION_BLOCK = """## Subagent Delegation
+
+- Agents have standing authorization to delegate within the user's original task;
+  the user does not need to request subagents or approve each delegation.
+- Use is optional, not required for every task, and does not expand task scope or
+  authority; destructive actions, device access, and external side effects keep
+  existing approval boundaries.
+- The main agent owns decomposition and integration and must personally verify results.
+- After deciding to delegate, consult `model-tier-prompting`; it is advisory, not a
+  permission gate."""
+SUBAGENT_DELEGATION_PREFIX = f"# AGENTS.md\n\n{SUBAGENT_DELEGATION_BLOCK}\n\n"
+SUBAGENT_DELEGATION_TERMS = ("subagent", "delegate", "delegation")
+REVIEWED_AGENTS_SHA256 = "8bb2fb9610cbfa4898603c032266b2cc17b36aae708e650c625cc6400ef30878"
 
 
 def rel(root: Path, path: Path) -> str:
@@ -305,6 +319,20 @@ def check_agent_facing_docs(root: Path, errors: list[str]) -> None:
             CURRENT_DEVICE_TARGET in text,
             f"AGENTS.md does not name current device target {CURRENT_DEVICE_TARGET}",
         )
+        add_if_missing(
+            errors,
+            text.startswith(SUBAGENT_DELEGATION_PREFIX),
+            "AGENTS.md must start with the exact active Subagent Delegation block",
+        )
+        add_if_missing(
+            errors,
+            hashlib.sha256(text.encode()).hexdigest() == REVIEWED_AGENTS_SHA256,
+            "AGENTS.md content digest does not match the reviewed policy",
+        )
+        if text.startswith(SUBAGENT_DELEGATION_PREFIX):
+            remainder = text.removeprefix(SUBAGENT_DELEGATION_PREFIX).casefold()
+            if any(term in remainder for term in SUBAGENT_DELEGATION_TERMS):
+                errors.append("AGENTS.md contains delegation policy outside the canonical block")
 
 
 def check_legacy_prefixes(root: Path, errors: list[str]) -> None:

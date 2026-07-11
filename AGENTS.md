@@ -1,70 +1,76 @@
 # AGENTS.md
 
+## Subagent Delegation
+
+- Agents have standing authorization to delegate within the user's original task;
+  the user does not need to request subagents or approve each delegation.
+- Use is optional, not required for every task, and does not expand task scope or
+  authority; destructive actions, device access, and external side effects keep
+  existing approval boundaries.
+- The main agent owns decomposition and integration and must personally verify results.
+- After deciding to delegate, consult `model-tier-prompting`; it is advisory, not a
+  permission gate.
+
 ## Start Here
 
-- Read `harness.toml` first. It is the machine-readable map of local, device,
-  release, and QEMU checks.
-- List available checks with:
+- Read `harness.toml`, the machine-readable map of local, device, release, and
+  QEMU checks. List checks with:
 
   ```bash
   scripts/harness.py list --json
   ```
 
-- Inspect the current trusted-suite status with:
+- Inspect trusted-suite state with:
 
   ```bash
   scripts/harness.py status --json
   ```
 
-  Check `freshness`, `pending_verification`, `gate_matrix`, each row's
-  `evidence_state`, and `evidence_artifact_results` before trusting a report.
-- `scripts/harness-hook.py` does not run checks. It does not change repository state.
-  It reminds or blocks on pending verification, and denies `git commit` while
-  required verification is pending.
+  Before trusting a report, check `freshness`, `pending_verification`, `gate_matrix`,
+  each `evidence_state`, and `evidence_artifact_results`.
+- `scripts/harness-hook.py` does not run checks and does not change repository state.
+  It reminds or blocks on pending verification; it
+  denies `git commit` while required verification is pending.
 
 ## Local Loop
 
-- After any code or policy change, run the required sweep:
+- After code or policy changes, run:
 
   ```bash
   scripts/harness.py sweep required --report .cache/harness/required.json
   ```
 
-- Prefer the repo venv when present:
+- Prefer the repo venv:
 
   ```bash
   PYTHON=.venv/bin/python scripts/check-local.sh
   ```
 
-- If `.venv` is missing, install dev dependencies with `python -m pip install -e ".[dev]"`
-  and then run `scripts/check-local.sh`.
-- For focused TDD, run the smallest relevant `.venv/bin/python -m pytest ...`
-  command first, then the required sweep. Do not stop after the focused test.
+- If `.venv` is missing, install dev dependencies with
+  `python -m pip install -e ".[dev]"`.
+- Focused TDD starts with the smallest relevant pytest command but ends with the
+  required sweep.
 
 ## Repo Skills
 
 Local Codex skills live in `.codex/skills/`:
 
-- `model-tier-prompting` for writing or rewriting prompts across model tiers,
-  including subagent prompts and cross-model migration.
-- `refine` for expanding rough ideas into a confirmable task brief before
-  implementation.
+- `model-tier-prompting`: model-aware prompt and tier guidance.
+- `refine`: turn rough ideas into confirmable task briefs.
 
 ## Heavy Checks
 
 - Do not run device, QEMU, release, or network-heavy checks unless the user
   asked for that validation or the task specifically requires it.
-- When a heavy check is explicitly needed, prefer `scripts/harness.py run <id>`
-  with the required `--allow-*` flags and `--report ...`; the report captures
-  output and validates declared `evidence_artifacts`.
-- Current handheld examples use `root@10.100.0.19`.
-- Device-facing changes need `scripts/verify-on-device.sh root@10.100.0.19`
-  evidence before claiming hardware validation.
+- When explicitly needed, use `scripts/harness.py run <id>` with required
+  `--allow-*` flags; `--report` captures output and
+  validates declared `evidence_artifacts`.
+- Current target: `root@10.100.0.19`. Device claims require
+  `scripts/verify-on-device.sh root@10.100.0.19` evidence.
 
 ## Reporting
 
-- Report exact commands run and whether they passed.
-- Separate local/unit evidence from real-device, QEMU, and release-artifact
-  evidence.
+- Report exact commands and outcomes; separate local evidence from device, QEMU,
+  and release evidence.
 - Do not claim MangoHud sensor, gamescope, SteamOS Manager, EC, or package
   release behavior is verified unless the matching harness layer was run.
