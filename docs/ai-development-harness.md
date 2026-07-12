@@ -115,19 +115,23 @@ root privileges or SteamOS host is needed for backend behavior.
 
 ## TDD contract
 
-All production behavior changes must follow `docs/tdd-workflow.md`.
+TDD applies to maintained repeatable behavior. The durable scope, exemptions, and
+RED/GREEN rules live in `docs/tdd-workflow.md`.
+
+Verification remains independent and required. An activity that does not require
+RED/GREEN must still pass the completion checks applicable to its outputs.
 
 The required loop is:
 
 - RED: write or update the focused test first and capture the expected failure.
-- GREEN: make the smallest production change and capture the same test passing.
+- GREEN: make the smallest maintained-behavior change and capture the same test passing.
 - VERIFY: run the trusted suite from `harness.toml`.
 
 Hardware-facing changes also need device verification with
 `scripts/verify-on-device.sh`.
 
-Pull requests must include RED evidence, GREEN evidence, and Verification
-evidence using `.github/pull_request_template.md`.
+Pull requests must include RED and GREEN evidence, or mark each N/A for exempt work,
+plus Verification evidence using `.github/pull_request_template.md`.
 
 ## Device loop
 
@@ -159,9 +163,9 @@ Display workaround changes must also capture:
 
 ## Editing rules for agents
 
-- Add or update a failing test before changing production behavior.
-- Do not edit production code until the RED command has been run and failed for
-  the expected reason.
+- Add or update a failing test before changing maintained repeatable behavior.
+- Do not edit behavior-changing maintained code, policy, harness, release artifacts,
+  or stable contracts until the RED command has failed for the expected reason.
 - Do not report a change as complete until `scripts/check-local.sh` passes.
 - Keep D-Bus names stable unless there is a migration note.
 - Do not add a new hardware profile without a `collect-device-info.sh` capture

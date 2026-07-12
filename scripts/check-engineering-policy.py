@@ -59,7 +59,7 @@ SUBAGENT_DELEGATION_BLOCK = """## Subagent Delegation
   permission gate."""
 SUBAGENT_DELEGATION_PREFIX = f"# AGENTS.md\n\n{SUBAGENT_DELEGATION_BLOCK}\n\n"
 SUBAGENT_DELEGATION_TERMS = ("subagent", "delegate", "delegation")
-REVIEWED_AGENTS_SHA256 = "8bb2fb9610cbfa4898603c032266b2cc17b36aae708e650c625cc6400ef30878"
+REVIEWED_AGENTS_SHA256 = "80e7fb15c670a7abee97be22b166a3d94a129652e726776a47f78e5375294c07"
 
 
 def rel(root: Path, path: Path) -> str:

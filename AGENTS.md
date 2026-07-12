@@ -48,8 +48,9 @@
 
 - If `.venv` is missing, install dev dependencies with
   `python -m pip install -e ".[dev]"`.
-- Focused TDD starts with the smallest relevant pytest command but ends with the
-  required sweep.
+- TDD: maintained repeatable behavior requires RED/GREEN; read-only exploration does
+  not. See `docs/tdd-workflow.md`. Verification remains independent and required;
+  completion still ends with the required sweep.
 
 ## Repo Skills
 
