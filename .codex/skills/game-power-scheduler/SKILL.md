@@ -24,7 +24,11 @@ improves pacing at equal power is a win even with no energy saving.
 
 Shape demand before squeezing the ceiling:
 
-1. **Frame limiter** - rendering above target is the largest single waste.
+1. **Frame limiter** - rendering above target is the largest single waste, and it
+   is also the *best closure*: it bounds CPU work as well as GPU work, so nothing
+   races ahead to re-spend the saving. Measured under a 30 FPS cap, CPU power
+   stayed flat at 7.1-7.6 W while the GPU clock was swept, where the same sweep at
+   60 FPS uncapped pushed CPU power from 5.0 to 8.9 W.
 2. **GPU frequency ceiling** - in *light* scenes the iGPU races to max clock
    regardless of whether it helps the frame deadline, and pacing at the lowest
    clock that meets the deadline beats that on V²f grounds. In heavy scenes it
@@ -71,6 +75,14 @@ replaces it. Two things follow from the measurements:
   60 target with p95 19.7 ms; the 0.80-0.97 band held 59.6-59.9 at p95 17.9 ms.
 - `gt-c6-residency` is inert during gameplay (0 ms in all 145 samples). The GT
   does not enter deep idle between frames, so it cannot detect finishing early.
+- **Where the reclaimable waste actually is: a frame cap in force with utilisation
+  far below target.** SLPC targets ~0.85 correctly when uncapped, but under a
+  30 FPS cap it settles at 0.50 and leaves the clock high - worth a measured
+  -2.73 W. As a *reduction only*, when utilisation is well below target, a
+  feed-forward step lands within 8% of the measured optimum.
+- **Any GPU frequency floor is `rpe`, the GPU's own efficient point** - not a
+  tuned constant. Measured: `rpe = 800` was optimal and 700 broke pacing while
+  also costing more power.
 
 ## Guards are regression guards
 

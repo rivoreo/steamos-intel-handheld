@@ -121,15 +121,21 @@ The xe PMU (`xe_0000_00_02.0`) exposes what is needed:
 
 ```
 engine-active-ticks / engine-total-ticks   -> real render utilisation
-gt-c6-residency                            -> race-to-idle detector
 gt-actual-frequency, gt-requested-frequency
+gt-c6-residency                            -> useless here, see below
 ```
 
 Sample from the heavy scene: `render_busy 0.97-0.98`, `c6 0 ms`, `1600-1850 MHz`.
 
-This pair answers a question p95 cannot - *whether there is anything to take*,
-before trying to take it. p95 only reports afterwards that pacing broke. A high
-clock with non-zero C6 is reclaimable; a high clock with zero C6 is not.
+Utilisation answers a question p95 cannot - *whether there is anything to take*,
+before trying to take it. p95 only reports afterwards that pacing broke.
+
+**`gt-c6-residency` is not the race-to-idle detector it looks like.** It read
+0 ms in all 145 samples of a live session, and 0-1 ms even under a 30 FPS cap
+where utilisation was only 0.50 and the clock was demonstrably too high. The GT
+does not enter deep idle between frames, so C6 cannot see a frame finishing
+early. `render_busy` alone carries that information: well below target means
+reclaimable, at the ceiling means not.
 
 ## Input-idle frame cap
 
@@ -148,6 +154,55 @@ physical pad and re-emits on a virtual one, which the compositor never sees. The
 atom stayed frozen through active play. Measured: 8 s of play produces 52 events
 on `/dev/input/event21` (the virtual pad) and 0 on the atom, and 0 on the
 physical controller because it is grabbed.
+
+## GPU frequency under an active frame cap
+
+Swept GT `max_freq` with a 30 FPS cap already in force (AC, so the daemon's own
+lanes were inactive and could not fight the manual writes).
+
+| GT cap | FPS | p95 ms | render busy | actual MHz | package | graphics | CPU |
+|---|---|---|---|---|---|---|---|
+| 1950 (none) | 29.99 | 34.36 | 0.500 | 1473 | 17.81 | 5.39 | 7.57 |
+| 1400 | 30.00 | 34.21 | 0.546 | 1317 | 17.08 | 4.76 | 7.46 |
+| 1100 | 30.00 | 34.42 | 0.633 | 1075 | 16.59 | 4.09 | 7.65 |
+| 900 | 30.00 | 34.73 | 0.752 | 900 | 15.71 | 3.66 | 7.31 |
+| **800** | **30.01** | **34.85** | **0.845** | 800 | **15.08** | **3.41** | 7.11 |
+| 700 | 29.35 | 36.40 | 0.919 | 700 | 15.29 | 3.26 | 7.32 |
+
+**−2.73 W (−15%) on top of the idle cap**, at unchanged FPS and p95. Compounded
+with the idle cap itself the idle state goes from ~23.9 W to ~15.1 W, **−37%**.
+
+Three results:
+
+**The CPU does not absorb the saving here.** CPU power stays 7.1-7.6 W across the
+whole sweep, where capping the GPU at 60 FPS pushed it from 5.0 to 8.9 W. A frame
+cap bounds the CPU's work too, so it cannot race ahead. The frame limiter is
+therefore a *better* closure than the package budget, and more fundamental - which
+is why it sits first in the actuator hierarchy.
+
+**The cliff is exactly at `rpe`.** This device reports `rpe = 800`, and 800 is the
+optimum while 700 breaks pacing *and* costs more power than 800. So the floor for
+any GPU cap is the GPU's own efficient frequency, not a tuned constant.
+
+**Render busy ~0.85 is the target, confirmed at two frame rates.** Uncapped at
+60 FPS, SLPC lands utilisation in 0.80-0.97 on its own. Under a 30 FPS cap it
+settles at 0.50 and leaves the clock far too high. The gap is specific: *SLPC
+under-reduces when a frame cap is active.*
+
+A feed-forward reduction is valid in that narrow case: `1473 x 0.50 / 0.85 = 866`
+against a measured optimum of 800, within 8%. This does not contradict dropping
+the utilisation-driven controller earlier - that was rejected for the uncapped
+case, where SLPC is already on target and the formula would try to *raise* the
+clock. Used only as a reduction, only when utilisation is well below target, and
+clamped at `rpe`, it points the right way.
+
+**Not implemented.** The frame cap is applied from the snapshot-writing path
+rather than from the actuation pipeline, so driving the GPU actuator from there
+would bypass its snapshot bookkeeping, restore paths and fail-closed latch. A
+stuck GPU cap is a high-severity failure - permanently degraded performance until
+some later restore. Wiring this up means first moving the frame cap into the
+actuation pipeline so it inherits the same discipline; that is a refactor, not an
+addition.
 
 ## Telemetry integrity
 
