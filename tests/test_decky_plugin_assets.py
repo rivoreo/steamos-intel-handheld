@@ -289,3 +289,31 @@ def test_game_power_decky_backend_exposes_persona_and_limiter_api():
     assert '"clear-persona"' in backend
 
 
+
+
+def test_game_power_decky_backend_passes_auto_target_through_to_the_panel():
+    """The backend whitelists runtime fields, and omitting one silently emptied
+    the frame-target choices and left the control greyed out with no reason
+    shown. Any field the panel builds a control from must be passed through."""
+    backend = (GAME_POWER_PLUGIN / "main.py").read_text()
+
+    assert "_public_auto_target" in backend
+    for key in ("candidates", "refresh_hz", "cap_applied_fps", "input_idle_s"):
+        assert key in backend, f"{key} must survive the backend whitelist"
+    # The blank shape must carry the same keys, or a gpu-priority snapshot
+    # produces a differently-shaped object than a target-balance one.
+    blank = backend.split("def _blank_v10_fields")[1].split("def ")[0]
+    assert '"auto_target": None' in blank
+    assert '"p95_baseline_ms": None' in blank
+
+
+def test_game_power_decky_frame_target_control_is_never_dead():
+    """A control the user cannot operate and that does not say why is the worst
+    outcome; it is what a missing backend field produced."""
+    frontend, _ = _game_power_frontend()
+
+    # Disabled only while a request is in flight - never on missing data.
+    assert "disabled={busy}" in frontend
+    assert "targetOptions.length < 2" not in frontend
+    # And there is a fallback list so the options are never empty.
+    assert "reported.length" in frontend

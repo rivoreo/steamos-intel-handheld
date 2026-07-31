@@ -53,10 +53,19 @@ def divisor_candidates(
     return tuple(sorted(seen, reverse=True))
 
 
-def snap_down_to_candidate(fps: float, candidates: tuple[int, ...]) -> int | None:
-    """Largest candidate at or below ``fps``."""
+def snap_down_to_candidate(
+    fps: float, candidates: tuple[int, ...], *, tolerance: float = 0.0
+) -> int | None:
+    """Largest candidate the scene can hold, within ``tolerance``.
+
+    The tolerance matters because the rungs are far apart. A scene sustaining
+    58 FPS plainly holds a 60 cap - the cap only limits, so the occasional dip
+    below it is no worse than today while the over-rendering above it goes away.
+    Without tolerance, 58 snaps past 60 to 40 and throws away 20 FPS.
+    """
+    ceiling = fps * (1.0 + tolerance)
     for candidate in candidates:
-        if candidate <= fps:
+        if candidate <= ceiling:
             return candidate
     return None
 
@@ -109,6 +118,10 @@ class AutoTargetConfig:
     # Percentile of observed frame rate treated as "sustainable". Low rather
     # than mean: the point is a rate the scene holds, not one it averages.
     sustainable_percentile: float = 0.25
+    # How far above the sustainable rate a rung may still be chosen. The rungs
+    # are ~50% apart, so without this a scene sustaining 58 lands on 40 rather
+    # than the 60 it demonstrably holds.
+    snap_tolerance: float = 0.05
     # Felt changes per session, downward. Beyond this we stop proposing and let
     # the power scheduler do what it can.
     max_drops_per_session: int = 2
@@ -203,7 +216,9 @@ class AutoTargetEstimator:
         sustainable = _percentile(observed, self.config.sustainable_percentile)
         if sustainable is None:
             return None
-        proposed = snap_down_to_candidate(sustainable, candidates)
+        proposed = snap_down_to_candidate(
+            sustainable, candidates, tolerance=self.config.snap_tolerance
+        )
         if proposed is None or proposed >= target_fps:
             return None
         observed = len(self._window)

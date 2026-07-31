@@ -382,6 +382,9 @@ def _blank_v10_fields() -> dict:
         "trim_rungs_active": None,
         "frame_feed_status": None,
         "limiter_state": None,
+        "p95_baseline_ms": None,
+        "p95_budget_ms": None,
+        "auto_target": None,
     }
 
 
@@ -429,6 +432,63 @@ def _public_v10_fields(row: dict) -> dict:
             frame_feed_status if frame_feed_status in FRAME_FEED_STATES else None
         ),
         "limiter_state": limiter_state if isinstance(limiter_state, str) else None,
+        "p95_baseline_ms": _float_or_none(row.get("p95_baseline_ms")),
+        "p95_budget_ms": _float_or_none(row.get("p95_budget_ms")),
+        "auto_target": _public_auto_target(row),
+    }
+
+
+def _float_or_none(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(float(value)) else None
+
+
+def _public_auto_target(row: dict):
+    """Auto frame-target state, validated defensively.
+
+    The panel builds its frame-target choices from ``candidates`` here. Anything
+    missing must degrade to None rather than to a half-populated dict, because a
+    silently empty candidate list is what left the control greyed out and
+    unusable.
+    """
+    auto = row.get("auto_target")
+    if not isinstance(auto, dict):
+        return None
+    proposal = auto.get("proposal")
+    public_proposal = None
+    if isinstance(proposal, dict) and _is_int(proposal.get("fps")):
+        public_proposal = {
+            "fps": int(proposal["fps"]),
+            "reason": proposal.get("reason") if isinstance(proposal.get("reason"), str) else None,
+            "sustainable_fps": _float_or_none(proposal.get("sustainable_fps")),
+            "samples": int(proposal["samples"]) if _is_int(proposal.get("samples")) else None,
+        }
+    gpu = auto.get("gpu")
+    public_gpu = None
+    if isinstance(gpu, dict):
+        saturated = gpu.get("saturated")
+        public_gpu = {
+            "render_busy": _float_or_none(gpu.get("render_busy")),
+            "c6_ms": _float_or_none(gpu.get("c6_ms")),
+            "actual_mhz": _float_or_none(gpu.get("actual_mhz")),
+            "saturated": saturated if isinstance(saturated, bool) else None,
+        }
+    candidates = auto.get("candidates")
+    return {
+        "status": auto.get("status") if isinstance(auto.get("status"), str) else None,
+        "refresh_hz": _float_or_none(auto.get("refresh_hz")),
+        "candidates": [
+            int(value) for value in candidates if _is_int(value)
+        ] if isinstance(candidates, list) else [],
+        "input_idle_s": _float_or_none(auto.get("input_idle_s")),
+        "cap_applied_fps": int(auto["cap_applied_fps"]) if _is_int(auto.get("cap_applied_fps")) else None,
+        "cap_reason": auto.get("cap_reason") if isinstance(auto.get("cap_reason"), str) else None,
+        "drops_this_session": (
+            int(auto["drops_this_session"]) if _is_int(auto.get("drops_this_session")) else None
+        ),
+        "proposal": public_proposal,
+        "gpu": public_gpu,
     }
 
 

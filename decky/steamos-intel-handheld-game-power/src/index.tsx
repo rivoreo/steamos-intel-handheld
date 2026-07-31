@@ -1066,9 +1066,21 @@ const GamePowerPanel: FC = () => {
   // Offer only rates the panel can actually pace evenly: exact divisors of the
   // current refresh rate, as computed by the daemon. There is no working VRR
   // here, so an off-divisor target judders no matter how well we schedule it.
-  const candidates = (runtime?.auto_target?.candidates ?? []).filter(
+  const reported = (runtime?.auto_target?.candidates ?? []).filter(
     (fps) => fps >= supportedMin && fps <= supportedMax,
   );
+  // Never let a missing field kill the control. If the daemon has not reported
+  // its divisor list, fall back to the standard divisors of a 120 Hz panel plus
+  // whatever target is currently detected, so the user can still choose one.
+  // A greyed-out dropdown with no explanation is the worst possible outcome.
+  const fallback = [120, 60, 40, 30].filter(
+    (fps) => fps >= supportedMin && fps <= supportedMax,
+  );
+  const candidates = reported.length
+    ? reported
+    : Array.from(
+        new Set([...(detectedFps ? [Math.round(detectedFps)] : []), ...fallback]),
+      ).sort((a, b) => b - a);
   // "auto" is a real choice, not the absence of one.
   const targetOptions: { data: string; label: string }[] = [
     { data: "auto", label: manualTarget ? t.targetAuto : t.targetAutoDetected(
@@ -1134,7 +1146,7 @@ const GamePowerPanel: FC = () => {
               }
               rgOptions={targetOptions}
               selectedOption={selectedTarget}
-              disabled={busy || targetOptions.length < 2}
+              disabled={busy}
               onChange={(option) =>
                 applyFpsTarget(option.data === "auto" ? null : Number(option.data))
               }
