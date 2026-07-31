@@ -11,13 +11,22 @@ The xe PMU does expose it. Two counters matter:
 
 * ``engine-active-ticks`` / ``engine-total-ticks`` on the render engine give real
   utilisation. Measured 78-88% in a heavy scene.
-* ``gt-c6-residency`` is the direct race-to-idle detector. A high clock with
-  non-zero C6 means the GPU sprints and then sleeps - reclaimable waste. A high
-  clock with zero C6 means the work is genuinely there and capping will only
-  cost frames.
+* ``gt-c6-residency`` is recorded but is **inert during gameplay**: it read
+  exactly 0 ms in all 145 samples of a live session. C6 is a deep idle state the
+  GT does not enter between frames, so it cannot detect "finished the frame early
+  and waited". Kept in telemetry only because zero is itself the finding.
 
-That pair answers a question p95 cannot: *is there anything to take* before we
-try to take it. p95 only tells us afterwards that we broke pacing.
+What utilisation is *not* good for: choosing a frequency. Measured correlation
+between GT frequency and utilisation over that session was -0.916 - frequency is
+the cause and utilisation the effect, because a higher clock finishes the same
+frame sooner and leaves the engine idle longer. SLPC already runs this loop and
+lands utilisation in 0.80-0.97 for most of a session. Feeding utilisation into a
+frequency formula would only re-derive SLPC's own controller.
+
+What it *is* good for: detecting that we have over-capped. Utilisation pinned at
+the ceiling means the engine has no slack left and frames are about to be missed.
+That is a leading indicator, where p95 is a lagging one - p95 only tells us
+afterwards that pacing already broke.
 
 Read via ``perf stat`` rather than raw ``perf_event_open``: the counters are
 free-running, we need a delta over a window, and shelling out keeps this out of
@@ -38,6 +47,11 @@ PMU_ROOT = Path("/sys/bus/event_source/devices")
 RENDER_ENGINE_CLASS = 0
 RENDER_ENGINE_INSTANCE = 0
 PRIMARY_GT = 0
+
+# Above this the render engine has no slack and frames start slipping; measured
+# on device as the point where FPS fell to 56.2 and below-target classification
+# jumped to 29%. The healthy band beneath it is roughly 0.80-0.97.
+SATURATED_RENDER_BUSY = 0.97
 
 
 def discover_xe_pmu(root: str | Path = PMU_ROOT) -> str | None:
@@ -67,16 +81,17 @@ class GpuUtilisationSample:
     window_s: float
 
     @property
-    def racing_to_idle(self) -> bool | None:
-        """Clock held high while the engine is idle a meaningful share of the time.
+    def saturated(self) -> bool | None:
+        """Engine has no slack left, so a deeper cap will cost frames.
 
-        This is the signature worth acting on: the frames are already being
-        delivered, so the frequency is buying nothing but voltage.
+        Device evidence: samples at or above this level ran 56.2 FPS against a 60
+        target with p95 19.7 ms and were classified below-target 29% of the time,
+        while the 0.80-0.97 band held 59.6-59.9 FPS at p95 17.9 ms. This is the
+        useful direction of the signal - a leading indicator of over-capping.
         """
-        if self.render_busy is None or self.c6_ms is None:
+        if self.render_busy is None:
             return None
-        idle_share = self.c6_ms / (self.window_s * 1000.0) if self.window_s else 0.0
-        return self.render_busy < 0.60 and idle_share > 0.10
+        return self.render_busy >= SATURATED_RENDER_BUSY
 
 
 def _events(pmu: str) -> list[str]:

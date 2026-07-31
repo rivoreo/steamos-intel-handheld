@@ -258,15 +258,17 @@ def test_limiter_like_target_can_trim_without_uncapped_headroom():
 
     assert controller.ladder_step == 1
     assert decision.action == GamePowerAction.TARGET_BALANCE_TRIM
-    assert decision.trim_rungs_active == ["G1"]
+    # Step 1 is the package budget: a GPU cap alone gets re-spent by the CPU.
+    assert decision.trim_rungs_active == ["P1"]
 
 
 def test_gpu_cap_never_exceeds_rp0_and_matches_ratio(tmp_path):
-    # Climb one rung (G1) -> GPU max_freq = int(rp0 * (1 - 0.12)) = 1716, <= rp0.
+    # Climb to G1 (step 2; step 1 is the P1 budget) -> max_freq =
+    # int(rp0 * (1 - 0.12)) = 1716, <= rp0.
     governor, actuator, sysfs = _governor_with_gpu(
-        tmp_path, tb_config(), [at_target()]
+        tmp_path, tb_config(), [at_target() for _ in range(2)]
     )
-    asyncio.run(governor.run_iterations(1))
+    asyncio.run(governor.run_iterations(2))
     assert _gt_max(sysfs) == 1716
     assert _gt_max(sysfs) <= 1950  # reduction-only: never above rp0
     governor.close()
@@ -274,9 +276,9 @@ def test_gpu_cap_never_exceeds_rp0_and_matches_ratio(tmp_path):
 
 def test_gpu_cap_restored_on_close(tmp_path):
     governor, actuator, sysfs = _governor_with_gpu(
-        tmp_path, tb_config(), [at_target()]
+        tmp_path, tb_config(), [at_target() for _ in range(2)]
     )
-    asyncio.run(governor.run_iterations(1))
+    asyncio.run(governor.run_iterations(2))
     assert _gt_max(sysfs) == 1716
     governor.close()
     assert _gt_max(sysfs) == 1950  # baseline restored
@@ -300,8 +302,10 @@ def test_gpu_cap_with_min_latched_at_rp0_lowers_min_and_is_effective(tmp_path):
     # D1 (BLOCKER): with min latched at rp0 a max-only G1 cap used to leave
     # min(1950) > max(1716) -- a live no-op. The governor's cap must also lower
     # min to min(cap, rpe) = 800 so the cap takes effect.
-    governor, sysfs = _governor_with_latched_gpu(tmp_path, tb_config(), [at_target()])
-    asyncio.run(governor.run_iterations(1))
+    governor, sysfs = _governor_with_latched_gpu(
+        tmp_path, tb_config(), [at_target() for _ in range(2)]
+    )
+    asyncio.run(governor.run_iterations(2))
     assert _gt_max(sysfs) == 1716
     assert _gt_min(sysfs) == 800  # lowered from the rp0 latch
     assert _gt_min(sysfs) <= _gt_max(sysfs)
@@ -309,8 +313,10 @@ def test_gpu_cap_with_min_latched_at_rp0_lowers_min_and_is_effective(tmp_path):
 
 
 def test_gpu_cap_with_latched_min_restores_both_min_and_max(tmp_path):
-    governor, sysfs = _governor_with_latched_gpu(tmp_path, tb_config(), [at_target()])
-    asyncio.run(governor.run_iterations(1))
+    governor, sysfs = _governor_with_latched_gpu(
+        tmp_path, tb_config(), [at_target() for _ in range(2)]
+    )
+    asyncio.run(governor.run_iterations(2))
     assert _gt_min(sysfs) == 800
     governor.close()
     # Restore returns BOTH knobs to the snapshotted (latched) baseline.
@@ -321,8 +327,11 @@ def test_gpu_cap_with_latched_min_restores_both_min_and_max(tmp_path):
 def test_gpu_cap_telemetry_reports_min_actually_applied(tmp_path):
     # D1 telemetry: gpu_freq_caps.min_mhz must show the min the actuator
     # actually wrote (800), not null, when the cap forced a min lowering.
-    governor, _sysfs = _governor_with_latched_gpu(tmp_path, tb_config(), [at_target()])
-    decision = asyncio.run(governor.run_once())
+    governor, _sysfs = _governor_with_latched_gpu(
+        tmp_path, tb_config(), [at_target() for _ in range(2)]
+    )
+    asyncio.run(governor.run_once())          # step 1: P1 budget
+    decision = asyncio.run(governor.run_once())  # step 2: G1 cap
     # D6: flat min_mhz/max_mhz carry the render GT (gt0) values; per_gt breaks
     # them out for every GT (both GTs share rp0 1950 in this fixture).
     assert decision.gpu_freq_caps == {
@@ -367,8 +376,11 @@ def test_gpu_cap_per_gt_uses_each_gts_own_rp0(tmp_path):
     # D6 (BLOCKER): a G1 cap trims the render GT from 1950 (-> 1716) and the
     # media GT from 1200 (-> 1056). The old min-across helper capped BOTH at
     # 1056, a -46% trim on the render GT that dropped fps to 47.7.
-    governor, sysfs = _governor_with_asymmetric_gpu(tmp_path, tb_config(), [at_target()])
-    decision = asyncio.run(governor.run_once())
+    governor, sysfs = _governor_with_asymmetric_gpu(
+        tmp_path, tb_config(), [at_target() for _ in range(2)]
+    )
+    asyncio.run(governor.run_once())          # step 1: P1 budget
+    decision = asyncio.run(governor.run_once())  # step 2: G1 cap
     assert _gt_freq(sysfs, "gt0", "max") == 1716
     assert _gt_freq(sysfs, "gt1", "max") == 1056
     # Mins lowered per GT with that GT's own rpe (D1, per-GT).
@@ -394,9 +406,13 @@ def test_gpu_cap_per_gt_uses_each_gts_own_rp0(tmp_path):
 def test_boost_lifts_prior_gpu_cap_and_floors_min(tmp_path):
     # After a G rung caps GPU max, a LOADING boost must lift the cap (max back to
     # rp0 baseline) while flooring min at rpe -- boost releases all rungs.
-    samples = [at_target(), replace(at_target(), foreground_process_age_s=5.0)]
+    samples = [
+        at_target(),
+        at_target(),
+        replace(at_target(), foreground_process_age_s=5.0),
+    ]
     governor, _actuator, sysfs = _governor_with_gpu(tmp_path, tb_config(), samples)
-    asyncio.run(governor.run_iterations(1))  # G1: max capped to 1716
+    asyncio.run(governor.run_iterations(2))  # P1 then G1: max capped to 1716
     assert _gt_max(sysfs) == 1716
     asyncio.run(governor.run_iterations(1))  # LOADING boost
     assert _gt_max(sysfs) == 1950  # cap lifted
@@ -422,13 +438,13 @@ def test_gpu_boost_floor_is_rpe_not_rp0(tmp_path):
 
 def test_soft_pl1_applied_at_p_rung_and_cleared_on_release(tmp_path):
     soft = FakeSoftPl1()
-    # Drive to a P rung. Lanes are interleaved (G1 P1 G2 ...) so P1 is step 2.
-    # D2: P1 = min(slider 22 - 1, ceil(22)+1.5) = min(21, 23.5) = 21 (always
-    # below the user slider).
+    # P1 is step 1: the budget is established before the GPU cap, because a cap
+    # without it is re-spent by the CPU. D2: P1 = min(slider 22 - 1,
+    # ceil(22)+1.5) = min(21, 23.5) = 21 (always below the user slider).
     governor, _actuator, _sysfs = _governor_with_gpu(
         tmp_path, tb_config(), [at_target() for _ in range(4)], soft_pl1=soft
     )
-    asyncio.run(governor.run_iterations(2))
+    asyncio.run(governor.run_iterations(1))
     assert soft.value == 21
     # Close restores everything, clearing the soft-PL1 overlay.
     governor.close()
@@ -655,15 +671,16 @@ def test_trim_rungs_cli_flag_maps_to_filter():
 
 def test_telemetry_v3_fields_present_on_target_balance():
     controller = GamePowerController(tb_config())
-    controller.evaluate(at_target())  # step 1 (G1)
-    controller.evaluate(at_target())  # step 2 (P1)
-    decision = controller.evaluate(at_target())  # step 3 (G2)
+    controller.evaluate(at_target())  # step 1 (P1)
+    controller.evaluate(at_target())  # step 2 (G1)
+    controller.evaluate(at_target())  # step 3 (P2)
+    decision = controller.evaluate(at_target())  # step 4 (G2)
     row = json.loads(format_decision_jsonl(at_target(), decision, elapsed_s=1.0))
     assert row["persona"] == "battery"
     # Controller-side telemetry: G2 caps max to int(1950 * 0.78) = 1521; the
     # paired min is data-dependent (applied by the actuator) so it is null here.
     assert row["gpu_freq_caps"] == {"min_mhz": None, "max_mhz": 1521}
-    assert row["trim_rungs_active"] == ["G1", "P1", "G2"]
+    assert row["trim_rungs_active"] == ["P1", "G1", "P2", "G2"]
     assert row["frame_feed_status"] == "live"
     assert row["limiter_state"] == "unknown"
     assert row["boost_active"] is False

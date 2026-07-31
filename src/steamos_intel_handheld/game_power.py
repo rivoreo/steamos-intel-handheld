@@ -1969,7 +1969,14 @@ def _pressure_thresholds(resource: str) -> tuple[float, float]:
 # it. Device evidence (2026-07-31, MSI Claw 8 AI+): G2 (~1521 MHz) breaks 60 FPS
 # in a heavy scene, which under the old G,G,G,P,P,P order made soft-PL1
 # unreachable -- even though a 20 W soft-PL1 held 60 FPS in the same session.
-_BATTERY_RUNGS = ("G1", "P1", "G2", "P2", "G3", "P3", "C1", "C2")
+#
+# P before G, from a 145-sample correlated session (2026-08-01): graphics power
+# against package power correlates only -0.138 while graphics against CPU power
+# is -0.659. A GPU cap on its own does not reduce package power - the CPU
+# re-spends it. The budget is what makes the cap stick, so step 1 establishes the
+# budget and step 2 is the pair (which is also the best point the controlled A/B
+# found: 1500 MHz with 20 W soft-PL1, -3.64 W at better p95).
+_BATTERY_RUNGS = ("P1", "G1", "P2", "G2", "P3", "G3", "C1", "C2")
 _AC_QUIET_RUNGS = _BATTERY_RUNGS
 _AC_PERFORMANCE_RUNGS = ("C1", "C2")
 _DEEP_CPU_CAP_RUNGS = ("S3CAP", "S4CAP")
@@ -3938,7 +3945,7 @@ class GamePowerGovernor:
             "render_busy": getattr(sample, "render_busy", None),
             "c6_ms": getattr(sample, "c6_ms", None),
             "actual_mhz": getattr(sample, "actual_mhz", None),
-            "racing_to_idle": getattr(sample, "racing_to_idle", None),
+            "saturated": getattr(sample, "saturated", None),
         }
 
     def _idle_cap_fps(self) -> int | None:

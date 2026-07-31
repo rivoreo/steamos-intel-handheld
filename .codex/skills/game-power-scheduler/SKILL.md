@@ -25,19 +25,52 @@ improves pacing at equal power is a win even with no energy saving.
 Shape demand before squeezing the ceiling:
 
 1. **Frame limiter** - rendering above target is the largest single waste.
-2. **GPU frequency ceiling** - the iGPU races to max clock whenever budget
-   exists, regardless of whether it helps the frame deadline. Pacing a frame at
-   the lowest clock that meets the deadline beats race-to-idle on V²f grounds.
+2. **GPU frequency ceiling** - in *light* scenes the iGPU races to max clock
+   regardless of whether it helps the frame deadline, and pacing at the lowest
+   clock that meets the deadline beats that on V²f grounds. In heavy scenes it
+   does not: measured 97-98% render utilisation with zero C6, where the clock is
+   high because the work is real and capping only costs frames. Do not assume the
+   race-to-idle story universally.
 3. **Soft PL1** - a reduction-only overlay *under* the user's slider.
 4. **CPU-side (EPP, cgroup, affinity)** - smallest leverage on this platform.
 
-Order matters and is device-evidenced: RAPL is back-pressure, not demand
-shaping. Driving PL1 first makes the GPU controller oscillate and the frame rate
-swing. Shape demand first, then lower the ceiling onto the shaped demand.
+Neither the GPU ceiling nor the package budget works alone, and this is the most
+easily-got-wrong part of the design:
+
+- **A GPU cap on its own does not reduce package power.** Over a 145-sample live
+  session, graphics power against package power correlated only -0.138 while
+  graphics against CPU power was -0.659: the CPU re-spends what the GPU gives up.
+  The budget is the closure that makes the cap stick, not a second-order trim
+  behind it. So the ladder establishes the budget first and pairs the cap onto it.
+- **But do not drive PL1 deep as the primary lever.** RAPL is back-pressure, not
+  demand shaping; pushed toward the knee it makes the GPU controller hunt and the
+  frame rate swing (measured: 17 W gave 51-60 FPS with GT swinging 1250-1950 MHz).
+  A mild budget that leads the cap is fine; a deep one that substitutes for it is
+  not.
+
+There is also a fixed ~7.0 W uncore/fabric floor that none of these actuators
+touch - 35% of a 20 W package. It bounds what any of this can save.
 
 Lanes in the trim ladder are **interleaved, not grouped**. The sequence is
 strictly cumulative, so a rung the scene cannot sustain also strands every rung
 behind it.
+
+## What GPU utilisation is and is not for
+
+The fdinfo render-busy signal does not exist on this platform; the xe PMU
+replaces it. Two things follow from the measurements:
+
+- **Do not use utilisation to choose a frequency.** GT frequency against
+  utilisation correlated -0.916: frequency is the cause and utilisation the
+  effect, since a higher clock finishes the same frame sooner. SLPC already runs
+  that loop and lands utilisation in 0.80-0.97 for most of a session. A
+  utilisation-driven frequency controller would re-derive SLPC's own.
+- **Do use it to detect over-capping.** Utilisation pinned at the ceiling means
+  no slack is left and frames are about to slip - a leading indicator where p95
+  is a lagging one. Measured: at/above ~0.97 the session ran 56.2 FPS against a
+  60 target with p95 19.7 ms; the 0.80-0.97 band held 59.6-59.9 at p95 17.9 ms.
+- `gt-c6-residency` is inert during gameplay (0 ms in all 145 samples). The GT
+  does not enter deep idle between frames, so it cannot detect finishing early.
 
 ## Guards are regression guards
 

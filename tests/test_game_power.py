@@ -2713,9 +2713,10 @@ def test_ladder_steps_up_after_hold_samples():
     decision = controller.evaluate(at_target_sample())
     assert controller.ladder_step == 1
     assert decision.action == GamePowerAction.TARGET_BALANCE_TRIM
-    # V10 battery rung 1 is G1: GPU max_freq capped to rp0 * (1 - 0.12). D6: the
-    # actuation carries the ratio; the actuator derives the per-GT absolute cap.
-    assert decision.actuation == GamePowerActuation(gpu_max_ratio=0.12)
+    # V10 battery rung 1 is P1, the package budget. A GPU cap on its own is
+    # re-spent by the CPU (measured: graphics-vs-package correlation -0.138), so
+    # the budget is established first and the cap follows at step 2.
+    assert decision.actuation == GamePowerActuation(soft_pl1_w=21)
 
 
 def test_above_target_halves_ladder_hold_requirement():
@@ -2731,9 +2732,10 @@ def test_above_target_halves_ladder_hold_requirement():
 
 
 def test_ladder_actuation_folds_battery_rung_sequence():
-    # V10: battery sequence G1 P1 G2 P2 G3 P3 C1 C2 -- lanes interleaved so a
-    # GPU rung the scene cannot sustain does not strand the soft-PL1 lane behind
-    # it (the V9 S3/S4 CPU caps are NOT in this sequence; verdict-gated only).
+    # V10: battery sequence P1 G1 P2 G2 P3 G3 C1 C2. Lanes interleaved so a GPU
+    # rung the scene cannot sustain does not strand the soft-PL1 lane behind it,
+    # and the budget leads because a cap without it does not reduce package power
+    # (the V9 S3/S4 CPU caps are NOT in this sequence; verdict-gated only).
     controller = GamePowerController(
         tb_config(phase_stable_samples=1, ladder_hold_samples=1)
     )
@@ -2741,15 +2743,15 @@ def test_ladder_actuation_folds_battery_rung_sequence():
     for _ in range(8):
         decision = controller.evaluate(at_target_sample())
         steps[controller.ladder_step] = decision.actuation
+    # P1 = min(slider 22 - 1, ceil(median 22) + 1.5) = min(21, 23.5) = 21
+    # (D2: always below the slider).
+    assert steps[1] == GamePowerActuation(soft_pl1_w=21)  # P1
+    # Step 2 is the pair, which is also the best point the controlled A/B found.
     # G rungs cap GPU max_freq at rp0 * (1 - ratio); deepest G wins cumulatively.
     # D6: the fold carries the ratio; the actuator derives per-GT.
-    assert steps[1] == GamePowerActuation(gpu_max_ratio=0.12)  # G1
-    # P1 adds the soft-PL1 overlay = min(slider 22 - 1, ceil(median 22) + 1.5) =
-    # min(21, 23.5) = 21 (D2: always below the slider). Reachable at step 2 now,
-    # i.e. without having to survive G2/G3 first.
     assert steps[2] == GamePowerActuation(gpu_max_ratio=0.12, soft_pl1_w=21)
-    assert steps[3] == GamePowerActuation(gpu_max_ratio=0.22, soft_pl1_w=21)  # G2
-    assert steps[5] == GamePowerActuation(gpu_max_ratio=0.30, soft_pl1_w=20)  # G3
+    assert steps[3] == GamePowerActuation(gpu_max_ratio=0.12, soft_pl1_w=20)  # P2
+    assert steps[5] == GamePowerActuation(gpu_max_ratio=0.22, soft_pl1_w=19)  # P3
     assert steps[6] == GamePowerActuation(gpu_max_ratio=0.30, soft_pl1_w=19)  # P3
     # C1 then C2 fold ecore then pcore EPP on top.
     assert steps[7] == GamePowerActuation(

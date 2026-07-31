@@ -140,24 +140,23 @@ def test_pmu_parser_reads_real_device_output():
     assert sample.render_busy == round(32730852 / 38436310, 4)
     assert sample.c6_ms == 0.0
     assert sample.actual_mhz == 1550.0
-    # Saturated engine with no idle: the work is genuinely there, so capping the
-    # clock would only cost frames.
-    assert sample.racing_to_idle is False
+    # 85% busy: inside the healthy band, still has slack.
+    assert sample.saturated is False
 
 
-def test_pmu_parser_flags_race_to_idle():
+def test_pmu_parser_flags_a_saturated_engine():
     from steamos_intel_handheld.game_power_gpu_pmu import GpuUtilisationSample
 
-    # Clock pinned high, engine less than half busy, a third of the window idle.
-    wasteful = GpuUtilisationSample(
-        render_busy=0.40, c6_ms=330.0, actual_mhz=1950.0, window_s=1.0
+    # No slack left: a deeper cap from here costs frames.
+    pinned = GpuUtilisationSample(
+        render_busy=0.99, c6_ms=0.0, actual_mhz=1350.0, window_s=1.0
     )
-    assert wasteful.racing_to_idle is True
+    assert pinned.saturated is True
 
     unknown = GpuUtilisationSample(
         render_busy=None, c6_ms=None, actual_mhz=1950.0, window_s=1.0
     )
-    assert unknown.racing_to_idle is None
+    assert unknown.saturated is None
 
 
 def test_pmu_parser_returns_none_on_junk():
