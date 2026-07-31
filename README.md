@@ -216,7 +216,7 @@ can hurt frame pacing in some low-TDP scenes:
 --game-power-pcore-max-mhz 3000 \
 --game-power-ecore-max-mhz 2400 \
 --game-power-cpu-cap-core-share-threshold 0.30 \
---game-power-control-file /run/steamos-intel-handheld/game-power-control.json
+--game-power-control-file /var/lib/steamos-intel-handheld/game-power-control.json
 ```
 
 The Game Power Decky panel does not rewrite the systemd service command and

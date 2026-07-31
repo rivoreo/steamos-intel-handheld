@@ -16,7 +16,12 @@ def test_runtime_control_writes_only_safe_public_modes(tmp_path):
     status = game_power_control.set_runtime_mode(path, "automatic", source="decky")
 
     assert status.mode == "automatic"
-    assert status.effective_mode == GamePowerMode.GPU_PRIORITY
+    # "automatic" is the V10 demand-shaping governor; the V9 EPP-only path is
+    # still reachable as the explicit "legacy" mode.
+    assert status.effective_mode == GamePowerMode.TARGET_BALANCE
+    legacy = game_power_control.set_runtime_mode(path, "legacy", source="decky")
+    assert legacy.effective_mode == GamePowerMode.GPU_PRIORITY
+    game_power_control.set_runtime_mode(path, "automatic", source="decky")
     assert status.override_active is True
     payload = json.loads(path.read_text())
     assert payload == {
@@ -99,7 +104,7 @@ def test_runtime_control_clear_fps_target_preserves_mode_override(tmp_path):
     status = game_power_control.clear_fps_target(path)
 
     assert status.mode == "automatic"
-    assert status.effective_mode == GamePowerMode.GPU_PRIORITY
+    assert status.effective_mode == GamePowerMode.TARGET_BALANCE
     assert status.override_active is True
     assert status.fps_target_override.status == "auto"
     assert json.loads(path.read_text()) == {

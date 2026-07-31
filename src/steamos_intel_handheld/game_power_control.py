@@ -20,7 +20,7 @@ from .game_power import (
     GamePowerPersona,
 )
 
-DEFAULT_CONTROL_FILE = Path("/run/steamos-intel-handheld/game-power-control.json")
+DEFAULT_CONTROL_FILE = Path("/var/lib/steamos-intel-handheld/game-power-control.json")
 POLICY_LABEL = "Balanced automatic policy"
 SCHEMA_VERSION = 1
 FPS_TARGET_MIN = 30
@@ -51,7 +51,11 @@ def validate_persona(value: object) -> str:
         )
     return value
 PUBLIC_TO_INTERNAL_MODE = {
-    "automatic": GamePowerMode.GPU_PRIORITY,
+    # "automatic" is the V10 demand-shaping governor (target-balance): hold the
+    # frame target at the lowest power the scene needs. "legacy" keeps the V9
+    # EPP-only gpu-priority path reachable as a fallback.
+    "automatic": GamePowerMode.TARGET_BALANCE,
+    "legacy": GamePowerMode.GPU_PRIORITY,
     "observe": GamePowerMode.OBSERVE,
     "off": GamePowerMode.OFF,
 }

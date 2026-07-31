@@ -50,7 +50,10 @@ def test_power_control_service_enables_game_power_governor_by_default():
     assert "--game-power-pcore-max-mhz 3000" in unit
     assert "--game-power-ecore-max-mhz 2400" in unit
     assert "--game-power-cpu-cap-core-share-threshold 0.30" in unit
-    assert "--game-power-control-file /run/steamos-intel-handheld/game-power-control.json" in unit
+    assert (
+        "--game-power-control-file "
+        "/var/lib/steamos-intel-handheld/game-power-control.json" in unit
+    )
     assert (
         "--game-power-frame-feed-file "
         "/run/user/1000/steamos-intel-handheld/frame-feed.json"
