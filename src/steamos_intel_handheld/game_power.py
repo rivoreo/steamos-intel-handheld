@@ -35,6 +35,11 @@ from .game_power_coloring import (
     is_compositor_role,
     resolve_ledger_actuators,
 )
+from .game_power_frame_target import (
+    AutoTargetEstimator,
+    AutoTargetProposal,
+    divisor_candidates,
+)
 from .game_power_gpu import GpuFreqActuator, discover_gpu_gts
 
 MICROJOULES_PER_JOULE = 1_000_000
@@ -908,7 +913,13 @@ class GamePowerConfig:
     frame_target: FrameTargetTelemetry | None = None
     # Limiter-aware: capped games can report slightly below the target while
     # pacing is still healthy, so p95 carries the quality guard.
-    fps_target_satisfied_headroom_ratio: float = 0.98
+    # A game pinned at its own frame cap averages just under the target (2 s
+    # window: 59.5-60.1 for a 60 cap), so a 0.98 headroom sits inside the noise
+    # band and flags "below target" every few ticks -- which flaps the phase
+    # machine and applies/removes trims every 2-4 s. p95 (baseline-relative,
+    # above) is the real pacing guard; avg_fps only needs to catch genuine
+    # misses, which on this device land at 43-52 FPS against a 60 target.
+    fps_target_satisfied_headroom_ratio: float = 0.95
     fps_target_satisfied_p95_ratio: float = 1.15
     frame_performance_min_samples: int = 12
     runtime_control_health: dict[str, object] | None = None
@@ -937,6 +948,18 @@ class GamePowerConfig:
     ladder_hold_samples: int = 15
     ladder_backoff_s: float = 300.0
     ladder_p95_guard_ratio: float = 1.10
+    # The p95 guard is a *regression* guard, not an absolute-quality guard. It
+    # allows the larger of (target frame time * ladder_p95_guard_ratio) and
+    # (unconstrained baseline p95 * ladder_p95_regression_ratio), so a scene
+    # whose natural p95 already exceeds the ideal frame time can still be
+    # trimmed, while a trim that actually degrades pacing still releases.
+    ladder_p95_baseline_samples: int = 5
+    ladder_p95_regression_ratio: float = 1.08
+    # Consecutive breaching samples before the ladder fast-releases. The frame
+    # feed's 2 s avg_fps carries ~+/-0.7 FPS of noise against a 0.98 headroom
+    # threshold, so a single-sample release resets the ladder (and burns a
+    # backoff) on scene noise rather than on a real regression.
+    ladder_release_samples: int = 2
     ladder_pcore_epp: str = "balance_power"
     ladder_ecore_epp: str = "balance_power"
     ladder_s3_pcore_max_khz: int = 4_000_000
@@ -1055,9 +1078,24 @@ class GamePowerDecision:
     trim_rungs_active: list[str] | None = None
     frame_feed_status: str | None = None
     limiter_state: str | None = None
+    # Pacing guard observability: what the ladder learned as this scene's
+    # unconstrained p95 and the budget it is actually holding against.
+    p95_baseline_ms: float | None = None
+    p95_budget_ms: float | None = None
 
 
-DEFAULT_GAME_POWER_POLICY_VERSION = "game-power-sampling-v1"
+# Mirrors the FPS-target override contract in game_power_control so Auto can
+# never propose a target the control surface would reject.
+AUTO_TARGET_MIN_FPS = 30
+AUTO_TARGET_MAX_FPS = 120
+
+# v2 (2026-07-31): learned hints from v1 are not comparable and are discarded on
+# load. Three things changed underneath them at once: the pacing guards became
+# baseline-relative, the trim ladder interleaved its lanes, and frame-target
+# detection moved to the compositor's own limit atom. v1 entries also carry
+# targets captured while the panel seeded a literal 40 FPS, so their context keys
+# describe a target the user never chose.
+DEFAULT_GAME_POWER_POLICY_VERSION = "game-power-sampling-v2"
 GAME_POWER_HINT_SCHEMA_VERSION = 1
 NON_REUSABLE_FPS_TARGETS = frozenset({"", "unknown", "none-configured", "unlimited"})
 
@@ -1582,6 +1620,7 @@ def classify_game_power_sample(
     sample: GamePowerSample,
     *,
     controller_active: bool = False,
+    p95_budget_ms: float | None = None,
 ) -> GamePowerClassification:
     if config.mode == GamePowerMode.OFF:
         return GamePowerClassification("control-disabled", confidence="high")
@@ -1591,7 +1630,7 @@ def classify_game_power_sample(
         return GamePowerClassification("no-foreground-game", confidence="high")
     if config.target_appid is not None and sample.appid != config.target_appid:
         return GamePowerClassification("non-target-game", confidence="high")
-    if _sample_fps_target_satisfied(config, sample):
+    if _sample_fps_target_satisfied(config, sample, p95_budget_ms=p95_budget_ms):
         return GamePowerClassification(
             "fps-target-satisfied",
             confidence="high",
@@ -1677,7 +1716,20 @@ def _compact_evidence(evidence: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in evidence.items() if value is not None}
 
 
-def _sample_fps_target_satisfied(config: GamePowerConfig, sample: GamePowerSample) -> bool:
+def _sample_fps_target_satisfied(
+    config: GamePowerConfig,
+    sample: GamePowerSample,
+    *,
+    p95_budget_ms: float | None = None,
+) -> bool:
+    """Is the frame target being met?
+
+    ``p95_budget_ms`` overrides the absolute ``target_frame_ms * ratio`` pacing
+    allowance. Callers that have learned the scene's unconstrained p95 pass the
+    baseline-relative budget instead: a healthy 60 FPS scene commonly paces at
+    p95 18-20 ms against a 16.67 ms target, and judging that "not satisfied"
+    flaps the phase machine every tick.
+    """
     target = sample.frame_target
     performance = sample.frame_performance
     if target is None or performance is None:
@@ -1696,10 +1748,14 @@ def _sample_fps_target_satisfied(config: GamePowerConfig, sample: GamePowerSampl
         performance.p95_frame_ms
     ):
         return False
+    budget = (
+        p95_budget_ms
+        if p95_budget_ms is not None
+        else target_frame_ms * config.fps_target_satisfied_p95_ratio
+    )
     return (
         performance.avg_fps >= fps_target * config.fps_target_satisfied_headroom_ratio
-        and performance.p95_frame_ms
-        <= target_frame_ms * config.fps_target_satisfied_p95_ratio
+        and performance.p95_frame_ms <= budget
     )
 
 
@@ -1715,6 +1771,8 @@ def _foreground_cpu_psi_avg10(pressure: PressureTelemetry | None) -> float | Non
 def classify_game_power_phase(
     config: GamePowerConfig,
     sample: GamePowerSample,
+    *,
+    p95_budget_ms: float | None = None,
 ) -> tuple[GamePowerPhase, tuple[str, ...]]:
     """Instantaneous (pre-hysteresis) phase classification (design section 4).
 
@@ -1757,7 +1815,7 @@ def classify_game_power_phase(
     if (
         stalled
         and (high_psi or high_core)
-        and not _sample_fps_target_satisfied(config, sample)
+        and not _sample_fps_target_satisfied(config, sample, p95_budget_ms=p95_budget_ms)
     ):
         loading_reasons.append("frame-feed-stalled")
     if (
@@ -1773,7 +1831,7 @@ def classify_game_power_phase(
     if loading_reasons:
         return GamePowerPhase.LOADING, tuple(loading_reasons)
 
-    if _sample_fps_target_satisfied(config, sample):
+    if _sample_fps_target_satisfied(config, sample, p95_budget_ms=p95_budget_ms):
         if (
             avg_fps is not None
             and fps_target is not None
@@ -1893,7 +1951,12 @@ def _pressure_thresholds(resource: str) -> tuple[float, float]:
 #   C1/C2     ecore then pcore EPP -> balance_power
 # The V9 S3/S4 CPU-frequency caps are dropped from the battery sequence (S4 p95
 # regression, direction 1b) and available only as verdict-gated deep rungs.
-_BATTERY_RUNGS = ("G1", "G2", "G3", "P1", "P2", "P3", "C1", "C2")
+# Lanes are interleaved rather than grouped: the sequence is strictly
+# cumulative, so a rung the scene cannot sustain also strands every rung behind
+# it. Device evidence (2026-07-31, MSI Claw 8 AI+): G2 (~1521 MHz) breaks 60 FPS
+# in a heavy scene, which under the old G,G,G,P,P,P order made soft-PL1
+# unreachable -- even though a 20 W soft-PL1 held 60 FPS in the same session.
+_BATTERY_RUNGS = ("G1", "P1", "G2", "P2", "G3", "P3", "C1", "C2")
 _AC_QUIET_RUNGS = _BATTERY_RUNGS
 _AC_PERFORMANCE_RUNGS = ("C1", "C2")
 _DEEP_CPU_CAP_RUNGS = ("S3CAP", "S4CAP")
@@ -2177,6 +2240,17 @@ class GamePowerController:
         self._ladder_step = 0
         self._ladder_hold = 0
         self._ladder_backoff: dict[int, int] = {}
+        # Unconstrained pacing baseline (p95 observed while the ladder is at
+        # step 0). The absolute target*ratio guard alone is unusable: a healthy
+        # 60 FPS scene routinely paces at p95 18-20 ms against a 16.67 ms
+        # target, so the guard would breach before the ladder ever climbs.
+        self._p95_baseline_window: deque[float] = deque(
+            maxlen=max(1, config.ladder_p95_baseline_samples)
+        )
+        self._p95_baseline: float | None = None
+        self._p95_baseline_appid: str | None = None
+        self._ladder_breach = 0
+        self._miss_confirmed = False
         self._deep_unlocked = False
         self._gpu_deep_unlocked = False
         self._last_actuation: GamePowerActuation | None = None
@@ -2191,6 +2265,7 @@ class GamePowerController:
             self.config,
             sample,
             controller_active=self._active,
+            p95_budget_ms=self._satisfied_budget_ms(sample),
         )
         if self.config.mode == GamePowerMode.OFF:
             return GamePowerDecision(
@@ -2297,7 +2372,11 @@ class GamePowerController:
         self._active_actuators = frozenset()
         self._gated_lanes = self._default_gated_lanes()
         self._verdict_health = self._verdict_ledger_health()
-        raw_phase, reason_codes = classify_game_power_phase(self.config, sample)
+        raw_phase, reason_codes = classify_game_power_phase(
+            self.config,
+            sample,
+            p95_budget_ms=self._satisfied_budget_ms(sample),
+        )
 
         # C1: target-balance only governs the configured target AppID. A
         # different foreground game is NO_GAME posture: restore CPU actuation
@@ -2325,9 +2404,22 @@ class GamePowerController:
                 None,
             )
 
-        prev_committed = self._committed_phase
         phase = self._commit_phase(raw_phase)
-        satisfied = _sample_fps_target_satisfied(self.config, sample)
+        satisfied = self._target_satisfied(sample)
+        # Shared miss streak over the same predicate the ladder releases on
+        # (target miss OR pacing regression). Leaving the at-target band still
+        # releases the ladder immediately (boost fast), but the anti-oscillation
+        # backoff is only earned by a *confirmed* miss -- otherwise one noisy
+        # 2 s window locks a rung out for the whole backoff window.
+        self._update_p95_baseline(sample, self._sample_p95_ms(sample))
+        if satisfied and self._sample_p95_ok(sample):
+            self._ladder_breach = 0
+        else:
+            self._ladder_breach += 1
+        miss_confirmed = self._ladder_breach >= max(
+            1, self.config.ladder_release_samples
+        )
+        self._miss_confirmed = miss_confirmed
 
         if phase == GamePowerPhase.LOADING:
             self._loading_ticks += 1
@@ -2340,25 +2432,32 @@ class GamePowerController:
         ):
             # Leaving the at/above band abandons the ladder position; re-entry
             # always restarts from S0 (backoff timers persist for the session).
-            # C3: if the band was left on a real target miss (below-*), record
-            # backoff for the failed step BEFORE resetting so the anti-oscillation
-            # lock is reachable. UNKNOWN is handled in its own branch (C4a).
+            # C3: on a real target miss (below-*), record backoff for the failed
+            # step BEFORE resetting so the anti-oscillation lock is reachable.
+            # The test is on current state, not on the exit transition: with
+            # release hysteresis the miss is usually confirmed a tick or more
+            # AFTER the band was left, by which point this is no longer the exit
+            # tick. UNKNOWN is handled in its own branch (C4a).
             if (
-                prev_committed
-                in (GamePowerPhase.AT_TARGET, GamePowerPhase.ABOVE_TARGET)
-                and self._ladder_step > 0
+                self._ladder_step > 0
                 and phase
                 in (
                     GamePowerPhase.BELOW_TARGET_CPU_BOUND,
                     GamePowerPhase.BELOW_TARGET_GPU_BOUND,
                 )
-                and not satisfied
+                and miss_confirmed
             ):
                 self._ladder_backoff[self._ladder_step] = (
                     self._tick + self._backoff_samples()
                 )
                 reason_codes = reason_codes + ("ladder-target-miss",)
-            self._ladder_step = 0
+            # An unconfirmed blip still hands power back this tick (the
+            # below-target/unknown handlers own the actuation while we are out
+            # of the band), but the ladder keeps its position so returning to
+            # target resumes the rung instead of re-climbing from zero. A
+            # confirmed miss drops everything.
+            if miss_confirmed:
+                self._ladder_step = 0
             self._ladder_hold = 0
 
         if phase == GamePowerPhase.UNKNOWN:
@@ -2459,7 +2558,7 @@ class GamePowerController:
         self._active_actuators = self._last_active_actuators
         target = sample.frame_target
         target_known = target is not None and target.fps_target is not None
-        if target_known and not satisfied:
+        if target_known and not satisfied and self._miss_confirmed:
             # C4a: below target with no bound signature. Holding a deep trim
             # forever has no escape, so release the ladder (restore CPU state),
             # record backoff for the held step, and report the release honestly.
@@ -2591,12 +2690,10 @@ class GamePowerController:
         performance = sample.frame_performance
         target_frame_ms = target.target_frame_ms if target is not None else None
         p95 = performance.p95_frame_ms if performance is not None else None
-        p95_ok = (
-            target_frame_ms is not None
-            and p95 is not None
-            and p95 <= target_frame_ms * self._p95_guard_ratio()
-        )
-        satisfied = _sample_fps_target_satisfied(self.config, sample)
+        # Baseline + streak are maintained once per tick by the dispatcher.
+        p95_budget_ms = self._p95_budget_ms(target_frame_ms)
+        p95_ok = p95_budget_ms is not None and p95 is not None and p95 <= p95_budget_ms
+        satisfied = self._target_satisfied(sample)
 
         # Gated lane (b) background shaping is allowed at/above target; the deep
         # CPU-frequency-cap rungs need a matching verdict (or profiler flag).
@@ -2649,6 +2746,22 @@ class GamePowerController:
             )
 
         if not satisfied or not p95_ok:
+            breach_code = "ladder-p95-breach" if satisfied else "ladder-target-miss"
+            if not self._miss_confirmed:
+                # Hold the current rungs while the breach is unconfirmed: do not
+                # climb, do not release, do not burn a backoff on noise.
+                self._ladder_hold = 0
+                return self._finalize_target_balance(
+                    GamePowerAction.TARGET_BALANCE_TRIM
+                    if self._ladder_step > 0
+                    else GamePowerAction.TARGET_BALANCE_RELEASE,
+                    f"ladder breach {self._ladder_breach} unconfirmed, holding step "
+                    f"{self._ladder_step}",
+                    classification,
+                    phase,
+                    reason_codes + (breach_code, "ladder-breach-unconfirmed"),
+                    self._ladder_actuation(self._ladder_step),
+                )
             # Fast release (contract 1.4): drop ALL rungs at once, lock the failed
             # step for backoff, and re-climb per the hold rules.
             failed_step = self._ladder_step
@@ -2656,9 +2769,7 @@ class GamePowerController:
                 self._ladder_backoff[failed_step] = self._tick + self._backoff_samples()
             self._ladder_step = 0
             self._ladder_hold = 0
-            codes = reason_codes + (
-                "ladder-p95-breach" if satisfied else "ladder-target-miss",
-            )
+            codes = reason_codes + (breach_code,)
             return self._finalize_target_balance(
                 GamePowerAction.TARGET_BALANCE_RELEASE,
                 "ladder fast release to step 0",
@@ -2736,6 +2847,68 @@ class GamePowerController:
 
     def _backoff_active(self, step: int) -> bool:
         return self._ladder_backoff.get(step, 0) > self._tick
+
+    def _update_p95_baseline(self, sample: GamePowerSample, p95: float | None) -> None:
+        """Learn this scene's pacing while nothing of ours is constraining it.
+
+        Only samples taken at ladder step 0 with no boost active count, so the
+        baseline describes the game, not our own trims. It resets per appid.
+        """
+        if sample.appid != self._p95_baseline_appid:
+            self._p95_baseline_appid = sample.appid
+            self._p95_baseline_window.clear()
+            self._p95_baseline = None
+        if p95 is None or not math.isfinite(p95) or p95 <= 0:
+            return
+        # Step 0 only: anything above it is our own trim, not the scene. The
+        # median over the window absorbs the odd spike sample.
+        if self._ladder_step != 0:
+            return
+        self._p95_baseline_window.append(p95)
+        if len(self._p95_baseline_window) < self._p95_baseline_window.maxlen:
+            return
+        ordered = sorted(self._p95_baseline_window)
+        self._p95_baseline = ordered[len(ordered) // 2]
+
+    def _pacing_budget_ms(
+        self, target_frame_ms: float | None, ratio: float
+    ) -> float | None:
+        if target_frame_ms is None:
+            return None
+        budget = target_frame_ms * ratio
+        if self._p95_baseline is not None:
+            budget = max(
+                budget, self._p95_baseline * self.config.ladder_p95_regression_ratio
+            )
+        return budget
+
+    def _p95_budget_ms(self, target_frame_ms: float | None) -> float | None:
+        return self._pacing_budget_ms(target_frame_ms, self._p95_guard_ratio())
+
+    @staticmethod
+    def _sample_p95_ms(sample: GamePowerSample) -> float | None:
+        performance = sample.frame_performance
+        return performance.p95_frame_ms if performance is not None else None
+
+    def _sample_p95_ok(self, sample: GamePowerSample) -> bool:
+        target = sample.frame_target
+        target_frame_ms = target.target_frame_ms if target is not None else None
+        budget = self._p95_budget_ms(target_frame_ms)
+        p95 = self._sample_p95_ms(sample)
+        return budget is not None and p95 is not None and p95 <= budget
+
+    def _satisfied_budget_ms(self, sample: GamePowerSample) -> float | None:
+        target = sample.frame_target
+        target_frame_ms = target.target_frame_ms if target is not None else None
+        return self._pacing_budget_ms(
+            target_frame_ms, self.config.fps_target_satisfied_p95_ratio
+        )
+
+    def _target_satisfied(self, sample: GamePowerSample) -> bool:
+        """``_sample_fps_target_satisfied`` against the baseline-aware budget."""
+        return _sample_fps_target_satisfied(
+            self.config, sample, p95_budget_ms=self._satisfied_budget_ms(sample)
+        )
 
     def _p95_guard_ratio(self) -> float:
         if self.config.persona == GamePowerPersona.AC_QUIET:
@@ -2924,6 +3097,15 @@ class GamePowerController:
                 else None
             ),
             limiter_state="unknown",
+            p95_baseline_ms=_round_or_none(self._p95_baseline),
+            p95_budget_ms=_round_or_none(
+                self._p95_budget_ms(
+                    self._current_sample.frame_target.target_frame_ms
+                    if self._current_sample is not None
+                    and self._current_sample.frame_target is not None
+                    else None
+                )
+            ),
         )
 
     def _build_color_ledger_json(self) -> dict[str, object] | None:
@@ -3026,7 +3208,7 @@ class GamePowerController:
         return self._ladder_step
 
     def _sample_supports_gpu_priority(self, sample: GamePowerSample) -> bool:
-        if _sample_fps_target_satisfied(self.config, sample):
+        if self._target_satisfied(sample):
             return False
         if sample.appid is None:
             return False
@@ -3335,6 +3517,9 @@ class GamePowerGovernor:
         gpu_actuator: object | None = None,
         soft_pl1_actuator: object | None = None,
         frame_feed_reader: object | None = None,
+        auto_target_estimator: AutoTargetEstimator | None = None,
+        refresh_hz_provider: Callable[[], float | None] | None = None,
+        limiter_writer: Callable[[int | None], bool] | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -3347,6 +3532,14 @@ class GamePowerGovernor:
         self.gpu_actuator = gpu_actuator
         self.soft_pl1_actuator = soft_pl1_actuator
         self.frame_feed_reader = frame_feed_reader
+        # Auto frame-target estimation is observe-only until the cap writer lands;
+        # publishing the proposal lets it be validated against real sessions.
+        self.auto_target_estimator = auto_target_estimator
+        self.refresh_hz_provider = refresh_hz_provider
+        self.limiter_writer = limiter_writer
+        self._auto_target_proposal: AutoTargetProposal | None = None
+        # The frame cap we applied, so it can be cleared on every restore path.
+        self._applied_limiter_fps: int | None = None
         self.output_format = output_format
         self.config_provider = config_provider
         self.sleep = sleep
@@ -3638,12 +3831,113 @@ class GamePowerGovernor:
             elapsed_s=time.monotonic(),
             learning=self._runtime_learning_state(),
         )
+        payload["auto_target"] = self._observe_auto_target(sample, decision)
         try:
             write_runtime_snapshot(self.runtime_snapshot_path, payload)
         except OSError as exc:
             print(f"game-power: runtime snapshot write failed: {exc}", file=sys.stderr)
 
+    def _observe_auto_target(
+        self, sample: GamePowerSample, decision: GamePowerDecision
+    ) -> dict[str, object]:
+        """Feed the Auto frame-target estimator and report its latest proposal.
+
+        Observe-only for now: the proposal is published so it can be validated
+        against real sessions before anything acts on it. Acting on it is gated
+        on battery per the frame-cap authority boundary.
+        """
+        estimator = self.auto_target_estimator
+        if estimator is None:
+            return {"status": "disabled"}
+        target = sample.frame_target
+        performance = sample.frame_performance
+        phase = decision.phase.value if decision.phase is not None else None
+        refresh_hz = self.refresh_hz_provider() if self.refresh_hz_provider else None
+        proposal = estimator.observe(
+            appid=sample.appid,
+            target_fps=target.fps_target if target is not None else None,
+            avg_fps=performance.avg_fps if performance is not None else None,
+            refresh_hz=refresh_hz,
+            below_target=phase
+            in ("below-target-cpu-bound", "below-target-gpu-bound"),
+            trims_active=bool(decision.trim_rungs_active),
+            min_fps=AUTO_TARGET_MIN_FPS,
+            max_fps=AUTO_TARGET_MAX_FPS,
+        )
+        if proposal is not None:
+            self._auto_target_proposal = proposal
+        latest = self._auto_target_proposal
+        applied, cap_reason = self._maybe_apply_frame_cap(sample, latest)
+        return {
+            "status": "observing",
+            "cap_applied_fps": applied,
+            "cap_reason": cap_reason,
+            "refresh_hz": refresh_hz,
+            "candidates": list(
+                divisor_candidates(
+                    refresh_hz,
+                    min_fps=AUTO_TARGET_MIN_FPS,
+                    max_fps=AUTO_TARGET_MAX_FPS,
+                )
+            ),
+            "drops_this_session": estimator.drops_this_session,
+            "proposal": (
+                None
+                if latest is None
+                else {
+                    "fps": latest.fps,
+                    "reason": latest.reason,
+                    "sustainable_fps": latest.sustainable_fps,
+                    "samples": latest.samples,
+                }
+            ),
+        }
+
+    # Personas allowed to write a real frame cap. Plugged-in performance release
+    # never caps; quiet is an explicit opt-in to trading frames for calm.
+    _CAP_PERSONAS = (GamePowerPersona.BATTERY, GamePowerPersona.AC_QUIET)
+
+    def _maybe_apply_frame_cap(
+        self, sample: GamePowerSample, proposal: AutoTargetProposal | None
+    ) -> tuple[int | None, str]:
+        """Write the Auto frame cap when the persona and user intent allow it.
+
+        Reduction-only overlay: the user's own limit is the higher layer, and
+        clearing ours returns to it. Never applied over a manual target - if the
+        user picked a number, that is the answer.
+        """
+        if self.limiter_writer is None:
+            return self._applied_limiter_fps, "no-writer"
+        if self.config.persona not in self._CAP_PERSONAS:
+            return self._clear_frame_cap("persona-performance")
+        target = sample.frame_target
+        if target is not None and target.source == "manual":
+            return self._clear_frame_cap("manual-target")
+        if proposal is None:
+            return self._applied_limiter_fps, "no-proposal"
+        if proposal.fps == self._applied_limiter_fps:
+            return self._applied_limiter_fps, "already-applied"
+        # Only ever downward: capping above the user's own limit would be an
+        # increase we have no authority to make.
+        current = target.fps_target if target is not None else None
+        if current is not None and proposal.fps >= current:
+            return self._applied_limiter_fps, "not-a-reduction"
+        if not self.limiter_writer(proposal.fps):
+            return self._applied_limiter_fps, "write-failed"
+        self._applied_limiter_fps = proposal.fps
+        return self._applied_limiter_fps, proposal.reason
+
+    def _clear_frame_cap(self, reason: str) -> tuple[int | None, str]:
+        if self._applied_limiter_fps is None or self.limiter_writer is None:
+            return None, reason
+        if self.limiter_writer(None):
+            self._applied_limiter_fps = None
+        return self._applied_limiter_fps, reason
+
     def restore(self) -> GamePowerActuatorOutcome:
+        # Our frame cap is one of our own reductions, so every restore path has
+        # to lift it too, not just the CPU/GPU/PL1 actuators.
+        self._clear_frame_cap("restore")
         # V10: the GPU envelope and soft-PL1 overlay are our own reductions and
         # must be lifted on every restore path (mode change / close / RESTORE /
         # deactivation), readback-verified and fail-closed like the CPU one.
@@ -4334,6 +4628,8 @@ def _apply_v10_additive_fields(
     payload["trim_rungs_active"] = list(decision.trim_rungs_active or [])
     payload["frame_feed_status"] = decision.frame_feed_status
     payload["limiter_state"] = decision.limiter_state or "unknown"
+    payload["p95_baseline_ms"] = decision.p95_baseline_ms
+    payload["p95_budget_ms"] = decision.p95_budget_ms
 
 
 def runtime_snapshot_payload(

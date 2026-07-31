@@ -2731,8 +2731,9 @@ def test_above_target_halves_ladder_hold_requirement():
 
 
 def test_ladder_actuation_folds_battery_rung_sequence():
-    # V10: battery sequence G1 G2 G3 P1 P2 P3 C1 C2 (the V9 S3/S4 CPU caps are
-    # NOT in this sequence; they are verdict-gated deep rungs only).
+    # V10: battery sequence G1 P1 G2 P2 G3 P3 C1 C2 -- lanes interleaved so a
+    # GPU rung the scene cannot sustain does not strand the soft-PL1 lane behind
+    # it (the V9 S3/S4 CPU caps are NOT in this sequence; verdict-gated only).
     controller = GamePowerController(
         tb_config(phase_stable_samples=1, ladder_hold_samples=1)
     )
@@ -2741,12 +2742,14 @@ def test_ladder_actuation_folds_battery_rung_sequence():
         decision = controller.evaluate(at_target_sample())
         steps[controller.ladder_step] = decision.actuation
     # G rungs cap GPU max_freq at rp0 * (1 - ratio); deepest G wins cumulatively.
-    # D6: the fold carries the ratio (G3 -> 0.30); the actuator derives per-GT.
-    assert steps[3] == GamePowerActuation(gpu_max_ratio=0.30)
+    # D6: the fold carries the ratio; the actuator derives per-GT.
+    assert steps[1] == GamePowerActuation(gpu_max_ratio=0.12)  # G1
     # P1 adds the soft-PL1 overlay = min(slider 22 - 1, ceil(median 22) + 1.5) =
-    # min(21, 23.5) = 21 (D2: always below the slider) while the deepest G rung
-    # (G3 -> 0.30) stays applied.
-    assert steps[4] == GamePowerActuation(gpu_max_ratio=0.30, soft_pl1_w=21)
+    # min(21, 23.5) = 21 (D2: always below the slider). Reachable at step 2 now,
+    # i.e. without having to survive G2/G3 first.
+    assert steps[2] == GamePowerActuation(gpu_max_ratio=0.12, soft_pl1_w=21)
+    assert steps[3] == GamePowerActuation(gpu_max_ratio=0.22, soft_pl1_w=21)  # G2
+    assert steps[5] == GamePowerActuation(gpu_max_ratio=0.30, soft_pl1_w=20)  # G3
     assert steps[6] == GamePowerActuation(gpu_max_ratio=0.30, soft_pl1_w=19)  # P3
     # C1 then C2 fold ecore then pcore EPP on top.
     assert steps[7] == GamePowerActuation(
@@ -2784,6 +2787,11 @@ def test_ladder_fast_release_drops_all_rungs_on_p95_breach():
     assert controller.ladder_step == 3
     # p95 breach but still fps-target-satisfied (guard 1.10 < ratio <= 1.15)
     breach = at_target_sample(avg_fps=63.0, p95=19.0)
+    # First breach is unconfirmed: hold the rungs rather than resetting on a
+    # single noisy 2 s window (ladder_release_samples).
+    first = controller.evaluate(breach)
+    assert controller.ladder_step == 3
+    assert "ladder-breach-unconfirmed" in first.phase_reason_codes
     decision = controller.evaluate(breach)
     assert controller.ladder_step == 0
     assert decision.action == GamePowerAction.TARGET_BALANCE_RELEASE
@@ -2795,6 +2803,8 @@ def test_ladder_backoff_blocks_reentry_of_failed_step():
         tb_config(phase_stable_samples=1, ladder_hold_samples=1, ladder_backoff_s=1000.0)
     )
     _drive_to_step(controller, 3)
+    # Two consecutive breaches are required before the fast release fires.
+    controller.evaluate(at_target_sample(avg_fps=63.0, p95=19.0))
     controller.evaluate(at_target_sample(avg_fps=63.0, p95=19.0))  # fast release 3 -> 0
     assert controller.ladder_step == 0
     # Climb: 0 -> 1 -> 2, then blocked at 2 because step 3 is in backoff.
@@ -2895,6 +2905,12 @@ def test_c3_ladder_records_backoff_on_real_target_miss():
     _drive_to_step(controller, 3)
     assert controller.ladder_step == 3
     miss = phase_sample(avg_fps=50.0, p95=25.0, render_busy=0.75, age=100.0)
+    # Leaving the band on the first miss hands power back but keeps the ladder
+    # position (unconfirmed); the backoff is only earned once the miss repeats.
+    first = controller.evaluate(miss)
+    assert first.phase == GamePowerPhase.BELOW_TARGET_GPU_BOUND
+    assert "ladder-target-miss" not in first.phase_reason_codes
+    assert controller.ladder_step == 3
     decision = controller.evaluate(miss)
     assert decision.phase == GamePowerPhase.BELOW_TARGET_GPU_BOUND
     assert "ladder-target-miss" in decision.phase_reason_codes
@@ -2917,6 +2933,10 @@ def test_c4a_unknown_below_target_releases_ladder_and_records_backoff():
     unknown = phase_sample(
         avg_fps=50.0, p95=25.0, render_busy=0.5, uncore_w=2.0, core_w=4.0, age=100.0
     )
+    # Same confirmation rule in the UNKNOWN branch (C4a).
+    first = controller.evaluate(unknown)
+    assert first.phase == GamePowerPhase.UNKNOWN
+    assert controller.ladder_step == 4
     decision = controller.evaluate(unknown)
     assert decision.phase == GamePowerPhase.UNKNOWN
     assert decision.action == GamePowerAction.TARGET_BALANCE_RELEASE

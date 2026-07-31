@@ -422,12 +422,13 @@ def test_gpu_boost_floor_is_rpe_not_rp0(tmp_path):
 
 def test_soft_pl1_applied_at_p_rung_and_cleared_on_release(tmp_path):
     soft = FakeSoftPl1()
-    # Drive to a P rung (step 4 = P1). D2: P1 = min(slider 22 - 1, ceil(22)+1.5)
-    # = min(21, 23.5) = 21 (always below the user slider).
+    # Drive to a P rung. Lanes are interleaved (G1 P1 G2 ...) so P1 is step 2.
+    # D2: P1 = min(slider 22 - 1, ceil(22)+1.5) = min(21, 23.5) = 21 (always
+    # below the user slider).
     governor, _actuator, _sysfs = _governor_with_gpu(
         tmp_path, tb_config(), [at_target() for _ in range(4)], soft_pl1=soft
     )
-    asyncio.run(governor.run_iterations(4))
+    asyncio.run(governor.run_iterations(2))
     assert soft.value == 21
     # Close restores everything, clearing the soft-PL1 overlay.
     governor.close()
@@ -588,6 +589,8 @@ def test_ac_quiet_uses_wider_p95_guard():
     # (1.10 -> 18.33 ms), while the ac-quiet guard (1.20 -> 20.0 ms) holds.
     battery = GamePowerController(tb_config(persona=GamePowerPersona.BATTERY))
     battery.evaluate(at_target())  # step 1
+    # Release takes two consecutive breaching samples (ladder_release_samples).
+    battery.evaluate(at_target(p95=18.5))
     d = battery.evaluate(at_target(p95=18.5))
     assert d.action == GamePowerAction.TARGET_BALANCE_RELEASE  # guard 1.10 -> breach
 
@@ -653,13 +656,14 @@ def test_trim_rungs_cli_flag_maps_to_filter():
 def test_telemetry_v3_fields_present_on_target_balance():
     controller = GamePowerController(tb_config())
     controller.evaluate(at_target())  # step 1 (G1)
-    decision = controller.evaluate(at_target())  # step 2 (G2)
+    controller.evaluate(at_target())  # step 2 (P1)
+    decision = controller.evaluate(at_target())  # step 3 (G2)
     row = json.loads(format_decision_jsonl(at_target(), decision, elapsed_s=1.0))
     assert row["persona"] == "battery"
     # Controller-side telemetry: G2 caps max to int(1950 * 0.78) = 1521; the
     # paired min is data-dependent (applied by the actuator) so it is null here.
     assert row["gpu_freq_caps"] == {"min_mhz": None, "max_mhz": 1521}
-    assert row["trim_rungs_active"] == ["G1", "G2"]
+    assert row["trim_rungs_active"] == ["G1", "P1", "G2"]
     assert row["frame_feed_status"] == "live"
     assert row["limiter_state"] == "unknown"
     assert row["boost_active"] is False

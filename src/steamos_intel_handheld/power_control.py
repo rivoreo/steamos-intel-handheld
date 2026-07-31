@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from enum import Enum
@@ -44,6 +44,8 @@ from steamos_intel_handheld.game_power import (
     read_kernel_release,
     topology_fingerprint,
 )
+
+from .game_power_frame_target import AutoTargetEstimator
 
 BUS_NAME = "org.rivoreo.SteamOSManager.PowerControl"
 OBJ_PATH = "/org/rivoreo/SteamOSManager/PowerControl"
@@ -1221,7 +1223,9 @@ def build_game_power_governor(
         sysfs_root=args.sysfs_root,
         proc_root="/proc",
         poll_s=config.poll_s,
-        frame_target_provider=_build_frame_target_provider(control_file),
+        frame_target_provider=_build_frame_target_provider(
+            control_file, session_user=args.user
+        ),
         frame_feed_reader=frame_feed_reader,
         gpu_rp0_mhz=gpu_rp0_mhz,
         gpu_rpe_mhz=gpu_rpe_mhz,
@@ -1254,6 +1258,9 @@ def build_game_power_governor(
         gpu_actuator=gpu_actuator,
         soft_pl1_actuator=backend,
         frame_feed_reader=frame_feed_reader,
+        auto_target_estimator=AutoTargetEstimator(poll_s=config.poll_s),
+        refresh_hz_provider=lambda: discover_panel_refresh_hz(args.user),
+        limiter_writer=build_limiter_writer(args.user),
         config_provider=config_provider,
         hint_store=hint_store,
         hint_context_provider=_build_game_power_hint_context_provider(args, backend),
@@ -1305,6 +1312,7 @@ def _build_frame_target_provider(
     control_file: Path | None,
     *,
     proc_root: str | Path = "/proc",
+    session_user: str = "deck",
 ) -> Callable[[], FrameTargetTelemetry | None]:
     def provider() -> FrameTargetTelemetry | None:
         if control_file is not None:
@@ -1316,9 +1324,227 @@ def _build_frame_target_provider(
                     source="manual",
                     confidence="high",
                 )
+        # The QAM per-game FPS limit is published as the GAMESCOPE_FPS_LIMIT
+        # root-window atom, not on gamescope's argv, so the atom is the primary
+        # auto-detect source. argv parsing stays as the fallback for sessions
+        # launched with an explicit -r/--framerate-limit.
+        target = discover_gamescope_fps_limit_atom(session_user)
+        if target is not None:
+            return target
         return discover_gamescope_frame_target(proc_root)
 
     return provider
+
+
+# gamescope's Xwayland rejects root (X local-client auth compares peer uid to
+# the server uid), so the atom read is demoted to the session user.
+#
+# ``setpriv``, not ``runuser``: runuser opens a PAM session per call, and each one
+# writes two journal lines. At the governor's 2 s poll that is ~86k journal lines
+# a day for a value that only changes when the user touches the QAM slider.
+# setpriv drops privileges without PAM and is ~10x cheaper (3 ms vs 33 ms).
+GAMESCOPE_FPS_LIMIT_ATOM = "GAMESCOPE_FPS_LIMIT"
+_FPS_LIMIT_ATOM_DISPLAYS = (":0", ":1")
+# The limit is user-initiated, so a stale read costs nothing but a few seconds of
+# reaction time; re-reading every poll would spawn a process 43k times a day.
+FPS_LIMIT_ATOM_CACHE_S = 10.0
+
+
+@dataclass
+class _AtomCache:
+    """Last successful read of one root-window atom, with its timestamp."""
+
+    value: object | None = None
+    read_at: float | None = None
+
+    def fresh(self, now: float, ttl_s: float) -> bool:
+        return self.read_at is not None and (now - self.read_at) < ttl_s
+
+
+_FPS_LIMIT_ATOM_CACHE = _AtomCache()
+
+
+def discover_gamescope_fps_limit_atom(
+    user: str = "deck",
+    *,
+    displays: Sequence[str] = _FPS_LIMIT_ATOM_DISPLAYS,
+    runner: Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"] | None = None,
+    cache: _AtomCache | None = None,
+    cache_ttl_s: float = FPS_LIMIT_ATOM_CACHE_S,
+    clock: Callable[[], float] = time.monotonic,
+) -> FrameTargetTelemetry | None:
+    cache = _FPS_LIMIT_ATOM_CACHE if cache is None else cache
+    now = clock()
+    if cache.fresh(now, cache_ttl_s):
+        cached = cache.value
+        return cached if isinstance(cached, FrameTargetTelemetry) else None
+    raw = _read_root_atom(
+        GAMESCOPE_FPS_LIMIT_ATOM, user, displays=displays, runner=runner
+    )
+    found = frame_target_from_fps_limit_atom(raw) if raw is not None else None
+    cache.value = found
+    cache.read_at = now
+    return found
+
+
+def _read_root_atom(
+    atom: str,
+    user: str,
+    *,
+    displays: Sequence[str],
+    runner: Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"] | None = None,
+) -> str | None:
+    """Read one X root-window atom as the session user, or None."""
+    run = runner or (
+        lambda cmd: subprocess.run(
+            cmd, check=False, capture_output=True, text=True, timeout=2.0
+        )
+    )
+    try:
+        uid = _uid_for_user(user)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    for display in displays:
+        try:
+            result = run(
+                [
+                    "setpriv",
+                    f"--reuid={uid}",
+                    f"--regid={uid}",
+                    "--clear-groups",
+                    "env",
+                    f"DISPLAY={display}",
+                    f"XDG_RUNTIME_DIR=/run/user/{uid}",
+                    "xprop",
+                    "-root",
+                    atom,
+                ]
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout
+    return None
+
+
+def build_limiter_writer(user: str = "deck") -> Callable[[int | None], bool]:
+    """Write the gamescope frame cap as the session user.
+
+    gamescopectl talks to the compositor over the session's own channel, so the
+    daemon cannot call it directly as root. ``None`` clears our overlay, which
+    returns rendering to whatever limit the user set themselves.
+    """
+
+    def write(fps: int | None) -> bool:
+        try:
+            uid = _uid_for_user(user)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return False
+        value = 0 if fps is None else int(fps)
+        try:
+            result = subprocess.run(
+                [
+                    "setpriv",
+                    f"--reuid={uid}",
+                    f"--regid={uid}",
+                    "--clear-groups",
+                    "env",
+                    f"XDG_RUNTIME_DIR=/run/user/{uid}",
+                    "DISPLAY=:0",
+                    game_power_control.GAMESCOPECTL_BIN,
+                    game_power_control.GAMESCOPECTL_SET_LIMIT_COMMAND,
+                    str(value),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if result.returncode != 0:
+            print(
+                f"game-power: frame cap write failed: {result.stderr.strip()}",
+                file=sys.stderr,
+            )
+            return False
+        return True
+
+    return write
+
+
+GAMESCOPE_REFRESH_ATOM = "GAMESCOPE_DISPLAY_REFRESH_RATE_FEEDBACK"
+_REFRESH_ATOM_CACHE = _AtomCache()
+
+
+def discover_panel_refresh_hz(
+    user: str = "deck",
+    *,
+    displays: Sequence[str] = _FPS_LIMIT_ATOM_DISPLAYS,
+    runner: Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"] | None = None,
+    cache: _AtomCache | None = None,
+    cache_ttl_s: float = FPS_LIMIT_ATOM_CACHE_S,
+    clock: Callable[[], float] = time.monotonic,
+) -> float | None:
+    """Current panel refresh rate, as gamescope reports it.
+
+    Auto frame targets must be exact divisors of this, so the value has to come
+    from what the compositor actually set rather than from the EDID's range.
+    Same demoted, cached read path as the FPS-limit atom.
+    """
+    cache = _REFRESH_ATOM_CACHE if cache is None else cache
+    now = clock()
+    if cache.fresh(now, cache_ttl_s):
+        cached = cache.value
+        return cached if isinstance(cached, float) else None
+    raw = _read_root_atom(
+        GAMESCOPE_REFRESH_ATOM, user, displays=displays, runner=runner
+    )
+    value = _cardinal_from_atom(raw) if raw is not None else None
+    cache.value = value
+    cache.read_at = now
+    return value
+
+
+def _cardinal_from_atom(raw: str) -> float | None:
+    _, separator, value = raw.strip().partition("=")
+    if not separator:
+        return None
+    try:
+        parsed = float(value.strip().split(",")[0])
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def frame_target_from_fps_limit_atom(raw: str) -> FrameTargetTelemetry | None:
+    """Parse ``GAMESCOPE_FPS_LIMIT(CARDINAL) = 60`` into a frame target.
+
+    0 (and the "no such atom" reply) mean the user set no limit; that is
+    reported as unlimited rather than a target so the governor keeps degrading
+    to NO_TARGET instead of inventing one.
+    """
+    text = raw.strip()
+    if not text or "no such atom" in text.lower() or "not found" in text.lower():
+        return None
+    _, separator, value = text.partition("=")
+    if not separator:
+        return None
+    try:
+        fps = float(value.strip().split(",")[0])
+    except ValueError:
+        return None
+    if fps <= 0:
+        return FrameTargetTelemetry(
+            fps_target=None,
+            source="gamescope-unlimited",
+            confidence="high",
+        )
+    return FrameTargetTelemetry(
+        fps_target=round(fps, 3),
+        source="gamescope-atom",
+        confidence="high",
+    )
 
 
 def discover_gamescope_frame_target(
