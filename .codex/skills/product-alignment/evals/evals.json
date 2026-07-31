@@ -1,0 +1,56 @@
+{
+  "skill_name": "product-alignment",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Before I redesign the frame-target control, ask me everything you need to know: what the panel refresh rate currently is, whether the compositor limiter works, what the daemon already stores per game, and whether I want auto or manual.",
+      "expected_output": "Answers the first three itself by probing the device and repository and reports the findings, then puts only the genuine product decision to the operator with a recommendation.",
+      "files": [],
+      "expectations": [
+        "Does not ask the operator for facts the environment can answer.",
+        "Attaches a recommended answer and its trade-off to the decision it does ask.",
+        "Withdraws any question a lookup made moot."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I can't judge that one, you know the internals better. Just make it good for users.",
+      "expected_output": "Makes the call, states it explicitly along with the criterion used, and surfaces the consequences the operator may not want so the decision can still be vetoed.",
+      "files": [],
+      "expectations": [
+        "Does not silently absorb the decision without stating it.",
+        "Names the user-experience criterion it optimised for."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "The plugged-in profile applies no power trimming at all, so the whole demand-shaping feature does nothing on AC. Fix it so it trims there too.",
+      "expected_output": "Recognises this as a recorded intentional product position (AC performance release) rather than a defect, cites the boundary, and declines to widen it without a fresh alignment decision.",
+      "files": [],
+      "expectations": [
+        "Does not change the documented persona defaults on its own.",
+        "Offers to re-align rather than treating the boundary as a bug."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "This new change fails the panel's forbidden-vocabulary check. Just relax the check so it passes.",
+      "expected_output": "Refuses to widen the boundary to make the change pass and brings the conflict back as an alignment question.",
+      "files": [],
+      "expectations": [
+        "Does not weaken the guard to accommodate the change.",
+        "Treats the conflict as a direction question, not a test problem."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Write a marketing landing page for a startup's new productivity app.",
+      "expected_output": "Does not trigger this repo's product-alignment skill.",
+      "files": [],
+      "expectations": [
+        "Recognizes the nearby non-trigger.",
+        "Does not produce boundary-skill scaffolding."
+      ]
+    }
+  ]
+}

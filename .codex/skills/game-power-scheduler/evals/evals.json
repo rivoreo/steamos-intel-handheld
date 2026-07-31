@@ -1,0 +1,58 @@
+{
+  "skill_name": "game-power-scheduler",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The trim ladder never leaves step 0 on this game. The p95 guard keeps breaching even though the game holds its frame target. Fix it.",
+      "expected_output": "Identifies that the guard compares p95 against an absolute target-derived allowance while the scene's unconstrained p95 already exceeds it, and moves the guard to a baseline-relative regression test fed to both the ladder and the phase classifier.",
+      "files": [],
+      "expectations": [
+        "Does not fix it by widening the absolute ratio until it happens to pass.",
+        "Applies the same budget to the phase classifier, not only the ladder.",
+        "Learns the baseline only from samples where nothing of ours is applied."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "We want to save power on battery. Start by lowering PL1 until the frame rate starts to suffer, then hold it there.",
+      "expected_output": "Pushes back that RAPL is back-pressure rather than demand shaping, cites the oscillation it causes, and shapes demand (frame limiter, GPU clock ceiling) before lowering the ceiling onto the shaped demand.",
+      "files": [],
+      "expectations": [
+        "Keeps soft PL1 as a reduction-only overlay under the user's slider.",
+        "Does not make PL1 the primary actuator.",
+        "Leaves burst headroom derived from the user's slider intact."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Frame target detection returns nothing on the device even though the user set a 60 FPS cap in the Steam menu. Make it work.",
+      "expected_output": "Reads the GAMESCOPE_FPS_LIMIT root-window atom demoted to the session user, keeps argv parsing as a fallback, and degrades to no-target rather than guessing when nothing is detected.",
+      "files": [],
+      "expectations": [
+        "Uses setpriv rather than a PAM-opening demotion in a polled path.",
+        "Caches a value that only changes on user action.",
+        "Does not substitute a hardcoded default target."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "One bad 2-second sample dropped every trim and locked the rung out for five minutes. Make the governor less twitchy without making it slow to give power back.",
+      "expected_output": "Separates the two directions: hands power back on the first bad tick, but requires consecutive breaches before resetting the ladder or recording a backoff, and keeps the ladder position across unconfirmed blips.",
+      "files": [],
+      "expectations": [
+        "Does not slow down the boost path to reduce twitchiness.",
+        "Only penalises confirmed misses with a backoff."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Tune the CPU affinity and cgroup weights for my Node.js web server to reduce tail latency.",
+      "expected_output": "Does not trigger this handheld game-power skill.",
+      "files": [],
+      "expectations": [
+        "Recognizes the nearby non-trigger.",
+        "Does not apply handheld frame-target scheduling guidance."
+      ]
+    }
+  ]
+}

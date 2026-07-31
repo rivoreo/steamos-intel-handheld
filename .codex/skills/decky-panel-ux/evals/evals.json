@@ -1,0 +1,56 @@
+{
+  "skill_name": "decky-panel-ux",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Add the new ladder step, active rungs and gated-lane states to the Game Power panel so I can see what the scheduler is doing.",
+      "expected_output": "Puts the readouts inside the default-off technical section rather than the always-visible panel, and keeps the top of the panel to a plain status sentence and the primary control.",
+      "files": [],
+      "expectations": [
+        "Does not add scheduler vocabulary to the always-visible panel.",
+        "Does not make the toggle default to on."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "The FPS target slider should default to 40 so there is always a sensible starting value.",
+      "expected_output": "Refuses to seed a literal, explains that a hardcoded default renders as a real target the user never chose and one press commits it, and instead starts empty and displays the detected value.",
+      "files": [],
+      "expectations": [
+        "Keeps the control's bounds sourced from the backend contract.",
+        "Does not introduce a numeric literal as the initial target."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Expose the daemon's mode and persona as two separate controls in the panel so users have full control.",
+      "expected_output": "Collapses them into one user-facing choice because persona silently does nothing unless mode is automatic, and maps the single selection back to the internal pair.",
+      "files": [],
+      "expectations": [
+        "Does not expose an interaction matrix to the user.",
+        "Keeps policy in the daemon rather than the frontend."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Add a percentage input for the power budget to the panel using a plain HTML input so it is quick.",
+      "expected_output": "Uses a gamepad-focusable Decky component instead of a raw HTML input, and questions whether the control belongs in the player-facing panel at all.",
+      "files": [],
+      "expectations": [
+        "Does not add a raw HTML form control.",
+        "Ships both locales for any new copy.",
+        "Rebuilds the bundle in the same change."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Design a settings page for a desktop Electron admin dashboard with a dense metrics table.",
+      "expected_output": "Does not trigger this Decky QAM panel skill.",
+      "files": [],
+      "expectations": [
+        "Recognizes the nearby non-trigger.",
+        "Does not apply handheld gamepad panel constraints."
+      ]
+    }
+  ]
+}
