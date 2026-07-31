@@ -1,11 +1,14 @@
 import {
   ButtonItem,
+  DropdownItem,
+  Field,
   PanelSection,
   PanelSectionRow,
+  ToggleField,
   staticClasses,
 } from "@decky/ui";
 import { callable, definePlugin } from "@decky/api";
-import { FC, useEffect, useState } from "react";
+import { FC, useEffect, useRef, useState } from "react";
 import { FaGamepad } from "react-icons/fa";
 
 type TargetState = {
@@ -110,8 +113,24 @@ type RuntimeSnapshot = {
   trim_rungs_active?: string[] | null;
   frame_feed_status?: string | null;
   limiter_state?: string | null;
+  p95_baseline_ms?: number | null;
+  p95_budget_ms?: number | null;
+  auto_target?: AutoTargetState | null;
   stale: boolean;
   error: string | null;
+};
+
+type AutoTargetState = {
+  status: string;
+  refresh_hz?: number | null;
+  candidates?: number[];
+  drops_this_session?: number;
+  proposal?: {
+    fps: number;
+    reason: string;
+    sustainable_fps: number;
+    samples: number;
+  } | null;
 };
 
 type PersonaOverride = {
@@ -185,6 +204,31 @@ type SamplePayload = {
 
 type Mode = "automatic" | "observe" | "off";
 
+/**
+ * One user-facing choice instead of two orthogonal ones.
+ *
+ * The daemon separates "mode" (automatic/observe/off) from "persona"
+ * (battery/ac-quiet/ac-performance), and persona silently does nothing unless
+ * mode is automatic. Nobody can be expected to hold that in their head mid-game,
+ * so the panel presents a single list and maps it back to the pair.
+ */
+type Profile = "auto" | "battery" | "quiet" | "performance" | "observe" | "off";
+
+const PROFILE_ORDER: Profile[] = [
+  "auto",
+  "battery",
+  "quiet",
+  "performance",
+  "observe",
+  "off",
+];
+
+const PROFILE_TO_PERSONA: Partial<Record<Profile, Persona>> = {
+  battery: "battery",
+  quiet: "ac-quiet",
+  performance: "ac-performance",
+};
+
 const getStatus = callable<[], StatusPayload>("get_status");
 const sampleOnce = callable<[], SamplePayload>("sample_once");
 const setMode = callable<[mode: Mode], { mode: Mode; policy_label: string }>("set_mode");
@@ -205,430 +249,372 @@ type Copy = {
   panelTitle: string;
   loading: string;
   unavailable: string;
-  currentMode: string;
-  serviceState: string;
-  telemetry: string;
-  control: string;
-  fpsTarget: string;
+  // --- headline states ---
+  status: Record<string, string>;
+  holdingWithTarget: (state: string, fps: string) => string;
+  nowLine: (fps: string, watts: string) => string;
+  // --- profile ---
+  profileLabel: string;
+  profileDescription: string;
+  profiles: Record<Profile, string>;
+  profileHints: Record<Profile, string>;
+  // --- fps target ---
+  targetLabel: string;
   targetAuto: string;
-  targetManual: string;
-  targetApply: string;
-  learning: string;
-  learningBeforeReuse: string;
-  learningReady: string;
-  learningNeedsTarget: string;
-  learningStopped: string;
-  manualProbe: string;
-  probeNotice: string;
-  action: string;
-  game: string;
-  package: string;
-  core: string;
-  graphics: string;
-  noSample: string;
-  refresh: string;
-  readProbe: string;
-  restore: string;
+  targetAutoDescription: () => string;
+  targetAutoDetected: (fps: string) => string;
+  targetFixed: (fps: string) => string;
+  targetManualDescription: (fps: string) => string;
+  // --- unreachable-target advice ---
+  unreachableTitle: string;
+  unreachableBody: (target: string, actual: string) => string;
+  unreachableAction: (fps: string) => string;
+  // --- shared ---
   applying: string;
   restored: string;
-  evidenceLabel: string;
-  balanceLabel: string;
-  phaseLabel: string;
-  ladderLabel: string;
-  colorsLabel: string;
-  lanesLabel: string;
-  verdictLabel: string;
-  truncatedNote: string;
-  none: string;
-  personaTitle: string;
-  personaCurrent: string;
-  personaAuto: string;
-  personaProvisional: string;
-  personaLabels: Record<string, string>;
-  limiterTitle: string;
-  limiterConsentNote: string;
-  limiterApply: string;
-  limiterClear: string;
-  limiterRead: string;
-  limiterStates: Record<string, string>;
-  budgetLabel: string;
-  boostLabel: string;
-  boostStates: Record<string, string>;
-  frameFeedLabel: string;
-  frameFeedStates: Record<string, string>;
-  trimLabel: string;
-  evidenceStates: Record<string, string>;
+  errorPrefix: string;
+  // --- diagnostics (opt-in) ---
+  diagnosticsToggle: string;
+  diagnosticsDescription: string;
+  diag: Record<string, string>;
   phases: Record<string, string>;
+  actions: Record<string, string>;
   actuatorStates: Record<string, string>;
   laneNames: Record<string, string>;
   laneStates: Record<string, string>;
   verdictStates: Record<string, string>;
-  modes: Record<string, string>;
-  modeDescriptions: Record<string, string>;
-  telemetryLabels: Record<string, string>;
-  targetStates: Record<string, string>;
+  evidenceStates: Record<string, string>;
   frameStates: Record<string, string>;
-  actions: Record<string, string>;
-  reasons: Record<string, string>;
-  classifications: Record<string, string>;
-  policyLabels: Record<string, string>;
-  errorPrefix: string;
+  targetStates: Record<string, string>;
+  limiterStates: Record<string, string>;
+  learningStates: Record<string, string>;
+  none: string;
 };
 
 const COPY: Record<LocaleKey, Copy> = {
   en: {
     pluginName: "Game Power",
     panelTitle: "Game Power",
-    loading: "Reading game-power status...",
-    unavailable: "Game-power status is unavailable.",
-    currentMode: "Current mode",
-    serviceState: "Background service",
-    telemetry: "Runtime telemetry",
-    control: "Control",
-    fpsTarget: "FPS target",
-    targetAuto: "Use SteamOS limit",
-    targetManual: "Manual FPS target",
-    targetApply: "Set FPS target",
-    learning: "Learning status",
-    learningBeforeReuse: "Learning before reuse",
-    learningReady: "Can reuse next launch",
-    learningNeedsTarget: "Needs stable FPS target",
-    learningStopped: "Sampling is stopped",
-    manualProbe: "Manual sample",
-    probeNotice: "Probe sample - not daemon control",
-    action: "Action",
-    game: "Current game",
-    package: "Package",
-    core: "CPU",
-    graphics: "GPU side",
-    noSample: "No foreground game sample",
-    refresh: "Refresh",
-    readProbe: "Read one sample",
-    restore: "Use service default",
+    loading: "Checking...",
+    unavailable: "Game Power is unavailable",
+    status: {
+      off: "Turned off",
+      observe: "Watching only",
+      noGame: "Waiting for a game",
+      noTarget: "No frame rate target set",
+      stale: "Reconnecting...",
+      starting: "Warming up...",
+      loadingScene: "Loading - full power",
+      boosting: "Full power",
+      holding: "Holding steady",
+      holdingSaving: "Holding steady, using less power",
+    },
+    holdingWithTarget: (state, fps) => `${state} at ${fps} FPS`,
+    nowLine: (fps, watts) => `${fps} FPS now, ${watts}`,
+    profileLabel: "Power profile",
+    profileDescription: "How much power to spend holding your frame rate.",
+    profiles: {
+      auto: "Automatic",
+      battery: "Save battery",
+      quiet: "Quiet",
+      performance: "Performance",
+      observe: "Watch only",
+      off: "Off",
+    },
+    profileHints: {
+      auto: "Follows whether you are on battery or plugged in.",
+      battery: "Lowest power that still holds your frame rate.",
+      quiet: "Keeps power down so fans stay quiet.",
+      performance: "Spends full power for the most headroom.",
+      observe: "Collects data without changing anything.",
+      off: "Game Power makes no changes at all.",
+    },
+    targetLabel: "Frame rate target",
+    targetAuto: "Automatic",
+    targetAutoDescription: () => "Follows the SteamOS limit and lowers it if a scene cannot hold it.",
+    targetAutoDetected: (fps) => `Automatic (now ${fps} FPS)`,
+    targetFixed: (fps) => `${fps} FPS`,
+    targetManualDescription: (fps) => `Set by you: ${fps} FPS.`,
+    unreachableTitle: "Target looks out of reach",
+    unreachableBody: (target, actual) =>
+      `This scene is running near ${actual} FPS at full power, below your ${target} FPS target.`,
+    unreachableAction: (fps) => `Set the target to ${fps} FPS`,
     applying: "Applying...",
-    restored: "Using the service default.",
-    evidenceLabel: "Local evidence",
-    balanceLabel: "Target balance",
-    phaseLabel: "Phase",
-    ladderLabel: "Trim ladder step",
-    colorsLabel: "Thread colors",
-    lanesLabel: "Gated write lanes",
-    verdictLabel: "Verdict ledger",
-    truncatedNote: "color sampling truncated",
-    none: "none",
-    personaTitle: "Power intent",
-    personaCurrent: "Current intent",
-    personaAuto: "Auto (match power source)",
-    personaProvisional: "Framework shipped; tuning constants are provisional.",
-    personaLabels: {
-      battery: "Battery saver",
-      "ac-quiet": "Quiet (plugged in)",
-      "ac-performance": "Performance (plugged in)",
-    },
-    limiterTitle: "Frame limit helper",
-    limiterConsentNote: "Opt-in: caps in-game frames through gamescope. Device-unverified.",
-    limiterApply: "Apply frame limit",
-    limiterClear: "Clear frame limit",
-    limiterRead: "Check frame limit",
-    limiterStates: {
-      limited: "Frame limit active",
-      unlimited: "No frame limit",
-      unknown: "Frame limit helper available",
-      unsupported: "Frame limit helper unavailable",
-    },
-    budgetLabel: "Soft power budget",
-    boostLabel: "Boost",
-    boostStates: {
-      active: "active",
-      idle: "idle",
-    },
-    frameFeedLabel: "Frame feed",
-    frameFeedStates: {
-      live: "live",
-      stale: "stale",
-      absent: "absent",
-    },
-    trimLabel: "Active trims",
-    evidenceStates: {
-      "target-aware-live": "Local target/frame evidence ready",
-      "power-signals-only": "Local evidence: power signals only",
-      "view-data-only": "View data only",
-      stopped: "Game Power stopped",
-      "control-invalid": "Local evidence unavailable",
-      unavailable: "Local evidence unavailable",
+    restored: "Restored",
+    errorPrefix: "Error",
+    diagnosticsToggle: "Show technical details",
+    diagnosticsDescription: "Live scheduler internals. Not needed for normal use.",
+    diag: {
+      service: "Background service",
+      game: "App ID",
+      evidence: "Local evidence",
+      phase: "Phase",
+      step: "Ladder step",
+      trims: "Active trims",
+      budget: "Power budget",
+      boost: "Boost",
+      boostActive: "active",
+      boostIdle: "idle",
+      frameFeed: "Frame feed",
+      pacing: "Pacing p95 / budget",
+      baseline: "Pacing baseline",
+      package: "Package",
+      core: "CPU",
+      graphics: "Graphics",
+      render: "Render busy",
+      learning: "Learning",
+      colors: "Thread groups",
+      lanes: "Gated lanes",
+      verdict: "Verdict ledger",
+      truncated: "truncated",
+      limiter: "Frame limiter",
+      limiterNote: "Applies a limit through the compositor. Cleared on request.",
+      limiterRead: "Read limiter state",
+      limiterApply: "Apply limiter",
+      limiterClear: "Clear limiter",
+      probe: "One-off sample",
+      probeNote: "A single reading. Does not change control.",
+      probeRead: "Take a sample",
+      action: "Last action",
+      restore: "Restore defaults",
+      refresh: "Refresh now",
     },
     phases: {
-      "no-game": "No foreground game",
-      loading: "Loading (constraints released)",
-      "below-target-cpu-bound": "Below target, CPU-bound",
-      "below-target-gpu-bound": "Below target, GPU-bound",
+      "no-game": "No game",
+      "no-target": "No target",
+      loading: "Loading",
       "at-target": "At target",
-      "above-target": "Above target (trimming)",
-      "no-target": "No FPS target",
+      "above-target": "Above target",
+      "below-target-cpu-bound": "Below target (CPU)",
+      "below-target-gpu-bound": "Below target (graphics)",
       unknown: "Unknown",
-    },
-    actuatorStates: {
-      active: "active",
-      advisory: "advisory",
-      blocked: "blocked",
-    },
-    laneNames: {
-      foreground: "Foreground boost",
-      background: "Background easing",
-      ladder: "Deep trim",
-      other: "Write lane",
-    },
-    laneStates: {
-      active: "active",
-      blocked: "blocked (no verdict)",
-      released: "released (loading)",
-    },
-    verdictStates: {
-      ready: "verdicts loaded",
-      unavailable: "no verdict ledger",
-      missing: "verdict file missing",
-      corrupt: "verdict file corrupt",
-      invalid: "verdict file invalid",
-    },
-    modes: {
-      automatic: "Balance to FPS target",
-      observe: "Watch data only",
-      off: "Stop Game Power",
-      default: "Service default",
-      unknown: "Unknown",
-    },
-    modeDescriptions: {
-      automatic: "Adjusts CPU/GPU shared power while the game is below its FPS target.",
-      observe: "Shows live samples without changing power.",
-      off: "Sampling is stopped",
-      default: "Uses the packaged default power policy.",
-      unknown: "The active game-power mode could not be identified.",
-    },
-    telemetryLabels: {
-      targetAware: "Target-aware balancing",
-      powerSignals: "Learning before reuse",
-      collecting: "Learning before reuse",
-      stale: "Runtime data is stale",
-      unavailable: "Daemon runtime data is unavailable",
-    },
-    targetStates: {
-      known: "FPS target known",
-      unknown: "FPS target unknown",
-      unlimited: "FPS target unlimited",
-      unsupported: "FPS target unsupported",
-    },
-    frameStates: {
-      live: "Frame data live",
-      missing: "Frame data missing",
-      stale: "Frame data stale",
-      malformed: "Frame data malformed",
-      unsupported: "Frame data unsupported",
     },
     actions: {
-      "observe-only": "Viewing data only",
-      "gpu-priority-epp": "GPU priority",
-      "gpu-priority-cpu-cap": "GPU priority with CPU cap",
       idle: "Idle",
-      restore: "Restoring system policy",
+      "observe-only": "Observing",
+      restore: "Restored",
+      "gpu-priority-epp": "Graphics priority",
+      "target-balance-trim": "Trimming",
+      "target-balance-release": "Released",
+      "loading-boost": "Loading boost",
     },
-    reasons: {
-      "mode is observe": "Data-only mode is active; no power settings are changed.",
-      "mode is off": "Game Power is stopped; sampling and power changes are stopped.",
-      "package limited with GPU activity": "GPU activity is high, so power is being held for graphics.",
-      "package limited with high core pressure": "CPU pressure is high, so CPU power is capped to protect GPU power.",
+    actuatorStates: { active: "active", blocked: "blocked", pending: "pending" },
+    laneNames: {
+      foreground: "Foreground",
+      background: "Background",
+      ladder: "Deep steps",
+      other: "Other",
     },
-    classifications: {
-      "control-disabled": "Scheduler off",
-      "observe-only": "Watch data only",
-      "no-foreground-game": "No foreground game sample",
-      "fps-target-satisfied": "FPS target already satisfied",
-      "insufficient-power-evidence": "Learning before reuse",
-      "not-package-bound": "Package power is not the limit",
-      "gpu-package-bound": "GPU-side package pressure detected",
-      "gpu-package-bound-cpu-contention": "CPU/GPU power contention detected",
+    laneStates: { active: "active", blocked: "blocked", released: "released" },
+    verdictStates: {
+      ready: "ready",
+      unavailable: "unavailable",
+      invalid: "invalid",
+      missing: "missing",
     },
-    policyLabels: {
-      "Balanced automatic policy": "Game balance policy",
+    evidenceStates: {
+      "target-aware-live": "Target and frame data ready",
+      "power-signals-only": "Power signals only",
+      unavailable: "Unavailable",
+      stopped: "Stopped",
+      "view-data-only": "View data only",
     },
-    errorPrefix: "Error",
+    frameStates: {
+      live: "Live",
+      missing: "Missing",
+      stale: "Stale",
+      "profiler-only": "Profiler only",
+    },
+    targetStates: {
+      known: "Known",
+      unknown: "Unknown",
+      unlimited: "Unlimited",
+      "none-configured": "Not configured",
+    },
+    limiterStates: {
+      unknown: "Unknown",
+      unsupported: "Not supported",
+      applied: "Applied",
+      cleared: "Cleared",
+      ready: "Ready",
+    },
+    learningStates: {
+      ready: "Can reuse next launch",
+      learning: "Learning before reuse",
+      needsTarget: "Needs a steady target",
+      stopped: "Stopped",
+    },
+    none: "None",
   },
   zhHant: {
     pluginName: "遊戲電力",
     panelTitle: "遊戲電力",
-    loading: "正在讀取遊戲電力狀態...",
-    unavailable: "無法讀取遊戲電力狀態。",
-    currentMode: "目前模式",
-    serviceState: "背景服務",
-    telemetry: "執行中資料",
-    control: "控制",
-    fpsTarget: "FPS 目標",
-    targetAuto: "使用 SteamOS 限制",
-    targetManual: "手動 FPS 目標",
-    targetApply: "設定 FPS 目標",
-    learning: "學習狀態",
-    learningBeforeReuse: "學習中，暫不復用",
-    learningReady: "下次可直接套用",
-    learningNeedsTarget: "需要穩定 FPS 目標",
-    learningStopped: "已停止採樣",
-    manualProbe: "手動採樣",
-    probeNotice: "手動採樣 - 不代表 daemon 正在控制",
-    action: "動作",
-    game: "目前遊戲",
-    package: "封包",
-    core: "CPU",
-    graphics: "GPU 側",
-    noSample: "目前沒有前景遊戲樣本",
-    refresh: "重新讀取",
-    readProbe: "讀取一次樣本",
-    restore: "使用服務預設",
-    applying: "正在套用...",
-    restored: "已切回服務預設。",
-    evidenceLabel: "本機證據",
-    balanceLabel: "目標平衡",
-    phaseLabel: "階段",
-    ladderLabel: "降頻階梯步數",
-    colorsLabel: "執行緒著色",
-    lanesLabel: "受管制的寫入通道",
-    verdictLabel: "裁決紀錄",
-    truncatedNote: "著色取樣已截斷",
-    none: "無",
-    personaTitle: "電力取向",
-    personaCurrent: "目前取向",
-    personaAuto: "自動（依電源）",
-    personaProvisional: "框架已上線；調校常數仍為暫定值。",
-    personaLabels: {
-      battery: "電池省電",
-      "ac-quiet": "安靜（外接電源）",
-      "ac-performance": "效能（外接電源）",
+    loading: "檢查中...",
+    unavailable: "遊戲電力無法使用",
+    status: {
+      off: "已關閉",
+      observe: "只觀察",
+      noGame: "等待遊戲中",
+      noTarget: "尚未設定張數目標",
+      stale: "重新連線中...",
+      starting: "暖機中...",
+      loadingScene: "載入中 - 全力輸出",
+      boosting: "全力輸出",
+      holding: "穩定維持中",
+      holdingSaving: "穩定維持中，功耗已降低",
     },
-    limiterTitle: "影格上限輔助",
-    limiterConsentNote: "選用：透過 gamescope 設定遊戲影格上限。尚未在裝置驗證。",
-    limiterApply: "套用影格上限",
-    limiterClear: "取消影格上限",
-    limiterRead: "檢查影格上限",
-    limiterStates: {
-      limited: "影格上限啟用中",
-      unlimited: "沒有影格上限",
-      unknown: "影格上限輔助可用",
-      unsupported: "影格上限輔助不可用",
+    holdingWithTarget: (state, fps) => `${fps} FPS ${state}`,
+    nowLine: (fps, watts) => `目前 ${fps} FPS，${watts}`,
+    profileLabel: "電力模式",
+    profileDescription: "決定要花多少功耗來維持你的張數。",
+    profiles: {
+      auto: "自動",
+      battery: "省電",
+      quiet: "安靜",
+      performance: "效能",
+      observe: "只觀察",
+      off: "關閉",
     },
-    budgetLabel: "動態功耗預算",
-    boostLabel: "衝刺",
-    boostStates: {
-      active: "啟用中",
-      idle: "待命",
+    profileHints: {
+      auto: "依照使用電池或插電自動切換。",
+      battery: "在維持張數的前提下用最低功耗。",
+      quiet: "壓低功耗，讓風扇保持安靜。",
+      performance: "全力輸出，保留最多餘裕。",
+      observe: "只收集資料，不做任何調整。",
+      off: "遊戲電力完全不介入。",
     },
-    frameFeedLabel: "影格資料流",
-    frameFeedStates: {
-      live: "即時",
-      stale: "過期",
-      absent: "無",
-    },
-    trimLabel: "生效的節流",
-    evidenceStates: {
-      "target-aware-live": "本機 FPS 目標與影格資料可用",
-      "power-signals-only": "本機證據：僅有功耗訊號",
-      "view-data-only": "只看數據",
-      stopped: "遊戲電力已停止",
-      "control-invalid": "本機證據不可用",
-      unavailable: "本機證據不可用",
+    targetLabel: "張數目標",
+    targetAuto: "自動",
+    targetAutoDescription: () => "跟隨 SteamOS 的限制；場景撐不住時會自動調低。",
+    targetAutoDetected: (fps) => `自動（目前 ${fps} FPS）`,
+    targetFixed: (fps) => `${fps} FPS`,
+    targetManualDescription: (fps) => `你設定的目標：${fps} FPS。`,
+    unreachableTitle: "目標似乎達不到",
+    unreachableBody: (target, actual) =>
+      `這個場景在全力輸出下大約只有 ${actual} FPS，低於你設定的 ${target} FPS。`,
+    unreachableAction: (fps) => `把目標改成 ${fps} FPS`,
+    applying: "套用中...",
+    restored: "已還原",
+    errorPrefix: "錯誤",
+    diagnosticsToggle: "顯示技術細節",
+    diagnosticsDescription: "調度器的即時內部狀態，一般使用不需要看。",
+    diag: {
+      service: "背景服務",
+      game: "App ID",
+      evidence: "本機證據",
+      phase: "階段",
+      step: "階梯層級",
+      trims: "生效中的調整",
+      budget: "功耗預算",
+      boost: "增壓",
+      boostActive: "作用中",
+      boostIdle: "閒置",
+      frameFeed: "影格資料",
+      pacing: "節奏 p95 / 預算",
+      baseline: "節奏基線",
+      package: "整體",
+      core: "處理器",
+      graphics: "繪圖",
+      render: "繪圖忙碌",
+      learning: "學習",
+      colors: "執行緒分組",
+      lanes: "受管制通道",
+      verdict: "判定紀錄",
+      truncated: "已截斷",
+      limiter: "限幀",
+      limiterNote: "透過合成器套用限制，可隨時清除。",
+      limiterRead: "讀取限幀狀態",
+      limiterApply: "套用限幀",
+      limiterClear: "清除限幀",
+      probe: "單次取樣",
+      probeNote: "只是一次讀值，不會改變控制。",
+      probeRead: "取樣一次",
+      action: "最後動作",
+      restore: "還原預設",
+      refresh: "立即重新整理",
     },
     phases: {
-      "no-game": "沒有前景遊戲",
-      loading: "載入中（已釋放限制）",
-      "below-target-cpu-bound": "低於目標，CPU 受限",
-      "below-target-gpu-bound": "低於目標，GPU 受限",
+      "no-game": "沒有遊戲",
+      "no-target": "沒有目標",
+      loading: "載入中",
       "at-target": "已達目標",
-      "above-target": "高於目標（正在降頻）",
-      "no-target": "沒有 FPS 目標",
+      "above-target": "超過目標",
+      "below-target-cpu-bound": "未達目標（處理器）",
+      "below-target-gpu-bound": "未達目標（繪圖）",
       unknown: "未知",
-    },
-    actuatorStates: {
-      active: "啟用",
-      advisory: "僅建議",
-      blocked: "封鎖",
-    },
-    laneNames: {
-      foreground: "前景提升",
-      background: "背景讓路",
-      ladder: "深層降頻",
-      other: "寫入通道",
-    },
-    laneStates: {
-      active: "啟用",
-      blocked: "封鎖（無裁決）",
-      released: "已釋放（載入中）",
-    },
-    verdictStates: {
-      ready: "已載入裁決",
-      unavailable: "沒有裁決紀錄",
-      missing: "缺少裁決檔案",
-      corrupt: "裁決檔案損毀",
-      invalid: "裁決檔案無效",
-    },
-    modes: {
-      automatic: "依 FPS 目標自動平衡",
-      observe: "只看數據，不調整功耗",
-      off: "停止遊戲電力",
-      default: "服務預設",
-      unknown: "未知",
-    },
-    modeDescriptions: {
-      automatic: "低於 FPS 目標時，才會調整 CPU/GPU 的共用功耗。",
-      observe: "只顯示即時採樣，不改動功耗。",
-      off: "已停止採樣",
-      default: "使用套件內建的預設電力策略。",
-      unknown: "無法辨識目前的遊戲電力模式。",
-    },
-    telemetryLabels: {
-      targetAware: "依 FPS 目標平衡",
-      powerSignals: "學習中，暫不復用",
-      collecting: "學習中，暫不復用",
-      stale: "執行中資料已過期",
-      unavailable: "缺少 daemon 執行中資料",
-    },
-    targetStates: {
-      known: "FPS 目標已知",
-      unknown: "FPS 目標未知",
-      unlimited: "FPS 目標未限制",
-      unsupported: "FPS 目標不支援",
-    },
-    frameStates: {
-      live: "影格資料即時可用",
-      missing: "缺少影格資料",
-      stale: "影格資料已過期",
-      malformed: "影格資料格式異常",
-      unsupported: "影格資料不支援",
     },
     actions: {
-      "observe-only": "只看數據",
-      "gpu-priority-epp": "GPU 優先",
-      "gpu-priority-cpu-cap": "GPU 優先，限制 CPU 搶功耗",
       idle: "閒置",
-      restore: "正在還原系統策略",
+      "observe-only": "觀察中",
+      restore: "已還原",
+      "gpu-priority-epp": "繪圖優先",
+      "target-balance-trim": "調整中",
+      "target-balance-release": "已放開",
+      "loading-boost": "載入增壓",
     },
-    reasons: {
-      "mode is observe": "目前只看數據，不會改動功耗設定。",
-      "mode is off": "目前已停止遊戲電力，停止採樣與功耗調整。",
-      "package limited with GPU activity": "GPU 負載偏高，正在把功耗留給顯示核心。",
-      "package limited with high core pressure": "CPU 壓力偏高，正在限制 CPU 搶功耗。",
+    actuatorStates: { active: "作用中", blocked: "阻擋", pending: "等待中" },
+    laneNames: {
+      foreground: "前景",
+      background: "背景",
+      ladder: "深層階梯",
+      other: "其他",
     },
-    classifications: {
-      "control-disabled": "已停止採樣",
-      "observe-only": "只看數據，不調整功耗",
-      "no-foreground-game": "目前沒有前景遊戲樣本",
-      "fps-target-satisfied": "FPS 目標已達成",
-      "insufficient-power-evidence": "學習中，暫不復用",
-      "not-package-bound": "封包功耗尚未成為限制",
-      "gpu-package-bound": "偵測到 GPU 側封包功耗壓力",
-      "gpu-package-bound-cpu-contention": "偵測到 CPU/GPU 搶功耗",
+    laneStates: { active: "作用中", blocked: "阻擋", released: "已釋放" },
+    verdictStates: {
+      ready: "可用",
+      unavailable: "不可用",
+      invalid: "無效",
+      missing: "不存在",
     },
-    policyLabels: {
-      "Balanced automatic policy": "遊戲平衡策略",
+    evidenceStates: {
+      "target-aware-live": "目標與影格資料可用",
+      "power-signals-only": "僅有功耗訊號",
+      unavailable: "不可用",
+      stopped: "已停止",
+      "view-data-only": "只看數據",
     },
-    errorPrefix: "錯誤",
+    frameStates: {
+      live: "即時",
+      missing: "缺少",
+      stale: "過期",
+      "profiler-only": "僅分析工具",
+    },
+    targetStates: {
+      known: "已知",
+      unknown: "未知",
+      unlimited: "無限制",
+      "none-configured": "未設定",
+    },
+    limiterStates: {
+      unknown: "未知",
+      unsupported: "不支援",
+      applied: "已套用",
+      cleared: "已清除",
+      ready: "就緒",
+    },
+    learningStates: {
+      ready: "下次可直接套用",
+      learning: "學習中，暫不復用",
+      needsTarget: "需要穩定的目標",
+      stopped: "已停止",
+    },
+    none: "無",
   },
 };
+
+const headlineStyle = {
+  fontSize: "17px",
+  fontWeight: 600,
+  lineHeight: 1.25,
+  whiteSpace: "normal",
+  overflowWrap: "break-word",
+} as const;
+
+const nowStyle = {
+  opacity: 0.75,
+  fontSize: "13px",
+  marginTop: "4px",
+} as const;
 
 const blockStyle = {
   width: "100%",
@@ -638,21 +624,18 @@ const blockStyle = {
   lineHeight: 1.28,
 } as const;
 
-const titleStyle = {
-  marginBottom: "8px",
-} as const;
-
 const detailStyle = {
   opacity: 0.74,
-  fontSize: "13px",
-  marginTop: "4px",
+  fontSize: "12px",
+  marginTop: "3px",
   whiteSpace: "normal",
   overflowWrap: "anywhere",
 } as const;
 
-const sliderStyle = {
-  width: "100%",
-  marginTop: "8px",
+const noticeStyle = {
+  ...blockStyle,
+  fontSize: "13px",
+  marginTop: "2px",
 } as const;
 
 function localeFromLanguage(language: string | undefined): LocaleKey {
@@ -703,6 +686,10 @@ function fmtWatts(value: number | null | undefined): string {
   return value === null || value === undefined ? "-" : `${value.toFixed(1)} W`;
 }
 
+function fmtMs(value: number | null | undefined): string {
+  return value === null || value === undefined ? "-" : `${value.toFixed(1)} ms`;
+}
+
 function fmtPercent(value: number | null | undefined): string {
   return value === null || value === undefined ? "-" : `${Math.round(value * 100)}%`;
 }
@@ -714,247 +701,209 @@ function mappedText(map: Record<string, string>, value: string | null | undefine
   return map[value] ?? value;
 }
 
-function modeKey(mode: string | null | undefined): string {
-  if (mode === "automatic" || mode === "observe" || mode === "off" || mode === "default") {
-    return mode;
-  }
-  return "unknown";
+function isBelowTarget(phase: string | null | undefined): boolean {
+  return phase === "below-target-cpu-bound" || phase === "below-target-gpu-bound";
 }
 
-function isTargetAwareReady(readiness: EvidenceReadiness | null | undefined): boolean {
-  return readiness?.status === "target-aware-live" && readiness?.claim_ready === true;
+function activeProfile(control: ControlStatus | null): Profile {
+  if (!control) {
+    return "auto";
+  }
+  if (control.mode === "off") {
+    return "off";
+  }
+  if (control.mode === "observe") {
+    return "observe";
+  }
+  const override = control.persona_override;
+  if (override?.status === "manual" && override.persona) {
+    if (override.persona === "battery") {
+      return "battery";
+    }
+    if (override.persona === "ac-quiet") {
+      return "quiet";
+    }
+    if (override.persona === "ac-performance") {
+      return "performance";
+    }
+  }
+  return "auto";
 }
 
-function evidenceText(t: Copy, readiness: EvidenceReadiness | null | undefined): string {
-  if (!readiness) {
-    return t.evidenceStates.unavailable;
-  }
-  if (!isTargetAwareReady(readiness) && readiness.status === "target-aware-live") {
-    return t.evidenceStates.unavailable;
-  }
-  return t.evidenceStates[readiness.status] ?? t.evidenceStates.unavailable;
-}
-
-function modeLabel(
+/** Plain-language answer to "what is it doing right now". */
+function headlineText(
   t: Copy,
-  mode: string | null | undefined,
+  control: ControlStatus | null,
   runtime: RuntimeSnapshot | null,
 ): string {
-  if (mode === "automatic" && isTargetAwareReady(runtime?.evidence_readiness)) {
-    return t.telemetryLabels.targetAware;
+  if (!control) {
+    return t.loading;
   }
-  return t.modes[modeKey(mode)] ?? t.modes.unknown;
-}
-
-function modeDescription(t: Copy, mode: string | null | undefined): string {
-  return t.modeDescriptions[modeKey(mode)] ?? t.modeDescriptions.unknown;
-}
-
-function targetText(t: Copy, target: TargetState | null | undefined): string {
-  if (!target) {
-    return t.targetStates.unknown;
+  if (control.mode === "off") {
+    return t.status.off;
   }
-  const label = mappedText(t.targetStates, target.status);
-  return target.fps ? `${label}: ${target.fps.toFixed(0)} FPS` : label;
-}
-
-function frameText(t: Copy, frame: FrameSourceState | null | undefined): string {
-  if (!frame) {
-    return t.frameStates.missing;
-  }
-  const label = mappedText(t.frameStates, frame.status);
-  return frame.avg_fps ? `${label}: ${frame.avg_fps.toFixed(1)} FPS` : label;
-}
-
-function learningText(t: Copy, learning: LearningState | null | undefined): string {
-  if (!learning) {
-    return t.learningBeforeReuse;
-  }
-  if (learning.reusable_next_launch) {
-    return t.learningReady;
-  }
-  if (learning.skip_reason === "fps_target_unknown" || learning.status === "waiting-for-fps-target") {
-    return t.learningNeedsTarget;
-  }
-  if (learning.status === "stopped" || learning.status === "view-data-only") {
-    return t.learningStopped;
-  }
-  const samples = learning.session_samples ?? 0;
-  const required = learning.required_samples ?? 0;
-  return required > 0
-    ? `${t.learningBeforeReuse}: ${samples}/${required}`
-    : t.learningBeforeReuse;
-}
-
-function runtimeHeadline(
-  t: Copy,
-  mode: string | null | undefined,
-  runtime: RuntimeSnapshot | null,
-): string {
-  if (mode === "off") {
-    return t.modeDescriptions.off;
-  }
-  if (mode === "observe") {
-    return t.modeDescriptions.observe;
+  if (control.mode === "observe") {
+    return t.status.observe;
   }
   if (!runtime || runtime.error) {
-    return t.telemetryLabels.unavailable;
+    return t.unavailable;
   }
   if (runtime.stale) {
-    return t.telemetryLabels.stale;
+    return t.status.stale;
   }
-  if (isTargetAwareReady(runtime?.evidence_readiness)) {
-    return t.telemetryLabels.targetAware;
+  if (!runtime.appid) {
+    return t.status.noGame;
   }
-  if (runtime.frame_source.status !== "live") {
-    return t.telemetryLabels.collecting;
+  const target = runtime.fps_target.fps;
+  if (!target) {
+    return t.status.noTarget;
   }
-  return t.telemetryLabels.powerSignals;
+  const phase = runtime.phase;
+  if (phase === "loading") {
+    return t.status.loadingScene;
+  }
+  if (isBelowTarget(phase)) {
+    return t.status.boosting;
+  }
+  if (phase === "at-target" || phase === "above-target") {
+    const trimmed = (runtime.trim_rungs_active?.length ?? 0) > 0;
+    return trimmed ? t.status.holdingSaving : t.status.holding;
+  }
+  return t.status.starting;
 }
 
-function phaseText(t: Copy, phase: string | null | undefined): string {
-  if (!phase) {
-    return t.none;
-  }
-  return t.phases[phase] ?? phase;
+/**
+ * Sustained "below target even with nothing trimmed" means the target itself is
+ * the problem, not the scheduler. Suggest a reachable one rather than silently
+ * burning full power forever.
+ */
+function unreachableSuggestion(avgFps: number, step: number): number {
+  const floor = Math.floor(avgFps / step) * step;
+  return Math.max(step, floor);
 }
 
-function colorLedgerText(t: Copy, color: ColorLedgerSummary): string {
-  const states = Object.entries(color.actuator_states)
-    .map(([state, count]) => `${t.actuatorStates[state] ?? state}${count > 1 ? ` x${count}` : ""}`)
-    .join(", ");
-  const tail = states ? ` (${states})` : "";
-  return `${color.color}: ${color.tid_count} TID / ${color.entry_count} role${tail}`;
-}
-
-function laneLabelKey(name: string): string {
-  if (name.includes("foreground")) {
-    return "foreground";
-  }
-  if (name.includes("background")) {
-    return "background";
-  }
-  if (name.includes("ladder")) {
-    return "ladder";
-  }
-  return "other";
-}
-
-function laneText(t: Copy, name: string, lane: GatedLane): string {
-  const label = t.laneNames[laneLabelKey(name)] ?? t.laneNames.other;
-  const state = t.laneStates[lane.state] ?? lane.state;
-  const why = lane.reason_codes.length ? ` - ${lane.reason_codes.join(", ")}` : "";
-  return `${label}: ${state}${why}`;
-}
-
-function verdictText(t: Copy, health: VerdictLedgerHealth): string {
-  const state = t.verdictStates[health.status] ?? health.status;
-  const count = health.entry_count === null ? "" : ` (${health.entry_count})`;
-  return `${state}${count}`;
-}
-
-function personaLabel(t: Copy, persona: string | null | undefined): string {
-  if (!persona) {
-    return t.personaAuto;
-  }
-  return t.personaLabels[persona] ?? persona;
-}
-
-function activePersona(control: ControlStatus | null): string | null {
-  const override = control?.persona_override;
-  if (override?.status === "manual" && override.persona) {
-    return override.persona;
-  }
-  return null;
-}
-
-function frameFeedText(t: Copy, status: string | null | undefined): string {
-  if (!status) {
-    return t.none;
-  }
-  return t.frameFeedStates[status] ?? status;
-}
-
-function limiterStateText(t: Copy, limiter: LimiterStatus | null): string {
-  if (!limiter) {
-    return "-";
-  }
-  const label = t.limiterStates[limiter.status] ?? limiter.status;
-  return limiter.fps ? `${label}: ${limiter.fps} FPS` : label;
-}
-
-const TargetBalanceLiveRow: FC<{ t: Copy; runtime: RuntimeSnapshot | null }> = ({ t, runtime }) => {
-  if (!runtime || runtime.stale || runtime.error || !runtime.persona) {
-    return null;
-  }
-  const { soft_pl1_w, boost_active, frame_feed_status, trim_rungs_active } = runtime;
-  const boostText = boost_active ? t.boostStates.active : t.boostStates.idle;
-  const trims = trim_rungs_active && trim_rungs_active.length ? trim_rungs_active.join(", ") : t.none;
+const StatusCard: FC<{
+  t: Copy;
+  control: ControlStatus | null;
+  runtime: RuntimeSnapshot | null;
+  notice: string | null;
+  error: string | null;
+}> = ({ t, control, runtime, notice, error }) => {
+  const target = runtime?.fps_target.fps ?? null;
+  const headline = headlineText(t, control, runtime);
+  const showNow =
+    control?.mode !== "off" && runtime && !runtime.error && !runtime.stale && runtime.appid;
+  const avg = runtime?.frame_source.avg_fps ?? null;
   return (
-    <>
-      <div style={detailStyle}>
-        {t.personaCurrent}: {personaLabel(t, runtime.persona)}
+    <PanelSectionRow>
+      <div style={blockStyle}>
+        <div style={headlineStyle}>
+          {target && (headline === t.status.holding || headline === t.status.holdingSaving)
+            ? t.holdingWithTarget(headline, target.toFixed(0))
+            : headline}
+        </div>
+        {showNow ? (
+          <div style={nowStyle}>
+            {t.nowLine(avg === null ? "-" : avg.toFixed(0), fmtWatts(runtime?.package_w))}
+          </div>
+        ) : null}
+        {notice ? <div style={noticeStyle}>{notice}</div> : null}
+        {error ? (
+          <div role="alert" style={noticeStyle}>
+            {t.errorPrefix}: {error}
+          </div>
+        ) : null}
       </div>
-      <div style={detailStyle}>
-        {t.package}: {fmtWatts(runtime.package_w)} / {t.budgetLabel}:{" "}
-        {soft_pl1_w === null || soft_pl1_w === undefined ? t.none : fmtWatts(soft_pl1_w)}
-      </div>
-      <div style={detailStyle}>
-        {t.boostLabel}: {boostText}
-      </div>
-      <div style={detailStyle}>
-        {t.frameFeedLabel}: {frameFeedText(t, frame_feed_status)}
-      </div>
-      <div style={detailStyle}>
-        {t.trimLabel}: {trims}
-      </div>
-    </>
+    </PanelSectionRow>
   );
 };
 
-const TargetBalanceDetails: FC<{ t: Copy; runtime: RuntimeSnapshot | null }> = ({ t, runtime }) => {
-  if (!runtime || runtime.stale || runtime.error) {
+const Diagnostics: FC<{
+  t: Copy;
+  status: ServiceStatus | null;
+  runtime: RuntimeSnapshot | null;
+}> = ({ t, status, runtime }) => {
+  if (!runtime) {
     return null;
   }
-  const { phase, ladder_step, color_ledger, verdict_ledger_health, gated_lanes } = runtime;
-  if (
-    phase === undefined ||
-    phase === null ||
-    (ladder_step === undefined || ladder_step === null) &&
-      !color_ledger &&
-      !verdict_ledger_health &&
-      !gated_lanes
-  ) {
-    return null;
+  const rows: [string, string][] = [];
+  if (status) {
+    rows.push([t.diag.service, `${status.active_state}/${status.sub_state}`]);
   }
-  const lanes = gated_lanes ? Object.entries(gated_lanes) : [];
+  if (runtime.appid) {
+    rows.push([t.diag.game, runtime.appid]);
+  }
+  rows.push([t.diag.evidence, mappedText(t.evidenceStates, runtime.evidence_readiness?.status)]);
+  rows.push([t.diag.action, mappedText(t.actions, runtime.last_action)]);
+  if (runtime.phase) {
+    rows.push([t.diag.phase, mappedText(t.phases, runtime.phase)]);
+  }
+  if (runtime.ladder_step !== undefined && runtime.ladder_step !== null) {
+    rows.push([t.diag.step, String(runtime.ladder_step)]);
+  }
+  rows.push([
+    t.diag.trims,
+    runtime.trim_rungs_active?.length ? runtime.trim_rungs_active.join(", ") : t.none,
+  ]);
+  rows.push([
+    t.diag.budget,
+    runtime.soft_pl1_w === null || runtime.soft_pl1_w === undefined
+      ? fmtWatts(runtime.pl1_w)
+      : fmtWatts(runtime.soft_pl1_w),
+  ]);
+  rows.push([t.diag.boost, runtime.boost_active ? t.diag.boostActive : t.diag.boostIdle]);
+  rows.push([t.diag.frameFeed, mappedText(t.frameStates, runtime.frame_source.status)]);
+  rows.push([
+    t.diag.pacing,
+    `${fmtMs(runtime.frame_source.p95_ms)} / ${fmtMs(runtime.p95_budget_ms)}`,
+  ]);
+  if (runtime.p95_baseline_ms !== null && runtime.p95_baseline_ms !== undefined) {
+    rows.push([t.diag.baseline, fmtMs(runtime.p95_baseline_ms)]);
+  }
+  rows.push([t.diag.package, fmtWatts(runtime.package_w)]);
+  rows.push([t.diag.core, fmtWatts(runtime.core_w)]);
+  rows.push([t.diag.graphics, fmtWatts(runtime.uncore_w)]);
+  rows.push([t.diag.render, fmtPercent(runtime.render_busy)]);
+  if (runtime.verdict_ledger_health) {
+    const health = runtime.verdict_ledger_health;
+    const count = health.entry_count === null ? "" : ` (${health.entry_count})`;
+    rows.push([t.diag.verdict, `${mappedText(t.verdictStates, health.status)}${count}`]);
+  }
+  if (runtime.color_ledger?.colors.length) {
+    const text = runtime.color_ledger.colors
+      .map((color) => `${color.color}:${color.tid_count}`)
+      .join(" ");
+    rows.push([
+      t.diag.colors,
+      runtime.color_ledger.truncated ? `${text} (${t.diag.truncated})` : text,
+    ]);
+  }
+  if (runtime.gated_lanes) {
+    const text = Object.entries(runtime.gated_lanes)
+      .map(([name, lane]) => {
+        const key = name.includes("foreground")
+          ? "foreground"
+          : name.includes("background")
+            ? "background"
+            : name.includes("ladder")
+              ? "ladder"
+              : "other";
+        return `${t.laneNames[key]}:${mappedText(t.laneStates, lane.state)}`;
+      })
+      .join(" ");
+    rows.push([t.diag.lanes, text]);
+  }
+
   return (
-    <>
-      <div style={detailStyle}>
-        {t.balanceLabel} - {t.phaseLabel}: {phaseText(t, phase)}
+    <PanelSectionRow>
+      <div style={blockStyle}>
+        {rows.map(([label, value]) => (
+          <div key={label} style={detailStyle}>
+            {label}: {value}
+          </div>
+        ))}
       </div>
-      {ladder_step !== undefined && ladder_step !== null ? (
-        <div style={detailStyle}>
-          {t.ladderLabel}: S{ladder_step}
-        </div>
-      ) : null}
-      {verdict_ledger_health ? (
-        <div style={detailStyle}>
-          {t.verdictLabel}: {verdictText(t, verdict_ledger_health)}
-        </div>
-      ) : null}
-      {color_ledger && color_ledger.colors.length ? (
-        <div style={detailStyle}>
-          {t.colorsLabel}: {color_ledger.colors.map((color) => colorLedgerText(t, color)).join(" | ")}
-          {color_ledger.truncated ? ` (${t.truncatedNote})` : ""}
-        </div>
-      ) : null}
-      {lanes.length ? (
-        <div style={detailStyle}>
-          {t.lanesLabel}: {lanes.map(([name, lane]) => laneText(t, name, lane)).join(" | ")}
-        </div>
-      ) : null}
-    </>
+    </PanelSectionRow>
   );
 };
 
@@ -969,163 +918,45 @@ const GamePowerPanel: FC = () => {
   const [control, setControl] = useState<ControlStatus | null>(null);
   const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [sample, setSample] = useState<SamplePayload | null>(null);
-  const [manualFps, setManualFps] = useState(40);
+  // null == "follow whatever the daemon detected". Never seed a literal here:
+  // a hardcoded default renders as a real FPS target the user never chose, and
+  // one tap on Set/Apply would commit it.
+  const [manualFps, setManualFps] = useState<number | null>(null);
   const [limiter, setLimiter] = useState<LimiterStatus | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Consecutive polls spent below target with nothing of ours applied.
+  const [starvedPolls, setStarvedPolls] = useState(0);
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+
+  const absorb = (result: StatusPayload) => {
+    setStatus(result.service);
+    setControl(result.control);
+    setRuntime(result.runtime);
+    const detected = result.control.fps_target_override.fps ?? result.runtime.fps_target.fps;
+    if (detected) {
+      // Only seed the slider; never clobber a value the user is dragging.
+      setManualFps((current) => current ?? detected);
+    }
+    // "Full power and still short" only counts when we are not the cause.
+    const starved =
+      isBelowTarget(result.runtime.phase) &&
+      (result.runtime.trim_rungs_active?.length ?? 0) === 0 &&
+      !!result.runtime.fps_target.fps;
+    setStarvedPolls((current) => (starved ? current + 1 : 0));
+  };
 
   const load = async () => {
     setBusy(true);
     setNotice(null);
     setError(null);
     try {
-      const statusResult = await getStatus();
-      setStatus(statusResult.service);
-      setControl(statusResult.control);
-      setRuntime(statusResult.runtime);
-      if (statusResult.control.fps_target_override.fps) {
-        setManualFps(statusResult.control.fps_target_override.fps);
-      } else if (statusResult.runtime.fps_target.fps) {
-        setManualFps(statusResult.runtime.fps_target.fps);
-      }
-    } catch (error) {
-      setError(errorText(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const readProbe = async () => {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setNotice(null);
-    setError(null);
-    try {
-      setSample(await sampleOnce());
-    } catch (error) {
-      setError(errorText(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const applyMode = async (mode: Mode) => {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setNotice(t.applying);
-    setError(null);
-    try {
-      await setMode(mode);
-      const statusResult = await getStatus();
-      setStatus(statusResult.service);
-      setControl(statusResult.control);
-      setRuntime(statusResult.runtime);
-      setNotice(null);
-    } catch (error) {
-      setError(errorText(error));
-      setNotice(null);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const restore = async () => {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setNotice(t.applying);
-    setError(null);
-    try {
-      await restoreDefaults();
-      const statusResult = await getStatus();
-      setStatus(statusResult.service);
-      setControl(statusResult.control);
-      setRuntime(statusResult.runtime);
-      setNotice(t.restored);
-    } catch (error) {
-      setError(errorText(error));
-      setNotice(null);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const applyFpsTarget = async (fps: number | null) => {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setNotice(t.applying);
-    setError(null);
-    try {
-      await setFpsTarget(fps);
-      const statusResult = await getStatus();
-      setStatus(statusResult.service);
-      setControl(statusResult.control);
-      setRuntime(statusResult.runtime);
-      if (statusResult.control.fps_target_override.fps) {
-        setManualFps(statusResult.control.fps_target_override.fps);
-      }
-      setNotice(null);
-    } catch (error) {
-      setError(errorText(error));
-      setNotice(null);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const applyPersona = async (persona: Persona | null) => {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setNotice(t.applying);
-    setError(null);
-    try {
-      if (persona === null) {
-        await clearPersona();
-      } else {
-        await setPersona(persona);
-      }
-      const statusResult = await getStatus();
-      setStatus(statusResult.service);
-      setControl(statusResult.control);
-      setRuntime(statusResult.runtime);
-      setNotice(null);
-    } catch (error) {
-      setError(errorText(error));
-      setNotice(null);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const runLimiter = async (action: "read" | "apply" | "clear") => {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setNotice(action === "read" ? null : t.applying);
-    setError(null);
-    try {
-      if (action === "apply") {
-        setLimiter(await applyLimiterFps(manualFps));
-      } else if (action === "clear") {
-        setLimiter(await clearLimiterFps());
-      } else {
-        setLimiter(await getLimiter());
-      }
-      setNotice(null);
-    } catch (error) {
-      setError(errorText(error));
-      setNotice(null);
+      absorb(await getStatus());
+    } catch (err) {
+      setError(errorText(err));
     } finally {
       setBusy(false);
     }
@@ -1135,248 +966,298 @@ const GamePowerPanel: FC = () => {
     load();
   }, []);
 
-  const currentPersona = activePersona(control);
-  const runtimeTitle = runtime?.appid ? `${t.game}: ${runtime.appid}` : t.noSample;
-  const probeTitle = sample?.appid ? `${t.game}: ${sample.appid}` : t.noSample;
+  // The panel is the only place the live governor is observable, so keep it
+  // ticking instead of showing whatever was true when it was opened.
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      if (busyRef.current) {
+        return;
+      }
+      try {
+        const result = await getStatus();
+        if (!cancelled) {
+          absorb(result);
+        }
+      } catch {
+        // Transient backend hiccup; the next tick retries.
+      }
+    }, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const guard = async (work: () => Promise<void>) => {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setNotice(t.applying);
+    setError(null);
+    try {
+      await work();
+      setNotice(null);
+    } catch (err) {
+      setError(errorText(err));
+      setNotice(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyProfile = (profile: Profile) =>
+    guard(async () => {
+      if (profile === "off" || profile === "observe") {
+        await setMode(profile === "off" ? "off" : "observe");
+      } else {
+        await setMode("automatic");
+        const persona = PROFILE_TO_PERSONA[profile];
+        if (persona) {
+          await setPersona(persona);
+        } else {
+          await clearPersona();
+        }
+      }
+      absorb(await getStatus());
+    });
+
+  const applyFpsTarget = (fps: number | null) =>
+    guard(async () => {
+      await setFpsTarget(fps);
+      // Clearing the override hands the slider back to auto-detect, so drop the
+      // local value instead of pinning the old one.
+      if (fps === null) {
+        setManualFps(null);
+      }
+      setStarvedPolls(0);
+      absorb(await getStatus());
+    });
+
+  const runLimiter = (action: "read" | "apply" | "clear") =>
+    guard(async () => {
+      if (action === "read") {
+        setLimiter(await getLimiter());
+      } else if (action === "apply") {
+        setLimiter(await applyLimiterFps(sliderFps));
+      } else {
+        setLimiter(await clearLimiterFps());
+      }
+    });
+
+  const restore = () =>
+    guard(async () => {
+      await restoreDefaults();
+      absorb(await getStatus());
+      setNotice(t.restored);
+    });
+
+  const readProbe = () =>
+    guard(async () => {
+      setSample(await sampleOnce());
+    });
+
   const supportedMin = control?.fps_target_override.supported_min ?? 30;
   const supportedMax = control?.fps_target_override.supported_max ?? 120;
   const supportedStep = control?.fps_target_override.supported_step ?? 5;
-  const targetMode =
-    control?.fps_target_override.status === "manual"
-      ? `${t.targetManual}: ${control.fps_target_override.fps} FPS`
-      : t.targetAuto;
+  const detectedFps = control?.fps_target_override.fps ?? runtime?.fps_target.fps ?? null;
+  const manualTarget = control?.fps_target_override.status === "manual";
+  // Offer only rates the panel can actually pace evenly: exact divisors of the
+  // current refresh rate, as computed by the daemon. There is no working VRR
+  // here, so an off-divisor target judders no matter how well we schedule it.
+  const candidates = (runtime?.auto_target?.candidates ?? []).filter(
+    (fps) => fps >= supportedMin && fps <= supportedMax,
+  );
+  // "auto" is a real choice, not the absence of one.
+  const targetOptions: { data: string; label: string }[] = [
+    { data: "auto", label: manualTarget ? t.targetAuto : t.targetAutoDetected(
+        detectedFps === null ? "-" : detectedFps.toFixed(0)) },
+    ...candidates.map((fps) => ({ data: String(fps), label: t.targetFixed(String(fps)) })),
+  ];
+  const selectedTarget = manualTarget ? String(control?.fps_target_override.fps ?? "") : "auto";
+  // The limiter helper still needs a concrete number to apply.
+  const sliderFps = manualFps ?? detectedFps ?? candidates[0] ?? supportedMax;
+  const profile = activeProfile(control);
+  const targetFps = runtime?.fps_target.fps ?? null;
+  const avgFps = runtime?.frame_source.avg_fps ?? null;
+  // 15 polls at 2 s == ~30 s of sustained shortfall before offering advice.
+  const showUnreachable =
+    starvedPolls >= 15 && targetFps !== null && avgFps !== null && avgFps < targetFps;
+  const suggestedFps = avgFps === null ? null : unreachableSuggestion(avgFps, supportedStep);
 
   return (
     <>
-      <PanelSection title={t.panelTitle}>
-        <PanelSectionRow>
-          <div style={blockStyle}>
-            <div className={staticClasses.Title} style={titleStyle}>
-              {status
-                ? `${t.currentMode}: ${modeLabel(t, status.mode, runtime)}`
-                : busy
-                  ? t.loading
-                  : t.unavailable}
-            </div>
-            {status ? (
-              <>
-                <div>
-                  {t.serviceState}: {status.active_state}/{status.sub_state}
-                </div>
-                <div style={detailStyle}>{mappedText(t.policyLabels, status.policy_label)}</div>
-                <div style={detailStyle}>{modeDescription(t, status.mode)}</div>
-                <div style={detailStyle}>{runtimeHeadline(t, status.mode, runtime)}</div>
-                <div style={detailStyle}>
-                  {t.evidenceLabel}: {evidenceText(t, runtime?.evidence_readiness)}
-                </div>
-                <div style={detailStyle}>{targetText(t, runtime?.fps_target)}</div>
-                <div style={detailStyle}>{frameText(t, runtime?.frame_source)}</div>
-                <div style={detailStyle}>
-                  {t.learning}: {learningText(t, runtime?.learning)}
-                </div>
-              </>
-            ) : null}
-            {notice ? <div style={detailStyle}>{notice}</div> : null}
-            {error ? (
-              <div role="alert" style={detailStyle}>
-                {t.errorPrefix}: {error}
+      <PanelSection>
+        <StatusCard t={t} control={control} runtime={runtime} notice={notice} error={error} />
+      </PanelSection>
+
+      {showUnreachable && suggestedFps !== null && targetFps !== null ? (
+        <PanelSection title={t.unreachableTitle}>
+          <PanelSectionRow>
+            <div style={blockStyle}>
+              <div style={detailStyle}>
+                {t.unreachableBody(targetFps.toFixed(0), avgFps!.toFixed(0))}
               </div>
-            ) : null}
-          </div>
+            </div>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => applyFpsTarget(suggestedFps)}>
+              {busy ? t.applying : t.unreachableAction(suggestedFps.toFixed(0))}
+            </ButtonItem>
+          </PanelSectionRow>
+        </PanelSection>
+      ) : null}
+
+      <PanelSection>
+        <PanelSectionRow>
+          <DropdownItem
+            label={t.profileLabel}
+            description={t.profileHints[profile]}
+            rgOptions={PROFILE_ORDER.map((key) => ({ data: key, label: t.profiles[key] }))}
+            selectedOption={profile}
+            disabled={busy}
+            onChange={(option) => applyProfile(option.data as Profile)}
+          />
         </PanelSectionRow>
       </PanelSection>
 
-      <PanelSection title={t.control}>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => applyMode("automatic")}>
-            {busy ? t.applying : t.modes.automatic}
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => applyMode("observe")}>
-            {busy ? t.applying : t.modes.observe}
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => applyMode("off")}>
-            {busy ? t.applying : t.modes.off}
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <div style={blockStyle}>
-            <div className={staticClasses.Title} style={titleStyle}>
-              {t.fpsTarget}: {manualFps} FPS
-            </div>
-            <div style={detailStyle}>{targetMode}</div>
-            <div style={detailStyle}>
-              {supportedMin}-{supportedMax} FPS / {supportedStep}
-            </div>
-            <input
-              aria-label={t.targetManual}
-              type="range"
-              min={30}
-              max={120}
-              step={5}
-              value={manualFps}
-              style={sliderStyle}
-              onChange={(event) => setManualFps(Number(event.currentTarget.value))}
+      {profile === "off" ? null : (
+        <PanelSection>
+          <PanelSectionRow>
+            <DropdownItem
+              label={t.targetLabel}
+              description={
+                manualTarget
+                  ? t.targetManualDescription(String(control?.fps_target_override.fps ?? ""))
+                  : t.targetAutoDescription()
+              }
+              rgOptions={targetOptions}
+              selectedOption={selectedTarget}
+              disabled={busy || targetOptions.length < 2}
+              onChange={(option) =>
+                applyFpsTarget(option.data === "auto" ? null : Number(option.data))
+              }
             />
-          </div>
-        </PanelSectionRow>
+          </PanelSectionRow>
+        </PanelSection>
+      )}
+
+      <PanelSection>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => applyFpsTarget(manualFps)}>
-            {busy ? t.applying : t.targetApply}
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => applyFpsTarget(null)}>
-            {busy ? t.applying : t.targetAuto}
-          </ButtonItem>
+          <ToggleField
+            label={t.diagnosticsToggle}
+            description={showDiagnostics ? t.diagnosticsDescription : undefined}
+            checked={showDiagnostics}
+            onChange={setShowDiagnostics}
+          />
         </PanelSectionRow>
       </PanelSection>
 
-      <PanelSection title={t.personaTitle}>
-        <PanelSectionRow>
-          <div style={blockStyle}>
-            <div style={detailStyle}>
-              {t.personaCurrent}: {currentPersona ? personaLabel(t, currentPersona) : t.personaAuto}
-            </div>
-            <div style={detailStyle}>{t.personaProvisional}</div>
-          </div>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => applyPersona("battery")}>
-            {busy ? t.applying : t.personaLabels.battery}
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => applyPersona("ac-quiet")}>
-            {busy ? t.applying : t.personaLabels["ac-quiet"]}
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => applyPersona("ac-performance")}>
-            {busy ? t.applying : t.personaLabels["ac-performance"]}
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => applyPersona(null)}>
-            {busy ? t.applying : t.personaAuto}
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
-
-      <PanelSection title={t.limiterTitle}>
-        <PanelSectionRow>
-          <div style={blockStyle}>
-            <div style={detailStyle}>{t.limiterConsentNote}</div>
-            <div style={detailStyle}>{limiterStateText(t, limiter)}</div>
-          </div>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => runLimiter("read")}>
-            {busy ? t.applying : t.limiterRead}
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => runLimiter("apply")}>
-            {busy ? t.applying : `${t.limiterApply}: ${manualFps} FPS`}
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => runLimiter("clear")}>
-            {busy ? t.applying : t.limiterClear}
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
-
-      <PanelSection title={t.telemetry}>
-        <PanelSectionRow>
-          <div style={blockStyle}>
-            <div className={staticClasses.Title} style={titleStyle}>
-              {runtimeTitle}
-            </div>
-            {runtime ? (
-              <>
-                <div>
-                  {t.action}: {mappedText(t.actions, runtime.last_action)}
-                </div>
-                <div>
-                  {t.package}: {fmtWatts(runtime.package_w)}
-                </div>
-                <div>
-                  {t.core}: {fmtWatts(runtime.core_w)}
-                </div>
-                <div>
-                  {t.graphics}: {fmtWatts(runtime.uncore_w)}
-                </div>
+      {showDiagnostics ? (
+        <>
+          <PanelSection title={t.diagnosticsToggle}>
+            <Diagnostics t={t} status={status} runtime={runtime} />
+            <PanelSectionRow>
+              <div style={blockStyle}>
                 <div style={detailStyle}>
-                  {mappedText(t.classifications, runtime.classification_primary)}
+                  {t.diag.learning}: {mappedText(t.learningStates, learningKey(runtime?.learning))}
                 </div>
-                <div style={detailStyle}>{mappedText(t.reasons, runtime.last_reason)}</div>
-                <div style={detailStyle}>Render: {fmtPercent(runtime.render_busy)}</div>
-                <div style={detailStyle}>
-                  {t.learning}: {learningText(t, runtime.learning)}
-                </div>
-                <TargetBalanceLiveRow t={t} runtime={runtime} />
-                <TargetBalanceDetails t={t} runtime={runtime} />
-              </>
-            ) : (
-              <div style={detailStyle}>{busy ? t.loading : t.noSample}</div>
-            )}
-          </div>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={load}>
-            {busy ? t.applying : t.refresh}
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={restore}>
-            {busy ? t.applying : t.restore}
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
+              </div>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={busy} onClick={load}>
+                {busy ? t.applying : t.diag.refresh}
+              </ButtonItem>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={busy} onClick={restore}>
+                {busy ? t.applying : t.diag.restore}
+              </ButtonItem>
+            </PanelSectionRow>
+          </PanelSection>
 
-      <PanelSection title={t.manualProbe}>
-        <PanelSectionRow>
-          <div style={blockStyle}>
-            <div className={staticClasses.Title} style={titleStyle}>
-              {probeTitle}
-            </div>
-            <div style={detailStyle}>{t.probeNotice}</div>
-            {sample ? (
-              <>
-                <div>
-                  {t.action}: {mappedText(t.actions, sample.action)}
-                </div>
-                <div>
-                  {t.package}: {fmtWatts(sample.package_w)}
-                </div>
-                <div>
-                  {t.core}: {fmtWatts(sample.core_w)}
-                </div>
-                <div>
-                  {t.graphics}: {fmtWatts(sample.uncore_w)}
-                </div>
-                <div style={detailStyle}>{targetText(t, sample.fps_target)}</div>
-                <div style={detailStyle}>{frameText(t, sample.frame_source)}</div>
-                {sample.reason ? (
-                  <div style={detailStyle}>{mappedText(t.reasons, sample.reason)}</div>
+          <PanelSection title={t.diag.limiter}>
+            <PanelSectionRow>
+              <Field
+                label={t.diag.limiter}
+                description={t.diag.limiterNote}
+                focusable={false}
+              >
+                {limiter
+                  ? `${mappedText(t.limiterStates, limiter.status)}${
+                      limiter.fps ? ` ${limiter.fps} FPS` : ""
+                    }`
+                  : "-"}
+              </Field>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={busy} onClick={() => runLimiter("read")}>
+                {busy ? t.applying : t.diag.limiterRead}
+              </ButtonItem>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={busy} onClick={() => runLimiter("apply")}>
+                {busy ? t.applying : `${t.diag.limiterApply}: ${sliderFps} FPS`}
+              </ButtonItem>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={busy} onClick={() => runLimiter("clear")}>
+                {busy ? t.applying : t.diag.limiterClear}
+              </ButtonItem>
+            </PanelSectionRow>
+          </PanelSection>
+
+          <PanelSection title={t.diag.probe}>
+            <PanelSectionRow>
+              <div style={blockStyle}>
+                <div style={detailStyle}>{t.diag.probeNote}</div>
+                {sample ? (
+                  <>
+                    <div style={detailStyle}>
+                      {t.diag.action}: {mappedText(t.actions, sample.action)}
+                    </div>
+                    <div style={detailStyle}>
+                      {t.diag.package}: {fmtWatts(sample.package_w)} / {t.diag.core}:{" "}
+                      {fmtWatts(sample.core_w)} / {t.diag.graphics}: {fmtWatts(sample.uncore_w)}
+                    </div>
+                    <div style={detailStyle}>
+                      {t.diag.frameFeed}: {mappedText(t.frameStates, sample.frame_source.status)}
+                    </div>
+                  </>
                 ) : null}
-              </>
-            ) : null}
-          </div>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={readProbe}>
-            {busy ? t.applying : t.readProbe}
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
+              </div>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={busy} onClick={readProbe}>
+                {busy ? t.applying : t.diag.probeRead}
+              </ButtonItem>
+            </PanelSectionRow>
+          </PanelSection>
+        </>
+      ) : null}
     </>
   );
 };
+
+function learningKey(learning: LearningState | null | undefined): string {
+  if (!learning) {
+    return "learning";
+  }
+  if (learning.reusable_next_launch) {
+    return "ready";
+  }
+  if (
+    learning.skip_reason === "fps_target_unknown" ||
+    learning.status === "waiting-for-fps-target"
+  ) {
+    return "needsTarget";
+  }
+  if (learning.status === "stopped" || learning.status === "view-data-only") {
+    return "stopped";
+  }
+  return "learning";
+}
 
 export default definePlugin(() => ({
   name: "Game Power",

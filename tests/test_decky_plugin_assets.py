@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,175 +92,142 @@ def test_game_power_decky_manifest_names_game_power_panel():
     assert "charge-limit" not in manifest["publish"]["tags"]
 
 
-def test_game_power_decky_frontend_exposes_intent_not_raw_policy_knobs():
-    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
-    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
+def _game_power_frontend() -> tuple[str, str]:
+    return (
+        (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text(),
+        (GAME_POWER_PLUGIN / "dist" / "index.js").read_text(),
+    )
 
+
+def test_game_power_decky_frontend_wires_the_backend_api():
+    frontend, _ = _game_power_frontend()
+
+    for name in (
+        '"get_status"',
+        '"sample_once"',
+        '"set_mode"',
+        '"set_fps_target"',
+        '"restore_defaults"',
+        '"set_persona"',
+        '"clear_persona"',
+        '"limiter_status"',
+        '"set_limiter"',
+        '"clear_limiter"',
+    ):
+        assert name in frontend
     assert "definePlugin" in frontend
     assert "callable" in frontend
-    assert '"get_status"' in frontend
-    assert '"sample_once"' in frontend
-    assert '"set_mode"' in frontend
-    assert '"set_fps_target"' in frontend
-    assert '"restore_defaults"' in frontend
-    assert "Balance to FPS target" in frontend
-    assert "Watch data only" in frontend
-    assert "Stop Game Power" in frontend
-    assert "Manual FPS target" in frontend
-    assert "Use SteamOS limit" in frontend
-    assert "Learning status" in frontend
-    assert "遊戲電力" in frontend
-    assert "依 FPS 目標自動平衡" in frontend
-    assert "只看數據，不調整功耗" in frontend
-    assert "停止遊戲電力" in frontend
-    assert "手動 FPS 目標" in frontend
-    assert "使用 SteamOS 限制" in frontend
-    assert "學習狀態" in frontend
-    assert "依 FPS 目標自動平衡" in bundled
-    assert "只看數據，不調整功耗" in bundled
-    assert "停止遊戲電力" in bundled
-    assert "手動 FPS 目標" in bundled
-    assert "使用 SteamOS 限制" in bundled
-    assert "模式: automatic" not in frontend
-    assert "動作: observe-only" not in frontend
-    assert "模式: automatic" not in bundled
-    assert "動作: observe-only" not in bundled
-    assert "自動觀察" not in frontend
-    assert "自動觀察" not in bundled
-    for forbidden in (
-        "P-core",
-        "E-core",
-        "pcore",
-        "ecore",
-        "frequency",
-        "freq",
-        "threshold",
-        "uclamp",
-        "CPUWeight",
-        "PL2",
-        "Tau",
-        "affinity",
-    ):
-        assert forbidden not in frontend
 
 
-def test_game_power_decky_mode_copy_explains_control_state_differences():
-    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
-    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
+def test_game_power_decky_frontend_uses_native_decky_controls():
+    """A QAM panel is driven with a gamepad, so it must use Decky's own
+    focusable controls rather than raw HTML inputs."""
+    frontend, bundled = _game_power_frontend()
 
-    required_copy = (
-        "Balance to FPS target",
-        "Target-aware balancing",
-        "Learning before reuse",
-        "Watch data only",
-        "Sampling is stopped",
-        "Frame data missing",
-        "Frame data live",
-        "FPS target unknown",
-        "Manual FPS target",
-        "Use SteamOS limit",
-        "Learning status",
-        "Needs stable FPS target",
-        "依 FPS 目標自動平衡",
-        "依 FPS 目標平衡",
-        "學習中，暫不復用",
-        "只看數據，不調整功耗",
-        "已停止採樣",
-        "缺少影格資料",
-        "影格資料即時可用",
-        "FPS 目標未知",
-        "手動 FPS 目標",
-        "使用 SteamOS 限制",
-        "學習狀態",
-        "需要穩定 FPS 目標",
-    )
-    ambiguous_copy = (
-        "Monitor only",
-        "Power scheduler off",
-        "只監測",
-        "停用調度",
-        "只讀取遊戲電力資料，不改變功耗行為。",
-        "不接管 CPU/GPU 功耗，交回系統處理。",
-        "自動觀察",
-    )
-
-    for text in required_copy:
-        assert text in frontend
-        assert text in bundled
-    for text in ambiguous_copy:
-        assert text not in frontend
-        assert text not in bundled
+    for component in ("DropdownItem", "ToggleField"):
+        assert component in frontend
+        assert component in bundled
+    # A raw range input cannot be focused or nudged with the D-pad.
+    assert 'type="range"' not in frontend
 
 
-def test_game_power_decky_frontend_exposes_evidence_readiness_copy_and_types():
-    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
-    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
+def test_game_power_decky_merges_mode_and_persona_into_one_profile_control():
+    """mode and persona are orthogonal in the daemon but persona silently does
+    nothing unless mode is automatic; the panel must not expose that trap."""
+    frontend, bundled = _game_power_frontend()
 
-    source_only = (
-        "type EvidenceReadiness",
-        "evidence_readiness: EvidenceReadiness",
-        "evidenceLabel: string",
-        'evidenceLabel: "Local evidence"',
-        'evidenceLabel: "本機證據"',
-    )
-    required_copy = (
-        "runtime?.evidence_readiness",
-        "evidenceText(t, runtime?.evidence_readiness)",
-        "isTargetAwareReady(runtime?.evidence_readiness)",
-        "Local evidence",
-        "Local target/frame evidence ready",
-        "Local evidence: power signals only",
-        "Local evidence unavailable",
-        "View data only",
-        "Game Power stopped",
-        "本機證據",
-        "本機 FPS 目標與影格資料可用",
-        "本機證據：僅有功耗訊號",
-        "本機證據不可用",
-        "只看數據",
-        "遊戲電力已停止",
-    )
-
-    for text in source_only:
-        assert text in frontend
-    for text in required_copy:
+    assert "type Profile =" in frontend
+    assert "PROFILE_TO_PERSONA" in frontend
+    english = ("Automatic", "Save battery", "Quiet", "Performance", "Watch only", "Off")
+    chinese = ("自動", "省電", "安靜", "效能", "只觀察", "關閉")
+    for text in english + chinese:
         assert text in frontend
         assert text in bundled
 
 
-def test_game_power_decky_automatic_copy_requires_evidence_readiness_claim():
-    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
-    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
-    compact_frontend = "".join(frontend.split())
-    compact_bundled = "".join(bundled.split())
+def test_game_power_decky_status_headline_is_plain_language_in_both_locales():
+    frontend, bundled = _game_power_frontend()
 
-    assert (
-        "functionisTargetAwareReady(readiness:EvidenceReadiness|null|undefined):boolean{"
-        'returnreadiness?.status==="target-aware-live"&&readiness?.claim_ready===true;'
-        "}"
-    ) in compact_frontend
-    assert 'isTargetAwareReady(runtime?.evidence_readiness)' in frontend
-    assert (
-        '!runtime?.stale&&!runtime?.error&&runtime?.fps_target?.status==="known"&&'
-        'runtime?.frame_source?.status==="live"'
-    ) not in compact_frontend
-    assert (
-        '!runtime?.stale&&!runtime?.error&&runtime?.fps_target?.status==="known"&&'
-        'runtime?.frame_source?.status==="live"'
-    ) not in compact_bundled
+    english = (
+        "Holding steady",
+        "Full power",
+        "Waiting for a game",
+        "Turned off",
+        "Watching only",
+    )
+    chinese = ("穩定維持中", "全力輸出", "等待遊戲中", "已關閉", "只觀察")
+    for text in english + chinese:
+        assert text in frontend
+        assert text in bundled
 
 
-def test_game_power_decky_headline_respects_observe_and_off_before_telemetry_state():
-    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
-    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
+def test_game_power_decky_headline_respects_off_and_observe_before_telemetry_state():
+    """Off/observe are user intent and must win over whatever the last runtime
+    snapshot happened to say."""
+    frontend, bundled = _game_power_frontend()
+    compact = "".join(frontend.split())
 
-    assert 'if (mode === "off")' in frontend
-    assert 'if (mode === "observe")' in frontend
-    assert 'runtimeHeadline(t, status.mode, runtime)' in frontend
-    compact_bundled = "".join(bundled.split())
-    assert 'mode==="off"' in compact_bundled
-    assert 'mode==="observe"' in compact_bundled
+    assert "functionheadlineText(" in compact
+    off = compact.index('control.mode==="off"')
+    observe = compact.index('control.mode==="observe"')
+    telemetry = compact.index("if(!runtime||runtime.error)")
+    assert off < telemetry
+    assert observe < telemetry
+    assert 'mode==="off"' in "".join(bundled.split())
 
+
+def test_game_power_decky_technical_readouts_are_opt_in():
+    """Ladder steps, gated lanes and verdict ledgers are debugging output. They
+    may exist, but only behind an explicitly disabled-by-default toggle."""
+    frontend, bundled = _game_power_frontend()
+
+    assert "const [showDiagnostics, setShowDiagnostics] = useState(false)" in frontend
+    assert "{showDiagnostics ? (" in frontend
+    assert "Show technical details" in frontend
+    assert "顯示技術細節" in frontend
+    assert "顯示技術細節" in bundled
+    # Everything technical must render behind the gate, not merely be defined
+    # behind it: check the always-visible JSX of the panel itself.
+    panel_jsx = frontend.split("const GamePowerPanel")[1]
+    always_on = panel_jsx.split("{showDiagnostics ? (")[0]
+    assert "<Diagnostics" not in always_on
+    assert "t.diag." not in always_on
+
+
+def test_game_power_decky_offers_a_reachable_target_when_the_scene_cannot_hold_one():
+    """Device evidence 2026-07-31: a scene sat below a 60 FPS target at full
+    power for minutes. Burning full power forever is the wrong answer; the panel
+    should say so and offer a target the scene can actually hold."""
+    frontend, bundled = _game_power_frontend()
+
+    assert "unreachableSuggestion" in frontend
+    assert "starvedPolls" in frontend
+    # Only counts when nothing of ours is applied -- otherwise we blame the game
+    # for our own trims.
+    assert "trim_rungs_active?.length ?? 0) === 0" in frontend
+    assert "Target looks out of reach" in frontend
+    assert "目標似乎達不到" in frontend
+    assert "目標似乎達不到" in bundled
+
+
+def test_game_power_decky_fps_target_uses_backend_options_and_never_seeds_a_literal():
+    frontend, bundled = _game_power_frontend()
+
+    # The offered targets come from the daemon (exact divisors of the live
+    # refresh rate), filtered by the backend's supported_* contract -- never from
+    # literals in the frontend. There is no working VRR on the reference panel,
+    # so an off-divisor target judders however well it is scheduled.
+    assert "runtime?.auto_target?.candidates" in frontend
+    assert "fps >= supportedMin && fps <= supportedMax" in frontend
+    # "Automatic" is an explicit option, not the absence of a choice.
+    assert '{ data: "auto"' in frontend
+    # The slider must never seed itself with a literal FPS value: a hardcoded
+    # default renders as a real target the user never chose, and one tap on
+    # "use this target" commits it (device report 2026-07-31: panel showed 40).
+    seed = re.search(r"const \[manualFps, setManualFps\] = (useState[^;]*);", frontend)
+    assert seed is not None
+    assert seed.group(1) == "useState<number | null>(null)"
+    assert "set_fps_target" in bundled
 
 def test_game_power_decky_backend_exposes_safe_mode_api():
     backend = (GAME_POWER_PLUGIN / "main.py").read_text()
@@ -280,45 +248,6 @@ def test_game_power_decky_backend_exposes_safe_mode_api():
     assert "--game-power-ecore-max-mhz" not in backend
     assert "/usr/bin/python3" not in backend
     assert "LD_LIBRARY_PATH" not in backend
-
-
-def test_game_power_decky_frontend_exposes_v10_persona_and_limiter_intent_copy():
-    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
-    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
-
-    assert '"set_persona"' in frontend
-    assert '"clear_persona"' in frontend
-    assert '"limiter_status"' in frontend
-    assert '"set_limiter"' in frontend
-    assert '"clear_limiter"' in frontend
-
-    required_copy = (
-        "Power intent",
-        "Battery saver",
-        "Quiet (plugged in)",
-        "Performance (plugged in)",
-        "Auto (match power source)",
-        "Framework shipped; tuning constants are provisional.",
-        "Frame limit helper",
-        "Opt-in: caps in-game frames through gamescope. Device-unverified.",
-        "Apply frame limit",
-        "Clear frame limit",
-        "Soft power budget",
-        "Frame feed",
-        "電力取向",
-        "電池省電",
-        "安靜（外接電源）",
-        "效能（外接電源）",
-        "自動（依電源）",
-        "影格上限輔助",
-        "選用：透過 gamescope 設定遊戲影格上限。尚未在裝置驗證。",
-        "套用影格上限",
-        "動態功耗預算",
-        "影格資料流",
-    )
-    for text in required_copy:
-        assert text in frontend
-        assert text in bundled
 
 
 def test_game_power_decky_frontend_v10_copy_avoids_raw_knob_vocabulary():
@@ -360,20 +289,3 @@ def test_game_power_decky_backend_exposes_persona_and_limiter_api():
     assert '"clear-persona"' in backend
 
 
-def test_game_power_decky_frontend_exposes_safe_fps_slider_not_raw_policy_knobs():
-    frontend = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
-    bundled = (GAME_POWER_PLUGIN / "dist" / "index.js").read_text()
-
-    required = (
-        'type="range"',
-        "min={30}",
-        "max={120}",
-        "step={5}",
-        "set_fps_target",
-        "Manual FPS target",
-        "手動 FPS 目標",
-    )
-    for text in required:
-        assert text in frontend
-    assert "手動 FPS 目標" in bundled
-    assert "set_fps_target" in bundled

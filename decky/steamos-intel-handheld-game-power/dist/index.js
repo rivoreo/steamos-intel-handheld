@@ -82,6 +82,19 @@ function FaGamepad (props) {
   return GenIcon({"attr":{"viewBox":"0 0 640 512"},"child":[{"tag":"path","attr":{"d":"M480.07 96H160a160 160 0 1 0 114.24 272h91.52A160 160 0 1 0 480.07 96zM248 268a12 12 0 0 1-12 12h-52v52a12 12 0 0 1-12 12h-24a12 12 0 0 1-12-12v-52H84a12 12 0 0 1-12-12v-24a12 12 0 0 1 12-12h52v-52a12 12 0 0 1 12-12h24a12 12 0 0 1 12 12v52h52a12 12 0 0 1 12 12zm216 76a40 40 0 1 1 40-40 40 40 0 0 1-40 40zm64-96a40 40 0 1 1 40-40 40 40 0 0 1-40 40z"},"child":[]}]})(props);
 }
 
+const PROFILE_ORDER = [
+    "auto",
+    "battery",
+    "quiet",
+    "performance",
+    "observe",
+    "off",
+];
+const PROFILE_TO_PERSONA = {
+    battery: "battery",
+    quiet: "ac-quiet",
+    performance: "ac-performance",
+};
 const getStatus = callable("get_status");
 const sampleOnce = callable("sample_once");
 const setMode = callable("set_mode");
@@ -96,355 +109,321 @@ const COPY = {
     en: {
         pluginName: "Game Power",
         panelTitle: "Game Power",
-        loading: "Reading game-power status...",
-        unavailable: "Game-power status is unavailable.",
-        currentMode: "Current mode",
-        serviceState: "Background service",
-        telemetry: "Runtime telemetry",
-        control: "Control",
-        fpsTarget: "FPS target",
-        targetAuto: "Use SteamOS limit",
-        targetManual: "Manual FPS target",
-        targetApply: "Set FPS target",
-        learning: "Learning status",
-        learningBeforeReuse: "Learning before reuse",
-        learningReady: "Can reuse next launch",
-        learningNeedsTarget: "Needs stable FPS target",
-        learningStopped: "Sampling is stopped",
-        manualProbe: "Manual sample",
-        probeNotice: "Probe sample - not daemon control",
-        action: "Action",
-        game: "Current game",
-        package: "Package",
-        core: "CPU",
-        graphics: "GPU side",
-        noSample: "No foreground game sample",
-        refresh: "Refresh",
-        readProbe: "Read one sample",
-        restore: "Use service default",
+        loading: "Checking...",
+        unavailable: "Game Power is unavailable",
+        status: {
+            off: "Turned off",
+            observe: "Watching only",
+            noGame: "Waiting for a game",
+            noTarget: "No frame rate target set",
+            stale: "Reconnecting...",
+            starting: "Warming up...",
+            loadingScene: "Loading - full power",
+            boosting: "Full power",
+            holding: "Holding steady",
+            holdingSaving: "Holding steady, using less power",
+        },
+        holdingWithTarget: (state, fps) => `${state} at ${fps} FPS`,
+        nowLine: (fps, watts) => `${fps} FPS now, ${watts}`,
+        profileLabel: "Power profile",
+        profileDescription: "How much power to spend holding your frame rate.",
+        profiles: {
+            auto: "Automatic",
+            battery: "Save battery",
+            quiet: "Quiet",
+            performance: "Performance",
+            observe: "Watch only",
+            off: "Off",
+        },
+        profileHints: {
+            auto: "Follows whether you are on battery or plugged in.",
+            battery: "Lowest power that still holds your frame rate.",
+            quiet: "Keeps power down so fans stay quiet.",
+            performance: "Spends full power for the most headroom.",
+            observe: "Collects data without changing anything.",
+            off: "Game Power makes no changes at all.",
+        },
+        targetLabel: "Frame rate target",
+        targetAuto: "Automatic",
+        targetAutoDescription: () => "Follows the SteamOS limit and lowers it if a scene cannot hold it.",
+        targetAutoDetected: (fps) => `Automatic (now ${fps} FPS)`,
+        targetFixed: (fps) => `${fps} FPS`,
+        targetManualDescription: (fps) => `Set by you: ${fps} FPS.`,
+        unreachableTitle: "Target looks out of reach",
+        unreachableBody: (target, actual) => `This scene is running near ${actual} FPS at full power, below your ${target} FPS target.`,
+        unreachableAction: (fps) => `Set the target to ${fps} FPS`,
         applying: "Applying...",
-        restored: "Using the service default.",
-        evidenceLabel: "Local evidence",
-        balanceLabel: "Target balance",
-        phaseLabel: "Phase",
-        ladderLabel: "Trim ladder step",
-        colorsLabel: "Thread colors",
-        lanesLabel: "Gated write lanes",
-        verdictLabel: "Verdict ledger",
-        truncatedNote: "color sampling truncated",
-        none: "none",
-        personaTitle: "Power intent",
-        personaCurrent: "Current intent",
-        personaAuto: "Auto (match power source)",
-        personaProvisional: "Framework shipped; tuning constants are provisional.",
-        personaLabels: {
-            battery: "Battery saver",
-            "ac-quiet": "Quiet (plugged in)",
-            "ac-performance": "Performance (plugged in)",
-        },
-        limiterTitle: "Frame limit helper",
-        limiterConsentNote: "Opt-in: caps in-game frames through gamescope. Device-unverified.",
-        limiterApply: "Apply frame limit",
-        limiterClear: "Clear frame limit",
-        limiterRead: "Check frame limit",
-        limiterStates: {
-            limited: "Frame limit active",
-            unlimited: "No frame limit",
-            unknown: "Frame limit helper available",
-            unsupported: "Frame limit helper unavailable",
-        },
-        budgetLabel: "Soft power budget",
-        boostLabel: "Boost",
-        boostStates: {
-            active: "active",
-            idle: "idle",
-        },
-        frameFeedLabel: "Frame feed",
-        frameFeedStates: {
-            live: "live",
-            stale: "stale",
-            absent: "absent",
-        },
-        trimLabel: "Active trims",
-        evidenceStates: {
-            "target-aware-live": "Local target/frame evidence ready",
-            "power-signals-only": "Local evidence: power signals only",
-            "view-data-only": "View data only",
-            stopped: "Game Power stopped",
-            "control-invalid": "Local evidence unavailable",
-            unavailable: "Local evidence unavailable",
+        restored: "Restored",
+        errorPrefix: "Error",
+        diagnosticsToggle: "Show technical details",
+        diagnosticsDescription: "Live scheduler internals. Not needed for normal use.",
+        diag: {
+            service: "Background service",
+            game: "App ID",
+            evidence: "Local evidence",
+            phase: "Phase",
+            step: "Ladder step",
+            trims: "Active trims",
+            budget: "Power budget",
+            boost: "Boost",
+            boostActive: "active",
+            boostIdle: "idle",
+            frameFeed: "Frame feed",
+            pacing: "Pacing p95 / budget",
+            baseline: "Pacing baseline",
+            package: "Package",
+            core: "CPU",
+            graphics: "Graphics",
+            render: "Render busy",
+            learning: "Learning",
+            colors: "Thread groups",
+            lanes: "Gated lanes",
+            verdict: "Verdict ledger",
+            truncated: "truncated",
+            limiter: "Frame limiter",
+            limiterNote: "Applies a limit through the compositor. Cleared on request.",
+            limiterRead: "Read limiter state",
+            limiterApply: "Apply limiter",
+            limiterClear: "Clear limiter",
+            probe: "One-off sample",
+            probeNote: "A single reading. Does not change control.",
+            probeRead: "Take a sample",
+            action: "Last action",
+            restore: "Restore defaults",
+            refresh: "Refresh now",
         },
         phases: {
-            "no-game": "No foreground game",
-            loading: "Loading (constraints released)",
-            "below-target-cpu-bound": "Below target, CPU-bound",
-            "below-target-gpu-bound": "Below target, GPU-bound",
+            "no-game": "No game",
+            "no-target": "No target",
+            loading: "Loading",
             "at-target": "At target",
-            "above-target": "Above target (trimming)",
-            "no-target": "No FPS target",
+            "above-target": "Above target",
+            "below-target-cpu-bound": "Below target (CPU)",
+            "below-target-gpu-bound": "Below target (graphics)",
             unknown: "Unknown",
-        },
-        actuatorStates: {
-            active: "active",
-            advisory: "advisory",
-            blocked: "blocked",
-        },
-        laneNames: {
-            foreground: "Foreground boost",
-            background: "Background easing",
-            ladder: "Deep trim",
-            other: "Write lane",
-        },
-        laneStates: {
-            active: "active",
-            blocked: "blocked (no verdict)",
-            released: "released (loading)",
-        },
-        verdictStates: {
-            ready: "verdicts loaded",
-            unavailable: "no verdict ledger",
-            missing: "verdict file missing",
-            corrupt: "verdict file corrupt",
-            invalid: "verdict file invalid",
-        },
-        modes: {
-            automatic: "Balance to FPS target",
-            observe: "Watch data only",
-            off: "Stop Game Power",
-            default: "Service default",
-            unknown: "Unknown",
-        },
-        modeDescriptions: {
-            automatic: "Adjusts CPU/GPU shared power while the game is below its FPS target.",
-            observe: "Shows live samples without changing power.",
-            off: "Sampling is stopped",
-            default: "Uses the packaged default power policy.",
-            unknown: "The active game-power mode could not be identified.",
-        },
-        telemetryLabels: {
-            targetAware: "Target-aware balancing",
-            powerSignals: "Learning before reuse",
-            collecting: "Learning before reuse",
-            stale: "Runtime data is stale",
-            unavailable: "Daemon runtime data is unavailable",
-        },
-        targetStates: {
-            known: "FPS target known",
-            unknown: "FPS target unknown",
-            unlimited: "FPS target unlimited",
-            unsupported: "FPS target unsupported",
-        },
-        frameStates: {
-            live: "Frame data live",
-            missing: "Frame data missing",
-            stale: "Frame data stale",
-            malformed: "Frame data malformed",
-            unsupported: "Frame data unsupported",
         },
         actions: {
-            "observe-only": "Viewing data only",
-            "gpu-priority-epp": "GPU priority",
-            "gpu-priority-cpu-cap": "GPU priority with CPU cap",
             idle: "Idle",
-            restore: "Restoring system policy",
+            "observe-only": "Observing",
+            restore: "Restored",
+            "gpu-priority-epp": "Graphics priority",
+            "target-balance-trim": "Trimming",
+            "target-balance-release": "Released",
+            "loading-boost": "Loading boost",
         },
-        reasons: {
-            "mode is observe": "Data-only mode is active; no power settings are changed.",
-            "mode is off": "Game Power is stopped; sampling and power changes are stopped.",
-            "package limited with GPU activity": "GPU activity is high, so power is being held for graphics.",
-            "package limited with high core pressure": "CPU pressure is high, so CPU power is capped to protect GPU power.",
+        actuatorStates: { active: "active", blocked: "blocked", pending: "pending" },
+        laneNames: {
+            foreground: "Foreground",
+            background: "Background",
+            ladder: "Deep steps",
+            other: "Other",
         },
-        classifications: {
-            "control-disabled": "Scheduler off",
-            "observe-only": "Watch data only",
-            "no-foreground-game": "No foreground game sample",
-            "fps-target-satisfied": "FPS target already satisfied",
-            "insufficient-power-evidence": "Learning before reuse",
-            "not-package-bound": "Package power is not the limit",
-            "gpu-package-bound": "GPU-side package pressure detected",
-            "gpu-package-bound-cpu-contention": "CPU/GPU power contention detected",
+        laneStates: { active: "active", blocked: "blocked", released: "released" },
+        verdictStates: {
+            ready: "ready",
+            unavailable: "unavailable",
+            invalid: "invalid",
+            missing: "missing",
         },
-        policyLabels: {
-            "Balanced automatic policy": "Game balance policy",
+        evidenceStates: {
+            "target-aware-live": "Target and frame data ready",
+            "power-signals-only": "Power signals only",
+            unavailable: "Unavailable",
+            stopped: "Stopped",
+            "view-data-only": "View data only",
         },
-        errorPrefix: "Error",
+        frameStates: {
+            live: "Live",
+            missing: "Missing",
+            stale: "Stale",
+            "profiler-only": "Profiler only",
+        },
+        targetStates: {
+            known: "Known",
+            unknown: "Unknown",
+            unlimited: "Unlimited",
+            "none-configured": "Not configured",
+        },
+        limiterStates: {
+            unknown: "Unknown",
+            unsupported: "Not supported",
+            applied: "Applied",
+            cleared: "Cleared",
+            ready: "Ready",
+        },
+        learningStates: {
+            ready: "Can reuse next launch",
+            learning: "Learning before reuse",
+            needsTarget: "Needs a steady target",
+            stopped: "Stopped",
+        },
+        none: "None",
     },
     zhHant: {
         pluginName: "遊戲電力",
         panelTitle: "遊戲電力",
-        loading: "正在讀取遊戲電力狀態...",
-        unavailable: "無法讀取遊戲電力狀態。",
-        currentMode: "目前模式",
-        serviceState: "背景服務",
-        telemetry: "執行中資料",
-        control: "控制",
-        fpsTarget: "FPS 目標",
-        targetAuto: "使用 SteamOS 限制",
-        targetManual: "手動 FPS 目標",
-        targetApply: "設定 FPS 目標",
-        learning: "學習狀態",
-        learningBeforeReuse: "學習中，暫不復用",
-        learningReady: "下次可直接套用",
-        learningNeedsTarget: "需要穩定 FPS 目標",
-        learningStopped: "已停止採樣",
-        manualProbe: "手動採樣",
-        probeNotice: "手動採樣 - 不代表 daemon 正在控制",
-        action: "動作",
-        game: "目前遊戲",
-        package: "封包",
-        core: "CPU",
-        graphics: "GPU 側",
-        noSample: "目前沒有前景遊戲樣本",
-        refresh: "重新讀取",
-        readProbe: "讀取一次樣本",
-        restore: "使用服務預設",
-        applying: "正在套用...",
-        restored: "已切回服務預設。",
-        evidenceLabel: "本機證據",
-        balanceLabel: "目標平衡",
-        phaseLabel: "階段",
-        ladderLabel: "降頻階梯步數",
-        colorsLabel: "執行緒著色",
-        lanesLabel: "受管制的寫入通道",
-        verdictLabel: "裁決紀錄",
-        truncatedNote: "著色取樣已截斷",
-        none: "無",
-        personaTitle: "電力取向",
-        personaCurrent: "目前取向",
-        personaAuto: "自動（依電源）",
-        personaProvisional: "框架已上線；調校常數仍為暫定值。",
-        personaLabels: {
-            battery: "電池省電",
-            "ac-quiet": "安靜（外接電源）",
-            "ac-performance": "效能（外接電源）",
+        loading: "檢查中...",
+        unavailable: "遊戲電力無法使用",
+        status: {
+            off: "已關閉",
+            observe: "只觀察",
+            noGame: "等待遊戲中",
+            noTarget: "尚未設定張數目標",
+            stale: "重新連線中...",
+            starting: "暖機中...",
+            loadingScene: "載入中 - 全力輸出",
+            boosting: "全力輸出",
+            holding: "穩定維持中",
+            holdingSaving: "穩定維持中，功耗已降低",
         },
-        limiterTitle: "影格上限輔助",
-        limiterConsentNote: "選用：透過 gamescope 設定遊戲影格上限。尚未在裝置驗證。",
-        limiterApply: "套用影格上限",
-        limiterClear: "取消影格上限",
-        limiterRead: "檢查影格上限",
-        limiterStates: {
-            limited: "影格上限啟用中",
-            unlimited: "沒有影格上限",
-            unknown: "影格上限輔助可用",
-            unsupported: "影格上限輔助不可用",
+        holdingWithTarget: (state, fps) => `${fps} FPS ${state}`,
+        nowLine: (fps, watts) => `目前 ${fps} FPS，${watts}`,
+        profileLabel: "電力模式",
+        profileDescription: "決定要花多少功耗來維持你的張數。",
+        profiles: {
+            auto: "自動",
+            battery: "省電",
+            quiet: "安靜",
+            performance: "效能",
+            observe: "只觀察",
+            off: "關閉",
         },
-        budgetLabel: "動態功耗預算",
-        boostLabel: "衝刺",
-        boostStates: {
-            active: "啟用中",
-            idle: "待命",
+        profileHints: {
+            auto: "依照使用電池或插電自動切換。",
+            battery: "在維持張數的前提下用最低功耗。",
+            quiet: "壓低功耗，讓風扇保持安靜。",
+            performance: "全力輸出，保留最多餘裕。",
+            observe: "只收集資料，不做任何調整。",
+            off: "遊戲電力完全不介入。",
         },
-        frameFeedLabel: "影格資料流",
-        frameFeedStates: {
-            live: "即時",
-            stale: "過期",
-            absent: "無",
-        },
-        trimLabel: "生效的節流",
-        evidenceStates: {
-            "target-aware-live": "本機 FPS 目標與影格資料可用",
-            "power-signals-only": "本機證據：僅有功耗訊號",
-            "view-data-only": "只看數據",
-            stopped: "遊戲電力已停止",
-            "control-invalid": "本機證據不可用",
-            unavailable: "本機證據不可用",
+        targetLabel: "張數目標",
+        targetAuto: "自動",
+        targetAutoDescription: () => "跟隨 SteamOS 的限制；場景撐不住時會自動調低。",
+        targetAutoDetected: (fps) => `自動（目前 ${fps} FPS）`,
+        targetFixed: (fps) => `${fps} FPS`,
+        targetManualDescription: (fps) => `你設定的目標：${fps} FPS。`,
+        unreachableTitle: "目標似乎達不到",
+        unreachableBody: (target, actual) => `這個場景在全力輸出下大約只有 ${actual} FPS，低於你設定的 ${target} FPS。`,
+        unreachableAction: (fps) => `把目標改成 ${fps} FPS`,
+        applying: "套用中...",
+        restored: "已還原",
+        errorPrefix: "錯誤",
+        diagnosticsToggle: "顯示技術細節",
+        diagnosticsDescription: "調度器的即時內部狀態，一般使用不需要看。",
+        diag: {
+            service: "背景服務",
+            game: "App ID",
+            evidence: "本機證據",
+            phase: "階段",
+            step: "階梯層級",
+            trims: "生效中的調整",
+            budget: "功耗預算",
+            boost: "增壓",
+            boostActive: "作用中",
+            boostIdle: "閒置",
+            frameFeed: "影格資料",
+            pacing: "節奏 p95 / 預算",
+            baseline: "節奏基線",
+            package: "整體",
+            core: "處理器",
+            graphics: "繪圖",
+            render: "繪圖忙碌",
+            learning: "學習",
+            colors: "執行緒分組",
+            lanes: "受管制通道",
+            verdict: "判定紀錄",
+            truncated: "已截斷",
+            limiter: "限幀",
+            limiterNote: "透過合成器套用限制，可隨時清除。",
+            limiterRead: "讀取限幀狀態",
+            limiterApply: "套用限幀",
+            limiterClear: "清除限幀",
+            probe: "單次取樣",
+            probeNote: "只是一次讀值，不會改變控制。",
+            probeRead: "取樣一次",
+            action: "最後動作",
+            restore: "還原預設",
+            refresh: "立即重新整理",
         },
         phases: {
-            "no-game": "沒有前景遊戲",
-            loading: "載入中（已釋放限制）",
-            "below-target-cpu-bound": "低於目標，CPU 受限",
-            "below-target-gpu-bound": "低於目標，GPU 受限",
+            "no-game": "沒有遊戲",
+            "no-target": "沒有目標",
+            loading: "載入中",
             "at-target": "已達目標",
-            "above-target": "高於目標（正在降頻）",
-            "no-target": "沒有 FPS 目標",
+            "above-target": "超過目標",
+            "below-target-cpu-bound": "未達目標（處理器）",
+            "below-target-gpu-bound": "未達目標（繪圖）",
             unknown: "未知",
-        },
-        actuatorStates: {
-            active: "啟用",
-            advisory: "僅建議",
-            blocked: "封鎖",
-        },
-        laneNames: {
-            foreground: "前景提升",
-            background: "背景讓路",
-            ladder: "深層降頻",
-            other: "寫入通道",
-        },
-        laneStates: {
-            active: "啟用",
-            blocked: "封鎖（無裁決）",
-            released: "已釋放（載入中）",
-        },
-        verdictStates: {
-            ready: "已載入裁決",
-            unavailable: "沒有裁決紀錄",
-            missing: "缺少裁決檔案",
-            corrupt: "裁決檔案損毀",
-            invalid: "裁決檔案無效",
-        },
-        modes: {
-            automatic: "依 FPS 目標自動平衡",
-            observe: "只看數據，不調整功耗",
-            off: "停止遊戲電力",
-            default: "服務預設",
-            unknown: "未知",
-        },
-        modeDescriptions: {
-            automatic: "低於 FPS 目標時，才會調整 CPU/GPU 的共用功耗。",
-            observe: "只顯示即時採樣，不改動功耗。",
-            off: "已停止採樣",
-            default: "使用套件內建的預設電力策略。",
-            unknown: "無法辨識目前的遊戲電力模式。",
-        },
-        telemetryLabels: {
-            targetAware: "依 FPS 目標平衡",
-            powerSignals: "學習中，暫不復用",
-            collecting: "學習中，暫不復用",
-            stale: "執行中資料已過期",
-            unavailable: "缺少 daemon 執行中資料",
-        },
-        targetStates: {
-            known: "FPS 目標已知",
-            unknown: "FPS 目標未知",
-            unlimited: "FPS 目標未限制",
-            unsupported: "FPS 目標不支援",
-        },
-        frameStates: {
-            live: "影格資料即時可用",
-            missing: "缺少影格資料",
-            stale: "影格資料已過期",
-            malformed: "影格資料格式異常",
-            unsupported: "影格資料不支援",
         },
         actions: {
-            "observe-only": "只看數據",
-            "gpu-priority-epp": "GPU 優先",
-            "gpu-priority-cpu-cap": "GPU 優先，限制 CPU 搶功耗",
             idle: "閒置",
-            restore: "正在還原系統策略",
+            "observe-only": "觀察中",
+            restore: "已還原",
+            "gpu-priority-epp": "繪圖優先",
+            "target-balance-trim": "調整中",
+            "target-balance-release": "已放開",
+            "loading-boost": "載入增壓",
         },
-        reasons: {
-            "mode is observe": "目前只看數據，不會改動功耗設定。",
-            "mode is off": "目前已停止遊戲電力，停止採樣與功耗調整。",
-            "package limited with GPU activity": "GPU 負載偏高，正在把功耗留給顯示核心。",
-            "package limited with high core pressure": "CPU 壓力偏高，正在限制 CPU 搶功耗。",
+        actuatorStates: { active: "作用中", blocked: "阻擋", pending: "等待中" },
+        laneNames: {
+            foreground: "前景",
+            background: "背景",
+            ladder: "深層階梯",
+            other: "其他",
         },
-        classifications: {
-            "control-disabled": "已停止採樣",
-            "observe-only": "只看數據，不調整功耗",
-            "no-foreground-game": "目前沒有前景遊戲樣本",
-            "fps-target-satisfied": "FPS 目標已達成",
-            "insufficient-power-evidence": "學習中，暫不復用",
-            "not-package-bound": "封包功耗尚未成為限制",
-            "gpu-package-bound": "偵測到 GPU 側封包功耗壓力",
-            "gpu-package-bound-cpu-contention": "偵測到 CPU/GPU 搶功耗",
+        laneStates: { active: "作用中", blocked: "阻擋", released: "已釋放" },
+        verdictStates: {
+            ready: "可用",
+            unavailable: "不可用",
+            invalid: "無效",
+            missing: "不存在",
         },
-        policyLabels: {
-            "Balanced automatic policy": "遊戲平衡策略",
+        evidenceStates: {
+            "target-aware-live": "目標與影格資料可用",
+            "power-signals-only": "僅有功耗訊號",
+            unavailable: "不可用",
+            stopped: "已停止",
+            "view-data-only": "只看數據",
         },
-        errorPrefix: "錯誤",
+        frameStates: {
+            live: "即時",
+            missing: "缺少",
+            stale: "過期",
+            "profiler-only": "僅分析工具",
+        },
+        targetStates: {
+            known: "已知",
+            unknown: "未知",
+            unlimited: "無限制",
+            "none-configured": "未設定",
+        },
+        limiterStates: {
+            unknown: "未知",
+            unsupported: "不支援",
+            applied: "已套用",
+            cleared: "已清除",
+            ready: "就緒",
+        },
+        learningStates: {
+            ready: "下次可直接套用",
+            learning: "學習中，暫不復用",
+            needsTarget: "需要穩定的目標",
+            stopped: "已停止",
+        },
+        none: "無",
     },
+};
+const headlineStyle = {
+    fontSize: "17px",
+    fontWeight: 600,
+    lineHeight: 1.25,
+    whiteSpace: "normal",
+    overflowWrap: "break-word",
+};
+const nowStyle = {
+    opacity: 0.75,
+    fontSize: "13px",
+    marginTop: "4px",
 };
 const blockStyle = {
     width: "100%",
@@ -453,19 +432,17 @@ const blockStyle = {
     overflowWrap: "break-word",
     lineHeight: 1.28,
 };
-const titleStyle = {
-    marginBottom: "8px",
-};
 const detailStyle = {
     opacity: 0.74,
-    fontSize: "13px",
-    marginTop: "4px",
+    fontSize: "12px",
+    marginTop: "3px",
     whiteSpace: "normal",
     overflowWrap: "anywhere",
 };
-const sliderStyle = {
-    width: "100%",
-    marginTop: "8px",
+const noticeStyle = {
+    ...blockStyle,
+    fontSize: "13px",
+    marginTop: "2px",
 };
 function localeFromLanguage(language) {
     const value = (language ?? "").toLowerCase().replace("_", "-");
@@ -506,6 +483,9 @@ function errorText(error) {
 function fmtWatts(value) {
     return value === null || value === undefined ? "-" : `${value.toFixed(1)} W`;
 }
+function fmtMs(value) {
+    return value === null || value === undefined ? "-" : `${value.toFixed(1)} ms`;
+}
 function fmtPercent(value) {
     return value === null || value === undefined ? "-" : `${Math.round(value * 100)}%`;
 }
@@ -515,173 +495,160 @@ function mappedText(map, value) {
     }
     return map[value] ?? value;
 }
-function modeKey(mode) {
-    if (mode === "automatic" || mode === "observe" || mode === "off" || mode === "default") {
-        return mode;
-    }
-    return "unknown";
+function isBelowTarget(phase) {
+    return phase === "below-target-cpu-bound" || phase === "below-target-gpu-bound";
 }
-function isTargetAwareReady(readiness) {
-    return readiness?.status === "target-aware-live" && readiness?.claim_ready === true;
+function activeProfile(control) {
+    if (!control) {
+        return "auto";
+    }
+    if (control.mode === "off") {
+        return "off";
+    }
+    if (control.mode === "observe") {
+        return "observe";
+    }
+    const override = control.persona_override;
+    if (override?.status === "manual" && override.persona) {
+        if (override.persona === "battery") {
+            return "battery";
+        }
+        if (override.persona === "ac-quiet") {
+            return "quiet";
+        }
+        if (override.persona === "ac-performance") {
+            return "performance";
+        }
+    }
+    return "auto";
 }
-function evidenceText(t, readiness) {
-    if (!readiness) {
-        return t.evidenceStates.unavailable;
+/** Plain-language answer to "what is it doing right now". */
+function headlineText(t, control, runtime) {
+    if (!control) {
+        return t.loading;
     }
-    if (!isTargetAwareReady(readiness) && readiness.status === "target-aware-live") {
-        return t.evidenceStates.unavailable;
+    if (control.mode === "off") {
+        return t.status.off;
     }
-    return t.evidenceStates[readiness.status] ?? t.evidenceStates.unavailable;
-}
-function modeLabel(t, mode, runtime) {
-    if (mode === "automatic" && isTargetAwareReady(runtime?.evidence_readiness)) {
-        return t.telemetryLabels.targetAware;
-    }
-    return t.modes[modeKey(mode)] ?? t.modes.unknown;
-}
-function modeDescription(t, mode) {
-    return t.modeDescriptions[modeKey(mode)] ?? t.modeDescriptions.unknown;
-}
-function targetText(t, target) {
-    if (!target) {
-        return t.targetStates.unknown;
-    }
-    const label = mappedText(t.targetStates, target.status);
-    return target.fps ? `${label}: ${target.fps.toFixed(0)} FPS` : label;
-}
-function frameText(t, frame) {
-    if (!frame) {
-        return t.frameStates.missing;
-    }
-    const label = mappedText(t.frameStates, frame.status);
-    return frame.avg_fps ? `${label}: ${frame.avg_fps.toFixed(1)} FPS` : label;
-}
-function learningText(t, learning) {
-    if (!learning) {
-        return t.learningBeforeReuse;
-    }
-    if (learning.reusable_next_launch) {
-        return t.learningReady;
-    }
-    if (learning.skip_reason === "fps_target_unknown" || learning.status === "waiting-for-fps-target") {
-        return t.learningNeedsTarget;
-    }
-    if (learning.status === "stopped" || learning.status === "view-data-only") {
-        return t.learningStopped;
-    }
-    const samples = learning.session_samples ?? 0;
-    const required = learning.required_samples ?? 0;
-    return required > 0
-        ? `${t.learningBeforeReuse}: ${samples}/${required}`
-        : t.learningBeforeReuse;
-}
-function runtimeHeadline(t, mode, runtime) {
-    if (mode === "off") {
-        return t.modeDescriptions.off;
-    }
-    if (mode === "observe") {
-        return t.modeDescriptions.observe;
+    if (control.mode === "observe") {
+        return t.status.observe;
     }
     if (!runtime || runtime.error) {
-        return t.telemetryLabels.unavailable;
+        return t.unavailable;
     }
     if (runtime.stale) {
-        return t.telemetryLabels.stale;
+        return t.status.stale;
     }
-    if (isTargetAwareReady(runtime?.evidence_readiness)) {
-        return t.telemetryLabels.targetAware;
+    if (!runtime.appid) {
+        return t.status.noGame;
     }
-    if (runtime.frame_source.status !== "live") {
-        return t.telemetryLabels.collecting;
+    const target = runtime.fps_target.fps;
+    if (!target) {
+        return t.status.noTarget;
     }
-    return t.telemetryLabels.powerSignals;
+    const phase = runtime.phase;
+    if (phase === "loading") {
+        return t.status.loadingScene;
+    }
+    if (isBelowTarget(phase)) {
+        return t.status.boosting;
+    }
+    if (phase === "at-target" || phase === "above-target") {
+        const trimmed = (runtime.trim_rungs_active?.length ?? 0) > 0;
+        return trimmed ? t.status.holdingSaving : t.status.holding;
+    }
+    return t.status.starting;
 }
-function phaseText(t, phase) {
-    if (!phase) {
-        return t.none;
-    }
-    return t.phases[phase] ?? phase;
+/**
+ * Sustained "below target even with nothing trimmed" means the target itself is
+ * the problem, not the scheduler. Suggest a reachable one rather than silently
+ * burning full power forever.
+ */
+function unreachableSuggestion(avgFps, step) {
+    const floor = Math.floor(avgFps / step) * step;
+    return Math.max(step, floor);
 }
-function colorLedgerText(t, color) {
-    const states = Object.entries(color.actuator_states)
-        .map(([state, count]) => `${t.actuatorStates[state] ?? state}${count > 1 ? ` x${count}` : ""}`)
-        .join(", ");
-    const tail = states ? ` (${states})` : "";
-    return `${color.color}: ${color.tid_count} TID / ${color.entry_count} role${tail}`;
-}
-function laneLabelKey(name) {
-    if (name.includes("foreground")) {
-        return "foreground";
-    }
-    if (name.includes("background")) {
-        return "background";
-    }
-    if (name.includes("ladder")) {
-        return "ladder";
-    }
-    return "other";
-}
-function laneText(t, name, lane) {
-    const label = t.laneNames[laneLabelKey(name)] ?? t.laneNames.other;
-    const state = t.laneStates[lane.state] ?? lane.state;
-    const why = lane.reason_codes.length ? ` - ${lane.reason_codes.join(", ")}` : "";
-    return `${label}: ${state}${why}`;
-}
-function verdictText(t, health) {
-    const state = t.verdictStates[health.status] ?? health.status;
-    const count = health.entry_count === null ? "" : ` (${health.entry_count})`;
-    return `${state}${count}`;
-}
-function personaLabel(t, persona) {
-    if (!persona) {
-        return t.personaAuto;
-    }
-    return t.personaLabels[persona] ?? persona;
-}
-function activePersona(control) {
-    const override = control?.persona_override;
-    if (override?.status === "manual" && override.persona) {
-        return override.persona;
-    }
-    return null;
-}
-function frameFeedText(t, status) {
-    if (!status) {
-        return t.none;
-    }
-    return t.frameFeedStates[status] ?? status;
-}
-function limiterStateText(t, limiter) {
-    if (!limiter) {
-        return "-";
-    }
-    const label = t.limiterStates[limiter.status] ?? limiter.status;
-    return limiter.fps ? `${label}: ${limiter.fps} FPS` : label;
-}
-const TargetBalanceLiveRow = ({ t, runtime }) => {
-    if (!runtime || runtime.stale || runtime.error || !runtime.persona) {
-        return null;
-    }
-    const { soft_pl1_w, boost_active, frame_feed_status, trim_rungs_active } = runtime;
-    const boostText = boost_active ? t.boostStates.active : t.boostStates.idle;
-    const trims = trim_rungs_active && trim_rungs_active.length ? trim_rungs_active.join(", ") : t.none;
-    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { style: detailStyle, children: [t.personaCurrent, ": ", personaLabel(t, runtime.persona)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.package, ": ", fmtWatts(runtime.package_w), " / ", t.budgetLabel, ":", " ", soft_pl1_w === null || soft_pl1_w === undefined ? t.none : fmtWatts(soft_pl1_w)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.boostLabel, ": ", boostText] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.frameFeedLabel, ": ", frameFeedText(t, frame_feed_status)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.trimLabel, ": ", trims] })] }));
+const StatusCard = ({ t, control, runtime, notice, error }) => {
+    const target = runtime?.fps_target.fps ?? null;
+    const headline = headlineText(t, control, runtime);
+    const showNow = control?.mode !== "off" && runtime && !runtime.error && !runtime.stale && runtime.appid;
+    const avg = runtime?.frame_source.avg_fps ?? null;
+    return (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { style: headlineStyle, children: target && (headline === t.status.holding || headline === t.status.holdingSaving)
+                        ? t.holdingWithTarget(headline, target.toFixed(0))
+                        : headline }), showNow ? (SP_JSX.jsx("div", { style: nowStyle, children: t.nowLine(avg === null ? "-" : avg.toFixed(0), fmtWatts(runtime?.package_w)) })) : null, notice ? SP_JSX.jsx("div", { style: noticeStyle, children: notice }) : null, error ? (SP_JSX.jsxs("div", { role: "alert", style: noticeStyle, children: [t.errorPrefix, ": ", error] })) : null] }) }));
 };
-const TargetBalanceDetails = ({ t, runtime }) => {
-    if (!runtime || runtime.stale || runtime.error) {
+const Diagnostics = ({ t, status, runtime }) => {
+    if (!runtime) {
         return null;
     }
-    const { phase, ladder_step, color_ledger, verdict_ledger_health, gated_lanes } = runtime;
-    if (phase === undefined ||
-        phase === null ||
-        (ladder_step === undefined || ladder_step === null) &&
-            !color_ledger &&
-            !verdict_ledger_health &&
-            !gated_lanes) {
-        return null;
+    const rows = [];
+    if (status) {
+        rows.push([t.diag.service, `${status.active_state}/${status.sub_state}`]);
     }
-    const lanes = gated_lanes ? Object.entries(gated_lanes) : [];
-    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { style: detailStyle, children: [t.balanceLabel, " - ", t.phaseLabel, ": ", phaseText(t, phase)] }), ladder_step !== undefined && ladder_step !== null ? (SP_JSX.jsxs("div", { style: detailStyle, children: [t.ladderLabel, ": S", ladder_step] })) : null, verdict_ledger_health ? (SP_JSX.jsxs("div", { style: detailStyle, children: [t.verdictLabel, ": ", verdictText(t, verdict_ledger_health)] })) : null, color_ledger && color_ledger.colors.length ? (SP_JSX.jsxs("div", { style: detailStyle, children: [t.colorsLabel, ": ", color_ledger.colors.map((color) => colorLedgerText(t, color)).join(" | "), color_ledger.truncated ? ` (${t.truncatedNote})` : ""] })) : null, lanes.length ? (SP_JSX.jsxs("div", { style: detailStyle, children: [t.lanesLabel, ": ", lanes.map(([name, lane]) => laneText(t, name, lane)).join(" | ")] })) : null] }));
+    if (runtime.appid) {
+        rows.push([t.diag.game, runtime.appid]);
+    }
+    rows.push([t.diag.evidence, mappedText(t.evidenceStates, runtime.evidence_readiness?.status)]);
+    rows.push([t.diag.action, mappedText(t.actions, runtime.last_action)]);
+    if (runtime.phase) {
+        rows.push([t.diag.phase, mappedText(t.phases, runtime.phase)]);
+    }
+    if (runtime.ladder_step !== undefined && runtime.ladder_step !== null) {
+        rows.push([t.diag.step, String(runtime.ladder_step)]);
+    }
+    rows.push([
+        t.diag.trims,
+        runtime.trim_rungs_active?.length ? runtime.trim_rungs_active.join(", ") : t.none,
+    ]);
+    rows.push([
+        t.diag.budget,
+        runtime.soft_pl1_w === null || runtime.soft_pl1_w === undefined
+            ? fmtWatts(runtime.pl1_w)
+            : fmtWatts(runtime.soft_pl1_w),
+    ]);
+    rows.push([t.diag.boost, runtime.boost_active ? t.diag.boostActive : t.diag.boostIdle]);
+    rows.push([t.diag.frameFeed, mappedText(t.frameStates, runtime.frame_source.status)]);
+    rows.push([
+        t.diag.pacing,
+        `${fmtMs(runtime.frame_source.p95_ms)} / ${fmtMs(runtime.p95_budget_ms)}`,
+    ]);
+    if (runtime.p95_baseline_ms !== null && runtime.p95_baseline_ms !== undefined) {
+        rows.push([t.diag.baseline, fmtMs(runtime.p95_baseline_ms)]);
+    }
+    rows.push([t.diag.package, fmtWatts(runtime.package_w)]);
+    rows.push([t.diag.core, fmtWatts(runtime.core_w)]);
+    rows.push([t.diag.graphics, fmtWatts(runtime.uncore_w)]);
+    rows.push([t.diag.render, fmtPercent(runtime.render_busy)]);
+    if (runtime.verdict_ledger_health) {
+        const health = runtime.verdict_ledger_health;
+        const count = health.entry_count === null ? "" : ` (${health.entry_count})`;
+        rows.push([t.diag.verdict, `${mappedText(t.verdictStates, health.status)}${count}`]);
+    }
+    if (runtime.color_ledger?.colors.length) {
+        const text = runtime.color_ledger.colors
+            .map((color) => `${color.color}:${color.tid_count}`)
+            .join(" ");
+        rows.push([
+            t.diag.colors,
+            runtime.color_ledger.truncated ? `${text} (${t.diag.truncated})` : text,
+        ]);
+    }
+    if (runtime.gated_lanes) {
+        const text = Object.entries(runtime.gated_lanes)
+            .map(([name, lane]) => {
+            const key = name.includes("foreground")
+                ? "foreground"
+                : name.includes("background")
+                    ? "background"
+                    : name.includes("ladder")
+                        ? "ladder"
+                        : "other";
+            return `${t.laneNames[key]}:${mappedText(t.laneStates, lane.state)}`;
+        })
+            .join(" ");
+        rows.push([t.diag.lanes, text]);
+    }
+    return (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: blockStyle, children: rows.map(([label, value]) => (SP_JSX.jsxs("div", { style: detailStyle, children: [label, ": ", value] }, label))) }) }));
 };
 const PluginTitle = () => {
     const t = COPY[useLocale()];
@@ -693,173 +660,43 @@ const GamePowerPanel = () => {
     const [control, setControl] = SP_REACT.useState(null);
     const [runtime, setRuntime] = SP_REACT.useState(null);
     const [sample, setSample] = SP_REACT.useState(null);
-    const [manualFps, setManualFps] = SP_REACT.useState(40);
+    // null == "follow whatever the daemon detected". Never seed a literal here:
+    // a hardcoded default renders as a real FPS target the user never chose, and
+    // one tap on Set/Apply would commit it.
+    const [manualFps, setManualFps] = SP_REACT.useState(null);
     const [limiter, setLimiter] = SP_REACT.useState(null);
+    const [showDiagnostics, setShowDiagnostics] = SP_REACT.useState(false);
     const [notice, setNotice] = SP_REACT.useState(null);
     const [error, setError] = SP_REACT.useState(null);
     const [busy, setBusy] = SP_REACT.useState(false);
+    // Consecutive polls spent below target with nothing of ours applied.
+    const [starvedPolls, setStarvedPolls] = SP_REACT.useState(0);
+    const busyRef = SP_REACT.useRef(busy);
+    busyRef.current = busy;
+    const absorb = (result) => {
+        setStatus(result.service);
+        setControl(result.control);
+        setRuntime(result.runtime);
+        const detected = result.control.fps_target_override.fps ?? result.runtime.fps_target.fps;
+        if (detected) {
+            // Only seed the slider; never clobber a value the user is dragging.
+            setManualFps((current) => current ?? detected);
+        }
+        // "Full power and still short" only counts when we are not the cause.
+        const starved = isBelowTarget(result.runtime.phase) &&
+            (result.runtime.trim_rungs_active?.length ?? 0) === 0 &&
+            !!result.runtime.fps_target.fps;
+        setStarvedPolls((current) => (starved ? current + 1 : 0));
+    };
     const load = async () => {
         setBusy(true);
         setNotice(null);
         setError(null);
         try {
-            const statusResult = await getStatus();
-            setStatus(statusResult.service);
-            setControl(statusResult.control);
-            setRuntime(statusResult.runtime);
-            if (statusResult.control.fps_target_override.fps) {
-                setManualFps(statusResult.control.fps_target_override.fps);
-            }
-            else if (statusResult.runtime.fps_target.fps) {
-                setManualFps(statusResult.runtime.fps_target.fps);
-            }
+            absorb(await getStatus());
         }
-        catch (error) {
-            setError(errorText(error));
-        }
-        finally {
-            setBusy(false);
-        }
-    };
-    const readProbe = async () => {
-        if (busy) {
-            return;
-        }
-        setBusy(true);
-        setNotice(null);
-        setError(null);
-        try {
-            setSample(await sampleOnce());
-        }
-        catch (error) {
-            setError(errorText(error));
-        }
-        finally {
-            setBusy(false);
-        }
-    };
-    const applyMode = async (mode) => {
-        if (busy) {
-            return;
-        }
-        setBusy(true);
-        setNotice(t.applying);
-        setError(null);
-        try {
-            await setMode(mode);
-            const statusResult = await getStatus();
-            setStatus(statusResult.service);
-            setControl(statusResult.control);
-            setRuntime(statusResult.runtime);
-            setNotice(null);
-        }
-        catch (error) {
-            setError(errorText(error));
-            setNotice(null);
-        }
-        finally {
-            setBusy(false);
-        }
-    };
-    const restore = async () => {
-        if (busy) {
-            return;
-        }
-        setBusy(true);
-        setNotice(t.applying);
-        setError(null);
-        try {
-            await restoreDefaults();
-            const statusResult = await getStatus();
-            setStatus(statusResult.service);
-            setControl(statusResult.control);
-            setRuntime(statusResult.runtime);
-            setNotice(t.restored);
-        }
-        catch (error) {
-            setError(errorText(error));
-            setNotice(null);
-        }
-        finally {
-            setBusy(false);
-        }
-    };
-    const applyFpsTarget = async (fps) => {
-        if (busy) {
-            return;
-        }
-        setBusy(true);
-        setNotice(t.applying);
-        setError(null);
-        try {
-            await setFpsTarget(fps);
-            const statusResult = await getStatus();
-            setStatus(statusResult.service);
-            setControl(statusResult.control);
-            setRuntime(statusResult.runtime);
-            if (statusResult.control.fps_target_override.fps) {
-                setManualFps(statusResult.control.fps_target_override.fps);
-            }
-            setNotice(null);
-        }
-        catch (error) {
-            setError(errorText(error));
-            setNotice(null);
-        }
-        finally {
-            setBusy(false);
-        }
-    };
-    const applyPersona = async (persona) => {
-        if (busy) {
-            return;
-        }
-        setBusy(true);
-        setNotice(t.applying);
-        setError(null);
-        try {
-            if (persona === null) {
-                await clearPersona();
-            }
-            else {
-                await setPersona(persona);
-            }
-            const statusResult = await getStatus();
-            setStatus(statusResult.service);
-            setControl(statusResult.control);
-            setRuntime(statusResult.runtime);
-            setNotice(null);
-        }
-        catch (error) {
-            setError(errorText(error));
-            setNotice(null);
-        }
-        finally {
-            setBusy(false);
-        }
-    };
-    const runLimiter = async (action) => {
-        if (busy) {
-            return;
-        }
-        setBusy(true);
-        setNotice(action === "read" ? null : t.applying);
-        setError(null);
-        try {
-            if (action === "apply") {
-                setLimiter(await applyLimiterFps(manualFps));
-            }
-            else if (action === "clear") {
-                setLimiter(await clearLimiterFps());
-            }
-            else {
-                setLimiter(await getLimiter());
-            }
-            setNotice(null);
-        }
-        catch (error) {
-            setError(errorText(error));
-            setNotice(null);
+        catch (err) {
+            setError(errorText(err));
         }
         finally {
             setBusy(false);
@@ -868,21 +705,138 @@ const GamePowerPanel = () => {
     SP_REACT.useEffect(() => {
         load();
     }, []);
-    const currentPersona = activePersona(control);
-    const runtimeTitle = runtime?.appid ? `${t.game}: ${runtime.appid}` : t.noSample;
-    const probeTitle = sample?.appid ? `${t.game}: ${sample.appid}` : t.noSample;
+    // The panel is the only place the live governor is observable, so keep it
+    // ticking instead of showing whatever was true when it was opened.
+    SP_REACT.useEffect(() => {
+        let cancelled = false;
+        const timer = setInterval(async () => {
+            if (busyRef.current) {
+                return;
+            }
+            try {
+                const result = await getStatus();
+                if (!cancelled) {
+                    absorb(result);
+                }
+            }
+            catch {
+                // Transient backend hiccup; the next tick retries.
+            }
+        }, 2000);
+        return () => {
+            cancelled = true;
+            clearInterval(timer);
+        };
+    }, []);
+    const guard = async (work) => {
+        if (busy) {
+            return;
+        }
+        setBusy(true);
+        setNotice(t.applying);
+        setError(null);
+        try {
+            await work();
+            setNotice(null);
+        }
+        catch (err) {
+            setError(errorText(err));
+            setNotice(null);
+        }
+        finally {
+            setBusy(false);
+        }
+    };
+    const applyProfile = (profile) => guard(async () => {
+        if (profile === "off" || profile === "observe") {
+            await setMode(profile === "off" ? "off" : "observe");
+        }
+        else {
+            await setMode("automatic");
+            const persona = PROFILE_TO_PERSONA[profile];
+            if (persona) {
+                await setPersona(persona);
+            }
+            else {
+                await clearPersona();
+            }
+        }
+        absorb(await getStatus());
+    });
+    const applyFpsTarget = (fps) => guard(async () => {
+        await setFpsTarget(fps);
+        // Clearing the override hands the slider back to auto-detect, so drop the
+        // local value instead of pinning the old one.
+        if (fps === null) {
+            setManualFps(null);
+        }
+        setStarvedPolls(0);
+        absorb(await getStatus());
+    });
+    const runLimiter = (action) => guard(async () => {
+        if (action === "read") {
+            setLimiter(await getLimiter());
+        }
+        else if (action === "apply") {
+            setLimiter(await applyLimiterFps(sliderFps));
+        }
+        else {
+            setLimiter(await clearLimiterFps());
+        }
+    });
+    const restore = () => guard(async () => {
+        await restoreDefaults();
+        absorb(await getStatus());
+        setNotice(t.restored);
+    });
+    const readProbe = () => guard(async () => {
+        setSample(await sampleOnce());
+    });
     const supportedMin = control?.fps_target_override.supported_min ?? 30;
     const supportedMax = control?.fps_target_override.supported_max ?? 120;
     const supportedStep = control?.fps_target_override.supported_step ?? 5;
-    const targetMode = control?.fps_target_override.status === "manual"
-        ? `${t.targetManual}: ${control.fps_target_override.fps} FPS`
-        : t.targetAuto;
-    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.PanelSection, { title: t.panelTitle, children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: status
-                                    ? `${t.currentMode}: ${modeLabel(t, status.mode, runtime)}`
-                                    : busy
-                                        ? t.loading
-                                        : t.unavailable }), status ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.serviceState, ": ", status.active_state, "/", status.sub_state] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.policyLabels, status.policy_label) }), SP_JSX.jsx("div", { style: detailStyle, children: modeDescription(t, status.mode) }), SP_JSX.jsx("div", { style: detailStyle, children: runtimeHeadline(t, status.mode, runtime) }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.evidenceLabel, ": ", evidenceText(t, runtime?.evidence_readiness)] }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, runtime?.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, runtime?.frame_source) }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.learning, ": ", learningText(t, runtime?.learning)] })] })) : null, notice ? SP_JSX.jsx("div", { style: detailStyle, children: notice }) : null, error ? (SP_JSX.jsxs("div", { role: "alert", style: detailStyle, children: [t.errorPrefix, ": ", error] })) : null] }) }) }), SP_JSX.jsxs(DFL.PanelSection, { title: t.control, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("automatic"), children: busy ? t.applying : t.modes.automatic }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("observe"), children: busy ? t.applying : t.modes.observe }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyMode("off"), children: busy ? t.applying : t.modes.off }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsxs("div", { className: DFL.staticClasses.Title, style: titleStyle, children: [t.fpsTarget, ": ", manualFps, " FPS"] }), SP_JSX.jsx("div", { style: detailStyle, children: targetMode }), SP_JSX.jsxs("div", { style: detailStyle, children: [supportedMin, "-", supportedMax, " FPS / ", supportedStep] }), SP_JSX.jsx("input", { "aria-label": t.targetManual, type: "range", min: 30, max: 120, step: 5, value: manualFps, style: sliderStyle, onChange: (event) => setManualFps(Number(event.currentTarget.value)) })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyFpsTarget(manualFps), children: busy ? t.applying : t.targetApply }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyFpsTarget(null), children: busy ? t.applying : t.targetAuto }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.personaTitle, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsxs("div", { style: detailStyle, children: [t.personaCurrent, ": ", currentPersona ? personaLabel(t, currentPersona) : t.personaAuto] }), SP_JSX.jsx("div", { style: detailStyle, children: t.personaProvisional })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyPersona("battery"), children: busy ? t.applying : t.personaLabels.battery }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyPersona("ac-quiet"), children: busy ? t.applying : t.personaLabels["ac-quiet"] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyPersona("ac-performance"), children: busy ? t.applying : t.personaLabels["ac-performance"] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyPersona(null), children: busy ? t.applying : t.personaAuto }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.limiterTitle, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { style: detailStyle, children: t.limiterConsentNote }), SP_JSX.jsx("div", { style: detailStyle, children: limiterStateText(t, limiter) })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => runLimiter("read"), children: busy ? t.applying : t.limiterRead }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => runLimiter("apply"), children: busy ? t.applying : `${t.limiterApply}: ${manualFps} FPS` }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => runLimiter("clear"), children: busy ? t.applying : t.limiterClear }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.telemetry, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: runtimeTitle }), runtime ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, runtime.last_action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(runtime.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(runtime.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(runtime.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.classifications, runtime.classification_primary) }), SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, runtime.last_reason) }), SP_JSX.jsxs("div", { style: detailStyle, children: ["Render: ", fmtPercent(runtime.render_busy)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.learning, ": ", learningText(t, runtime.learning)] }), SP_JSX.jsx(TargetBalanceLiveRow, { t: t, runtime: runtime }), SP_JSX.jsx(TargetBalanceDetails, { t: t, runtime: runtime })] })) : (SP_JSX.jsx("div", { style: detailStyle, children: busy ? t.loading : t.noSample }))] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: load, children: busy ? t.applying : t.refresh }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: restore, children: busy ? t.applying : t.restore }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.manualProbe, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: probeTitle }), SP_JSX.jsx("div", { style: detailStyle, children: t.probeNotice }), sample ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.action, ": ", mappedText(t.actions, sample.action)] }), SP_JSX.jsxs("div", { children: [t.package, ": ", fmtWatts(sample.package_w)] }), SP_JSX.jsxs("div", { children: [t.core, ": ", fmtWatts(sample.core_w)] }), SP_JSX.jsxs("div", { children: [t.graphics, ": ", fmtWatts(sample.uncore_w)] }), SP_JSX.jsx("div", { style: detailStyle, children: targetText(t, sample.fps_target) }), SP_JSX.jsx("div", { style: detailStyle, children: frameText(t, sample.frame_source) }), sample.reason ? (SP_JSX.jsx("div", { style: detailStyle, children: mappedText(t.reasons, sample.reason) })) : null] })) : null] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: readProbe, children: busy ? t.applying : t.readProbe }) })] })] }));
+    const detectedFps = control?.fps_target_override.fps ?? runtime?.fps_target.fps ?? null;
+    const manualTarget = control?.fps_target_override.status === "manual";
+    // Offer only rates the panel can actually pace evenly: exact divisors of the
+    // current refresh rate, as computed by the daemon. There is no working VRR
+    // here, so an off-divisor target judders no matter how well we schedule it.
+    const candidates = (runtime?.auto_target?.candidates ?? []).filter((fps) => fps >= supportedMin && fps <= supportedMax);
+    // "auto" is a real choice, not the absence of one.
+    const targetOptions = [
+        { data: "auto", label: manualTarget ? t.targetAuto : t.targetAutoDetected(detectedFps === null ? "-" : detectedFps.toFixed(0)) },
+        ...candidates.map((fps) => ({ data: String(fps), label: t.targetFixed(String(fps)) })),
+    ];
+    const selectedTarget = manualTarget ? String(control?.fps_target_override.fps ?? "") : "auto";
+    // The limiter helper still needs a concrete number to apply.
+    const sliderFps = manualFps ?? detectedFps ?? candidates[0] ?? supportedMax;
+    const profile = activeProfile(control);
+    const targetFps = runtime?.fps_target.fps ?? null;
+    const avgFps = runtime?.frame_source.avg_fps ?? null;
+    // 15 polls at 2 s == ~30 s of sustained shortfall before offering advice.
+    const showUnreachable = starvedPolls >= 15 && targetFps !== null && avgFps !== null && avgFps < targetFps;
+    const suggestedFps = avgFps === null ? null : unreachableSuggestion(avgFps, supportedStep);
+    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(StatusCard, { t: t, control: control, runtime: runtime, notice: notice, error: error }) }), showUnreachable && suggestedFps !== null && targetFps !== null ? (SP_JSX.jsxs(DFL.PanelSection, { title: t.unreachableTitle, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: blockStyle, children: SP_JSX.jsx("div", { style: detailStyle, children: t.unreachableBody(targetFps.toFixed(0), avgFps.toFixed(0)) }) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyFpsTarget(suggestedFps), children: busy ? t.applying : t.unreachableAction(suggestedFps.toFixed(0)) }) })] })) : null, SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.DropdownItem, { label: t.profileLabel, description: t.profileHints[profile], rgOptions: PROFILE_ORDER.map((key) => ({ data: key, label: t.profiles[key] })), selectedOption: profile, disabled: busy, onChange: (option) => applyProfile(option.data) }) }) }), profile === "off" ? null : (SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.DropdownItem, { label: t.targetLabel, description: manualTarget
+                            ? t.targetManualDescription(String(control?.fps_target_override.fps ?? ""))
+                            : t.targetAutoDescription(), rgOptions: targetOptions, selectedOption: selectedTarget, disabled: busy || targetOptions.length < 2, onChange: (option) => applyFpsTarget(option.data === "auto" ? null : Number(option.data)) }) }) })), SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: t.diagnosticsToggle, description: showDiagnostics ? t.diagnosticsDescription : undefined, checked: showDiagnostics, onChange: setShowDiagnostics }) }) }), showDiagnostics ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs(DFL.PanelSection, { title: t.diagnosticsToggle, children: [SP_JSX.jsx(Diagnostics, { t: t, status: status, runtime: runtime }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: blockStyle, children: SP_JSX.jsxs("div", { style: detailStyle, children: [t.diag.learning, ": ", mappedText(t.learningStates, learningKey(runtime?.learning))] }) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: busy, onClick: load, children: busy ? t.applying : t.diag.refresh }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: busy, onClick: restore, children: busy ? t.applying : t.diag.restore }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.diag.limiter, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.Field, { label: t.diag.limiter, description: t.diag.limiterNote, focusable: false, children: limiter
+                                        ? `${mappedText(t.limiterStates, limiter.status)}${limiter.fps ? ` ${limiter.fps} FPS` : ""}`
+                                        : "-" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: busy, onClick: () => runLimiter("read"), children: busy ? t.applying : t.diag.limiterRead }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: busy, onClick: () => runLimiter("apply"), children: busy ? t.applying : `${t.diag.limiterApply}: ${sliderFps} FPS` }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: busy, onClick: () => runLimiter("clear"), children: busy ? t.applying : t.diag.limiterClear }) })] }), SP_JSX.jsxs(DFL.PanelSection, { title: t.diag.probe, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { style: detailStyle, children: t.diag.probeNote }), sample ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { style: detailStyle, children: [t.diag.action, ": ", mappedText(t.actions, sample.action)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.diag.package, ": ", fmtWatts(sample.package_w), " / ", t.diag.core, ":", " ", fmtWatts(sample.core_w), " / ", t.diag.graphics, ": ", fmtWatts(sample.uncore_w)] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.diag.frameFeed, ": ", mappedText(t.frameStates, sample.frame_source.status)] })] })) : null] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: busy, onClick: readProbe, children: busy ? t.applying : t.diag.probeRead }) })] })] })) : null] }));
 };
+function learningKey(learning) {
+    if (!learning) {
+        return "learning";
+    }
+    if (learning.reusable_next_launch) {
+        return "ready";
+    }
+    if (learning.skip_reason === "fps_target_unknown" ||
+        learning.status === "waiting-for-fps-target") {
+        return "needsTarget";
+    }
+    if (learning.status === "stopped" || learning.status === "view-data-only") {
+        return "stopped";
+    }
+    return "learning";
+}
 var index = definePlugin(() => ({
     name: "Game Power",
     titleView: SP_JSX.jsx(PluginTitle, {}),
