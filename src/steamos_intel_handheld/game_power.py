@@ -3534,6 +3534,7 @@ class GamePowerGovernor:
         refresh_hz_provider: Callable[[], float | None] | None = None,
         limiter_writer: Callable[[int | None], bool] | None = None,
         input_idle_provider: Callable[[], float | None] | None = None,
+        gpu_utilisation_provider: Callable[[], object | None] | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -3552,6 +3553,10 @@ class GamePowerGovernor:
         self.refresh_hz_provider = refresh_hz_provider
         self.limiter_writer = limiter_writer
         self.input_idle_provider = input_idle_provider
+        # Observe-only for now: the fdinfo render-busy signal is structurally
+        # absent on xe, and this is its replacement. Published so it can be
+        # judged against real scenes before any policy leans on it.
+        self.gpu_utilisation_provider = gpu_utilisation_provider
         self._input_idle_s = 0.0
         self._auto_target_proposal: AutoTargetProposal | None = None
         # The frame cap we applied, so it can be cleared on every restore path.
@@ -3899,6 +3904,7 @@ class GamePowerGovernor:
             ),
             "drops_this_session": estimator.drops_this_session,
             "input_idle_s": round(idle_s, 1),
+            "gpu": self._gpu_utilisation_json(),
             "proposal": (
                 None
                 if latest is None
@@ -3920,6 +3926,20 @@ class GamePowerGovernor:
         # Signal unavailable: never claim idle on missing evidence.
         self._input_idle_s = 0.0 if idle is None else max(0.0, idle)
         return self._input_idle_s
+
+    def _gpu_utilisation_json(self) -> dict[str, object] | None:
+        """Latest PMU window, or None when the counters are unavailable."""
+        if self.gpu_utilisation_provider is None:
+            return None
+        sample = self.gpu_utilisation_provider()
+        if sample is None:
+            return None
+        return {
+            "render_busy": getattr(sample, "render_busy", None),
+            "c6_ms": getattr(sample, "c6_ms", None),
+            "actual_mhz": getattr(sample, "actual_mhz", None),
+            "racing_to_idle": getattr(sample, "racing_to_idle", None),
+        }
 
     def _idle_cap_fps(self) -> int | None:
         """The idle floor, snapped to a divisor of the panel rate."""

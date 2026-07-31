@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 
 from steamos_intel_handheld import game_power_control, power_control
 from steamos_intel_handheld.game_power import (
@@ -286,3 +287,99 @@ def test_service_task_lifecycle_restores_game_power_governor_on_stop():
 
     assert "cancelled" in events
     assert "restore" in events
+
+
+# --- Compositor/session readers -------------------------------------------
+# These exist because a green suite let a NameError reach the device: the
+# refresh reader referenced a global that a careless edit had deleted, and
+# nothing here ever called it. Every reader below is exercised for real.
+
+
+def _fake_runner(stdout, returncode=0):
+    calls = []
+
+    def run(cmd):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, returncode, stdout, "")
+
+    return run, calls
+
+
+def test_panel_refresh_reader_parses_the_atom_and_is_actually_callable():
+    run, calls = _fake_runner("GAMESCOPE_DISPLAY_REFRESH_RATE_FEEDBACK(CARDINAL) = 120\n")
+    cache = power_control._AtomCache()
+    clock = iter([100.0, 100.0, 200.0, 200.0])
+
+    value = power_control.discover_panel_refresh_hz(
+        "root", runner=run, cache=cache, clock=lambda: next(clock)
+    )
+
+    assert value == 120.0
+    # Demoted without PAM: runuser writes two journal lines per call, which at
+    # the governor's poll rate floods the journal.
+    assert calls and calls[0][0] == "setpriv"
+    assert not any("runuser" in part for part in calls[0])
+
+
+def test_panel_refresh_reader_serves_cache_then_refetches_after_ttl():
+    run, calls = _fake_runner("X(CARDINAL) = 60\n")
+    cache = power_control._AtomCache()
+    now = [1000.0]
+
+    for _ in range(4):
+        power_control.discover_panel_refresh_hz(
+            "root", runner=run, cache=cache, cache_ttl_s=10.0, clock=lambda: now[0]
+        )
+    assert len(calls) == 1, "cached reads must not spawn a process"
+
+    now[0] += 11.0
+    power_control.discover_panel_refresh_hz(
+        "root", runner=run, cache=cache, cache_ttl_s=10.0, clock=lambda: now[0]
+    )
+    assert len(calls) == 2
+
+
+def test_fps_limit_atom_reader_maps_zero_to_unlimited():
+    run, _ = _fake_runner("GAMESCOPE_FPS_LIMIT(CARDINAL) = 0\n")
+    target = power_control.discover_gamescope_fps_limit_atom(
+        "root", runner=run, cache=power_control._AtomCache(), clock=lambda: 0.0
+    )
+    assert target is not None
+    assert target.fps_target is None
+    assert target.source == "gamescope-unlimited"
+
+
+def test_fps_limit_atom_reader_reports_a_known_target():
+    run, _ = _fake_runner("GAMESCOPE_FPS_LIMIT(CARDINAL) = 45\n")
+    target = power_control.discover_gamescope_fps_limit_atom(
+        "root", runner=run, cache=power_control._AtomCache(), clock=lambda: 0.0
+    )
+    assert target is not None
+    assert target.fps_target == 45.0
+    assert target.confidence == "high"
+
+
+def test_limiter_writer_clears_with_zero_and_reports_failure(monkeypatch):
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(power_control, "_uid_for_user", lambda user: 1000)
+    monkeypatch.setattr(power_control.subprocess, "run", fake_run)
+    write = power_control.build_limiter_writer("deck")
+
+    assert write(40) is True
+    assert seen[-1][0] == "setpriv"
+    assert seen[-1][-1] == "40"
+
+    # None is our overlay being lifted, which the compositor spells as 0.
+    assert write(None) is True
+    assert seen[-1][-1] == "0"
+
+    def failing_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, "", "no such convar")
+
+    monkeypatch.setattr(power_control.subprocess, "run", failing_run)
+    assert write(30) is False, "a failed write must not be reported as applied"

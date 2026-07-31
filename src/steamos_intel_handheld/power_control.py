@@ -46,6 +46,7 @@ from steamos_intel_handheld.game_power import (
 )
 
 from .game_power_frame_target import AutoTargetEstimator
+from .game_power_gpu_pmu import GpuUtilisationMonitor
 from .game_power_input import InputActivityMonitor
 
 BUS_NAME = "org.rivoreo.SteamOSManager.PowerControl"
@@ -1263,6 +1264,7 @@ def build_game_power_governor(
         refresh_hz_provider=lambda: discover_panel_refresh_hz(args.user),
         limiter_writer=build_limiter_writer(args.user),
         input_idle_provider=_build_input_idle_provider(),
+        gpu_utilisation_provider=_build_gpu_utilisation_provider(),
         config_provider=config_provider,
         hint_store=hint_store,
         hint_context_provider=_build_game_power_hint_context_provider(args, backend),
@@ -1427,6 +1429,16 @@ def _read_root_atom(
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout
     return None
+
+
+def _build_gpu_utilisation_provider() -> Callable[[], object | None]:
+    """Latest GPU PMU window, or a constant None when the PMU is absent."""
+    monitor = GpuUtilisationMonitor()
+    if not monitor.start():
+        print("game-power: no xe PMU; GPU utilisation unavailable", file=sys.stderr)
+        return lambda: None
+    print("game-power: sampling GPU utilisation from the xe PMU", file=sys.stderr)
+    return monitor.latest
 
 
 def _build_input_idle_provider() -> Callable[[], float | None]:
