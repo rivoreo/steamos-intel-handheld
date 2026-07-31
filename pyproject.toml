@@ -47,6 +47,9 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.ruff.lint.per-file-ignores]
 "src/steamos_intel_handheld/power_control.py" = [
   "F722", # dbus-next uses string annotations such as "as" for D-Bus signatures.
-  "F821", # dbus-next uses string annotations such as "u" for D-Bus signatures.
   "UP037", # quoted D-Bus signature annotations are intentional.
+  # F821 is deliberately NOT ignored here. It was, and it masked a genuine
+  # undefined global that only failed at runtime on device (the governor task
+  # died silently). The five real D-Bus signature annotations carry per-line
+  # noqa instead.
 ]

@@ -39,6 +39,7 @@ from .game_power_frame_target import (
     AutoTargetEstimator,
     AutoTargetProposal,
     divisor_candidates,
+    snap_down_to_candidate,
 )
 from .game_power_gpu import GpuFreqActuator, discover_gpu_gts
 
@@ -979,6 +980,18 @@ class GamePowerConfig:
     colorize_interval_s: float = 10.0
     # --- V10 persona (plan section 0) ---
     persona: GamePowerPersona = GamePowerPersona.BATTERY
+    # --- Input-idle frame cap (Radeon Chill / BatteryBoost shape) ---
+    # A game left running with nobody touching it still renders at full rate.
+    # Capping then costs nothing by definition: the player is not looking for
+    # responsiveness they are not asking for. Released the moment input returns.
+    # The grace period is deliberately long: this targets genuine
+    # put-the-device-down idling, not "watching a cutscene for ten seconds".
+    # Driven by the evdev monitor, which is verified to track in-game input.
+    # Do NOT wire this to the compositor's input counter: that atom does not see
+    # input Steam Input routes to the game, and an idle detector built on it caps
+    # a player mid-game and never releases.
+    idle_input_grace_s: float = 60.0
+    idle_frame_cap_fps: int = 30
     # --- V10 frame feed (contract 1.1) ---
     frame_feed_file: str | None = None
     frame_feed_stale_s: float = 5.0
@@ -3520,6 +3533,7 @@ class GamePowerGovernor:
         auto_target_estimator: AutoTargetEstimator | None = None,
         refresh_hz_provider: Callable[[], float | None] | None = None,
         limiter_writer: Callable[[int | None], bool] | None = None,
+        input_idle_provider: Callable[[], float | None] | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -3537,6 +3551,8 @@ class GamePowerGovernor:
         self.auto_target_estimator = auto_target_estimator
         self.refresh_hz_provider = refresh_hz_provider
         self.limiter_writer = limiter_writer
+        self.input_idle_provider = input_idle_provider
+        self._input_idle_s = 0.0
         self._auto_target_proposal: AutoTargetProposal | None = None
         # The frame cap we applied, so it can be cleared on every restore path.
         self._applied_limiter_fps: int | None = None
@@ -3846,9 +3862,10 @@ class GamePowerGovernor:
         against real sessions before anything acts on it. Acting on it is gated
         on battery per the frame-cap authority boundary.
         """
+        idle_s = self._update_input_idle()
         estimator = self.auto_target_estimator
         if estimator is None:
-            return {"status": "disabled"}
+            return {"status": "disabled", "input_idle_s": idle_s}
         target = sample.frame_target
         performance = sample.frame_performance
         phase = decision.phase.value if decision.phase is not None else None
@@ -3881,6 +3898,7 @@ class GamePowerGovernor:
                 )
             ),
             "drops_this_session": estimator.drops_this_session,
+            "input_idle_s": round(idle_s, 1),
             "proposal": (
                 None
                 if latest is None
@@ -3892,6 +3910,30 @@ class GamePowerGovernor:
                 }
             ),
         }
+
+    def _update_input_idle(self) -> float:
+        """Seconds since the last real input event, from the evdev monitor."""
+        if self.input_idle_provider is None:
+            self._input_idle_s = 0.0
+            return 0.0
+        idle = self.input_idle_provider()
+        # Signal unavailable: never claim idle on missing evidence.
+        self._input_idle_s = 0.0 if idle is None else max(0.0, idle)
+        return self._input_idle_s
+
+    def _idle_cap_fps(self) -> int | None:
+        """The idle floor, snapped to a divisor of the panel rate."""
+        if self.config.idle_input_grace_s <= 0:
+            return None
+        if self._input_idle_s < self.config.idle_input_grace_s:
+            return None
+        refresh = self.refresh_hz_provider() if self.refresh_hz_provider else None
+        candidates = divisor_candidates(
+            refresh, min_fps=AUTO_TARGET_MIN_FPS, max_fps=AUTO_TARGET_MAX_FPS
+        )
+        if not candidates:
+            return None
+        return snap_down_to_candidate(self.config.idle_frame_cap_fps, candidates)
 
     # Personas allowed to write a real frame cap. Plugged-in performance release
     # never caps; quiet is an explicit opt-in to trading frames for calm.
@@ -3913,6 +3955,20 @@ class GamePowerGovernor:
         target = sample.frame_target
         if target is not None and target.source == "manual":
             return self._clear_frame_cap("manual-target")
+        idle_fps = self._idle_cap_fps()
+        if idle_fps is not None:
+            current = target.fps_target if target is not None else None
+            if current is not None and idle_fps < current:
+                if idle_fps == self._applied_limiter_fps:
+                    return self._applied_limiter_fps, "input-idle"
+                if self.limiter_writer(idle_fps):
+                    self._applied_limiter_fps = idle_fps
+                    return self._applied_limiter_fps, "input-idle"
+                return self._applied_limiter_fps, "write-failed"
+        elif self._applied_limiter_fps is not None and proposal is None:
+            # Input returned (or idle never qualified) and nothing else wants a
+            # cap: hand the frames straight back.
+            return self._clear_frame_cap("input-active")
         if proposal is None:
             return self._applied_limiter_fps, "no-proposal"
         if proposal.fps == self._applied_limiter_fps:

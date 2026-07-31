@@ -46,6 +46,7 @@ from steamos_intel_handheld.game_power import (
 )
 
 from .game_power_frame_target import AutoTargetEstimator
+from .game_power_input import InputActivityMonitor
 
 BUS_NAME = "org.rivoreo.SteamOSManager.PowerControl"
 OBJ_PATH = "/org/rivoreo/SteamOSManager/PowerControl"
@@ -1056,7 +1057,7 @@ async def serve(args: argparse.Namespace) -> None:
             super().__init__(IFACE_REMOTE)
 
         @dbus_property(access=PropertyAccess.READ)
-        def RemoteInterfaces(self) -> "as":
+        def RemoteInterfaces(self) -> "as":  # noqa: F821  # D-Bus signature, not a name
             return [IFACE_TDP]
 
     class TdpLimitInterface(ServiceInterface):
@@ -1065,13 +1066,13 @@ async def serve(args: argparse.Namespace) -> None:
             self.backend = tdp_backend
 
         @dbus_property(access=PropertyAccess.READWRITE)
-        def TdpLimit(self) -> "u":
+        def TdpLimit(self) -> "u":  # noqa: F821  # D-Bus signature, not a name
             watts = self.backend.read_limit_w()
             print(f"get TdpLimit -> {watts}", flush=True, file=sys.stderr)
             return watts
 
         @TdpLimit.setter
-        def TdpLimit(self, value: "u") -> None:
+        def TdpLimit(self, value: "u") -> None:  # noqa: F821  # D-Bus signature, not a name
             applied_watts = self.backend.write_limit_w(int(value))
             print(
                 f"set TdpLimit <- {int(value)}; applied {applied_watts}",
@@ -1081,11 +1082,11 @@ async def serve(args: argparse.Namespace) -> None:
             self.emit_properties_changed({"TdpLimit": applied_watts})
 
         @dbus_property(access=PropertyAccess.READ)
-        def TdpLimitMin(self) -> "u":
+        def TdpLimitMin(self) -> "u":  # noqa: F821  # D-Bus signature, not a name
             return self.backend.min_w
 
         @dbus_property(access=PropertyAccess.READ)
-        def TdpLimitMax(self) -> "u":
+        def TdpLimitMax(self) -> "u":  # noqa: F821  # D-Bus signature, not a name
             return self.backend.max_w
 
     bus_type = BusType.SYSTEM if args.bus == "system" else BusType.SESSION
@@ -1261,6 +1262,7 @@ def build_game_power_governor(
         auto_target_estimator=AutoTargetEstimator(poll_s=config.poll_s),
         refresh_hz_provider=lambda: discover_panel_refresh_hz(args.user),
         limiter_writer=build_limiter_writer(args.user),
+        input_idle_provider=_build_input_idle_provider(),
         config_provider=config_provider,
         hint_store=hint_store,
         hint_context_provider=_build_game_power_hint_context_provider(args, backend),
@@ -1425,6 +1427,26 @@ def _read_root_atom(
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout
     return None
+
+
+def _build_input_idle_provider() -> Callable[[], float | None]:
+    """Seconds since the last input event, or None when unwatchable.
+
+    None means "no evidence", which the governor treats as active: the idle frame
+    cap must never engage on a missing signal.
+    """
+    monitor = InputActivityMonitor()
+    if not monitor.start():
+        print(
+            "game-power: no readable input devices; idle frame cap disabled",
+            file=sys.stderr,
+        )
+        return lambda: None
+    print(
+        f"game-power: watching {len(monitor.watched)} input devices for idle",
+        file=sys.stderr,
+    )
+    return monitor.idle_s
 
 
 def build_limiter_writer(user: str = "deck") -> Callable[[int | None], bool]:
