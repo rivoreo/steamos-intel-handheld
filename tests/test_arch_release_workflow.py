@@ -268,7 +268,10 @@ def test_ordinary_pages_workflow_cannot_overwrite_release_repository() -> None:
     # The check precedes the upload, so a published repository stops the deploy
     # before any artifact is built.
     assert "upload-pages-artifact" in deploy
-    assert "rivoreo-steamos.db.tar.gz" in guard
+    # repo-add writes rivoreo-steamos.db; probing a name the build never
+    # produces made this guard pass against a live repository.
+    assert "os/x86_64/rivoreo-steamos.db" in guard
+    assert "rivoreo-steamos.db.tar.gz" not in guard
     assert "key/rivoreo.gpg" in guard
     assert "exit 1" in guard
 

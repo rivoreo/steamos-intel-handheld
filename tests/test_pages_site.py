@@ -32,9 +32,13 @@ def test_pages_workflow_deploys_docs_but_never_over_a_published_repository() -> 
     # refuse to run once the signed repository is live - otherwise it deletes the
     # package database and key out from under anyone who configured the repo.
     assert "Refuse to overwrite a published package repository" in workflow
-    assert "rivoreo-steamos.db.tar.gz" in workflow
     assert "key/rivoreo.gpg" in workflow
     assert "exit 1" in workflow
+    # The guard has to probe files this project actually publishes. It used to
+    # look for rivoreo-steamos.db.tar.gz, which repo-add never produces, so it
+    # reported an empty repository no matter what was live.
+    assert "os/x86_64/rivoreo-steamos.db" in workflow
+    assert "rivoreo-steamos.db.tar.gz" not in workflow
     # Pull requests validate only.
     assert "github.event_name != 'pull_request'" in workflow
 
@@ -137,13 +141,13 @@ def test_pages_site_quotes_only_measurements_that_were_actually_taken() -> None:
 
 def test_pages_site_does_not_advertise_an_install_path_that_does_not_work() -> None:
     index = SITE_INDEX.read_text()
-    # The signed repository is not published, so the bootstrap one-liner 404s at
-    # its first download. Presenting it as ready sends people to a broken
-    # command, and the page has to name which command does work instead.
-    assert "Not published yet" in index
-    assert "not live yet" in index
-    assert "the command above is the one to use" in index
-    # The path that does work today, and the developer path, both present.
+    # The signed repository is published now, so the bootstrap one-liner is the
+    # recommended path and nothing may still describe it as unavailable.
+    assert "Not published yet" not in index
+    assert "not live yet" not in index
+    assert "cannot work today" not in index
+    assert "bootstrap.sh | sudo bash" in index
+    # The other two paths stay, described as what they are.
     assert "scripts/install.sh | sudo bash" in index
     assert "scripts/install-on-device.sh" in index
     assert "Repository active" not in index
@@ -212,7 +216,7 @@ def test_pages_site_uses_taiwan_zh_tw_wording() -> None:
     zh_tw_text = "\n".join(read_site_translations()["zh-TW"].values())
     assert "Intel 掌機" in zh_tw_text
     assert "套件庫" in zh_tw_text
-    assert "尚未發佈" in zh_tw_text
+    assert "簽名套件" in zh_tw_text
     assert "原廠韌體" in zh_tw_text
     # Names the two panels, in the words the panels themselves use.
     assert "遊戲電力" in zh_tw_text
@@ -312,10 +316,68 @@ def test_pages_site_says_which_machine_each_command_runs_on() -> None:
             assert block[key] != block.get("install.dev.text"), (locale, key)
     # English is checked literally; the point is the words, not the structure.
     english = translations["en"]
-    assert "Desktop Mode" in english["install.oneline.text"]
-    assert "Konsole" in english["install.oneline.text"]
+    # The recommended path is the one that must spell out how to get a terminal
+    # on the handheld at all.
+    assert "Desktop Mode" in english["install.package.text"]
+    assert "Konsole" in english["install.package.text"]
+    assert "on the handheld" in english["install.oneline.text"]
     assert "on the handheld" in english["code.onHandheld"]
     assert "a second machine" in english["install.dev.text"]
     assert "not the handheld" in english["install.dev.text"]
     # The phrase that caused the ambiguity in the first place.
     assert "on your computer, not on the handheld" not in SITE_INDEX.read_text()
+
+
+def test_pages_guard_probes_the_filenames_repo_add_actually_produces() -> None:
+    """The guard is the only thing standing between a documentation push and
+    the deletion of a live package repository, so the names it probes must be
+    the ones the release build writes."""
+    build = (ROOT / "scripts/build-arch-release-repo.sh").read_text()
+    workflow = PAGES_WORKFLOW.read_text()
+
+    produced = {
+        line.split("/")[-1]
+        for line in re.findall(r'"\$repo_out/(rivoreo-steamos\.db[^"]*)"', build)
+    }
+    assert "rivoreo-steamos.db" in produced, produced
+    probed = set(re.findall(r"os/x86_64/([A-Za-z0-9._-]+)", workflow))
+    assert probed, "guard probes no repository file at all"
+    assert probed <= produced, (probed - produced, produced)
+
+
+def test_pages_site_recommends_the_packaged_install_first() -> None:
+    """Whichever path the page puts first is the one most people will run, so
+    it has to be the one that brings updates with it."""
+    index = SITE_INDEX.read_text()
+    tags = re.findall(r'data-i18n="install\.(\w+)\.tag"', index)
+    assert tags[0] == "package", tags
+    # And the recommended card is the one carrying the signature requirement.
+    package_card = index[index.index('data-i18n="install.package.tag"') :]
+    package_card = package_card[: package_card.index("</div>\n            <div class=")]
+    assert "bootstrap.sh" in package_card
+
+
+def test_inline_html_matches_the_english_dictionary() -> None:
+    """Every translated node carries English text inline as well as in the
+    dictionary. A visitor with JavaScript disabled sees the inline copy, so the
+    two drifting apart publishes text nobody reviewed - which is exactly how
+    "the repository is not live yet" survived the repository going live."""
+    import html as html_mod
+
+    index = SITE_INDEX.read_text()
+    english = read_site_translations()["en"]
+    body = index[: index.index("const TRANSLATIONS = ")]
+
+    pattern = re.compile(
+        r'<(?P<tag>h1|h2|h3|p|span|li|a|figcaption)\b[^>]*?data-i18n="(?P<key>[^"]+)"[^>]*?>'
+        r"(?P<inner>.*?)</(?P=tag)>",
+        re.DOTALL,
+    )
+    checked = 0
+    for match in pattern.finditer(body):
+        key, inner = match.group("key"), match.group("inner")
+        if key not in english or "<" in inner:
+            continue
+        assert html_mod.unescape(inner) == english[key], key
+        checked += 1
+    assert checked >= 40, checked

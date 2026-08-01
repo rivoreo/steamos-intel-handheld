@@ -64,7 +64,12 @@ jobs:
         run: |
           set -euo pipefail
           published=0
-          for path in key/rivoreo.gpg os/x86_64/rivoreo-steamos.db.tar.gz; do
+          # rivoreo-steamos.db is the file pacman fetches and the name repo-add
+          # produces. An earlier version of this guard probed a gzip filename
+          # this project never publishes, so it reported "nothing live" against
+          # a live repository and would have let a site-only deployment delete
+          # it. Probe only names the release build actually writes.
+          for path in key/rivoreo.gpg os/x86_64/rivoreo-steamos.db os/x86_64/rivoreo-steamos.db.sig; do
             code="$(curl -sL -o /dev/null -w '%{http_code}' --max-time 30 "$BASE/$path" || echo 000)"
             echo "$path -> $code"
             if [ "$code" = "200" ]; then

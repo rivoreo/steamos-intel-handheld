@@ -611,7 +611,7 @@
           <div>
             <p class="eyebrow" data-i18n="hero.eyebrow">Built for the MSI Claw 8 AI+</p>
             <h1 data-i18n="hero.title">Longer battery. Steadier frame rates.</h1>
-            <p class="lead" data-i18n="hero.lead">SteamOS was built for AMD handhelds. On Intel hardware its power controls reach for knobs that are not there, and the performance overlay reads nothing at all. This project supplies the missing layer, and puts two panels in the Steam menu to drive it.</p>
+            <p class="lead" data-i18n="hero.lead">SteamOS was built for AMD handhelds. On an Intel one most of the power saving quietly does nothing: the settings you change have no effect, and the performance overlay leaves the wattage blank. This project hooks it back up, and gives you two panels in the Steam menu — one for how many frames you want and what they cost, one for how full the battery gets.</p>
             <div class="hero-actions">
               <a class="button" href="#install" data-i18n="hero.primaryCta">Install it</a>
               <a class="button secondary" href="https://github.com/rivoreo/steamos-intel-handheld" data-i18n="hero.secondaryCta">Read the source</a>
@@ -704,24 +704,24 @@
           </div>
           <div class="cards">
             <div class="card">
-              <span class="tag now" data-i18n="install.oneline.tag">Recommended</span>
-              <h3 data-i18n="install.oneline.title">One command, on the handheld</h3>
-              <p data-i18n="install.oneline.text">Switch the handheld to Desktop Mode, open the terminal (Konsole), and paste this in. It downloads the project, installs both panels and the background service, and starts everything. You will be asked for your password.</p>
+              <span class="tag now" data-i18n="install.package.tag">Recommended</span>
+              <h3 data-i18n="install.package.title">One command, on the handheld</h3>
+              <p data-i18n="install.package.text">Switch the handheld to Desktop Mode, open the terminal (Konsole), and paste this in. It installs signed packages, so from then on updates arrive through pacman along with everything else on the system.</p>
+              <div class="code-block">
+                <div class="code-label"><span data-i18n="code.konsole">Konsole</span><span data-i18n="code.onHandheld">on the handheld, in Desktop Mode</span></div>
+                <pre><code>curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
+              </div>
+              <p class="fineprint" data-i18n="install.package.note">It pins the signing key by fingerprint and configures the repository with <code>SigLevel = Required TrustedOnly</code>, so nothing unsigned can ever install from it.</p>
+            </div>
+            <div class="card">
+              <span class="tag later" data-i18n="install.oneline.tag">Without packaging</span>
+              <h3 data-i18n="install.oneline.title">Install straight from source</h3>
+              <p data-i18n="install.oneline.text">Also one command on the handheld, but it copies files into place instead of installing packages, so pacman will not carry the updates. Use it if you would rather not add a repository, or to try a change before it is released.</p>
               <div class="code-block">
                 <div class="code-label"><span data-i18n="code.konsole">Konsole</span><span data-i18n="code.onHandheld">on the handheld, in Desktop Mode</span></div>
                 <pre><code>curl -fsSL https://raw.githubusercontent.com/rivoreo/steamos-intel-handheld/main/scripts/install.sh | sudo bash</code></pre>
               </div>
               <p class="fineprint" data-i18n="install.oneline.note">Never set a password on this handheld? Run <code>passwd</code> once first — SteamOS ships without one, and sudo needs it.</p>
-            </div>
-            <div class="card">
-              <span class="tag later" data-i18n="install.package.tag">Not published yet</span>
-              <h3 data-i18n="install.package.title">From the package repository</h3>
-              <p data-i18n="install.package.text">Same idea, one command, but installed as a signed package so updates arrive through pacman with everything else. The repository is not live yet, so this one cannot work today — the command above is the one to use.</p>
-              <div class="code-block">
-                <div class="code-label"><span data-i18n="code.konsole">Konsole</span><span data-i18n="install.package.tag">Not published yet</span></div>
-                <pre><code>curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
-              </div>
-              <p class="fineprint" data-i18n="install.package.note">It pins the signing key by fingerprint and configures the repository with <code>SigLevel = Required TrustedOnly</code>, so nothing unsigned can ever install from it.</p>
             </div>
             <div class="card">
               <span class="tag later" data-i18n="install.dev.tag">For developers</span>
@@ -824,9 +824,9 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "features.sensors.text": "Want to know how much that setting you just changed really saved? On a stock Intel handheld you cannot: the processor and graphics wattage in the performance overlay stay blank forever. Install this and the numbers turn up.",
     "install.title": "Installing it",
     "install.lead": "Decky Loader has to be on the handheld already. Everything below happens on the handheld itself unless a step says otherwise.",
-    "install.package.tag": "Not published yet",
-    "install.package.title": "From the package repository",
-    "install.package.text": "Same idea, one command, but installed as a signed package so updates arrive through pacman with everything else. The repository is not live yet, so this one cannot work today — the command above is the one to use.",
+    "install.package.tag": "Recommended",
+    "install.package.title": "One command, on the handheld",
+    "install.package.text": "Switch the handheld to Desktop Mode, open the terminal (Konsole), and paste this in. It installs signed packages, so from then on updates arrive through pacman along with everything else on the system.",
     "install.after.title": "Where it shows up",
     "install.after.text": "Everything lives in the Steam quick access menu, the one behind the button with three dots.",
     "install.after.b1": "Open the quick access menu and pick the Decky plug icon.",
@@ -856,11 +856,11 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "more.display.text": "Full 1920×1200, every refresh rate from 48 to 120 Hz, and the colour glitch that Intel handhelds hit under gamescope taken care of. Steam's refresh rate slider covers the whole range instead of a couple of safe guesses.",
     "more.updates.title": "A SteamOS update will not undo it",
     "more.updates.text": "SteamOS updates swap out the system partition, which is normally how additions like this quietly disappear. Everything is put back at the next boot, without you noticing it happened.",
-    "install.oneline.tag": "Recommended",
-    "install.oneline.title": "One command, on the handheld",
-    "install.oneline.text": "Switch the handheld to Desktop Mode, open the terminal (Konsole), and paste this in. It downloads the project, installs both panels and the background service, and starts everything. You will be asked for your password.",
-    "install.oneline.note": "Never set a password on this handheld? Run passwd once first — SteamOS ships without one, and sudo needs it.",
-    "install.package.note": "It pins the signing key by fingerprint and configures the repository with SigLevel = Required TrustedOnly, so nothing unsigned can ever install from it.",
+    "install.oneline.tag": "Without packaging",
+    "install.oneline.title": "Install straight from source",
+    "install.oneline.text": "Also one command on the handheld, but it copies files into place instead of installing packages, so pacman will not carry the updates. Use it if you would rather not add a repository, or to try a change before it is released.",
+    "install.oneline.note": "Either way, if you have never set a password on this handheld, run passwd once first — SteamOS ships without one and sudo needs it.",
+    "install.package.note": "It pins the signing key by fingerprint before it trusts anything, and configures the repository with SigLevel = Required TrustedOnly, so nothing unsigned can install from it.",
     "install.dev.tag": "For developers",
     "install.dev.title": "Push your own working copy",
     "install.dev.text": "This one runs on a second machine — your desktop or laptop, not the handheld — and copies your local checkout across over SSH. Use it when you are changing the code; end users want the command in the first card.",
@@ -903,9 +903,9 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "features.sensors.text": "想知道你刚才调的那个设置到底省了多少电？原厂的 Intel 掌机上你看不到 —— 性能监控里处理器和显卡的瓦数永远是空白。装上之后，数字就出来了。",
     "install.title": "安装",
     "install.lead": "掌机上要先装好 Decky Loader。下面的步骤除非特别说明，都是在掌机上操作。",
-    "install.package.tag": "尚未发布",
-    "install.package.title": "从软件源安装",
-    "install.package.text": "一样是一行命令，但装的是签名软件包，以后更新会跟其他软件一起通过 pacman 送达。软件源还没上线，所以这条现在跑不通 —— 请用上面那条。",
+    "install.package.tag": "推荐",
+    "install.package.title": "在掌机上跑一行命令",
+    "install.package.text": "把掌机切到桌面模式，打开终端（Konsole），把这行贴进去。它装的是签名软件包，之后的更新会跟系统里其他软件一起，通过 pacman 送到你手上。",
     "install.after.title": "装完在哪里找",
     "install.after.text": "全都在 Steam 快捷菜单里，就是那个三个点按钮后面的菜单。",
     "install.after.b1": "打开快捷菜单，选 Decky 的插头图标。",
@@ -935,11 +935,11 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "more.display.text": "完整的 1920×1200，48 到 120 Hz 每一档刷新率，以及 Intel 掌机在 gamescope 下会遇到的那个颜色异常，都处理掉了。Steam 的刷新率滑杆终于是整个范围可选，而不是保守地给你两三档。",
     "more.updates.title": "系统更新不会把它冲掉",
     "more.updates.text": "SteamOS 更新会整个换掉系统分区 —— 这类外挂的东西通常就是这么无声无息消失的。这里所有东西都会在下次开机时放回去，你不会察觉发生过。",
-    "install.oneline.tag": "推荐",
-    "install.oneline.title": "在掌机上跑一行命令",
-    "install.oneline.text": "把掌机切到桌面模式，打开终端（Konsole），把这行贴进去。它会下载项目、装好两个面板和后台服务，然后全部启动。中途会问你要密码。",
-    "install.oneline.note": "从来没给这台掌机设过密码？先跑一次 passwd —— SteamOS 出厂是没有密码的，而 sudo 需要它。",
-    "install.package.note": "它会按指纹钉住签名密钥，并把软件源配成 SigLevel = Required TrustedOnly，所以没签名的东西永远装不进来。",
+    "install.oneline.tag": "不走软件包",
+    "install.oneline.title": "直接从源码装",
+    "install.oneline.text": "同样是在掌机上跑一行，但它是把文件拷到位，而不是装软件包，所以 pacman 不会帮你带更新。不想加软件源、或者想先试试还没发布的改动，就用这条。",
+    "install.oneline.note": "两条路都一样：如果你从来没给这台掌机设过密码，先跑一次 passwd —— SteamOS 出厂没有密码，而 sudo 需要它。",
+    "install.package.note": "它会先按指纹钉住签名密钥才信任任何东西，并把软件源配成 SigLevel = Required TrustedOnly，所以没签名的东西装不进来。",
     "install.dev.tag": "给开发者",
     "install.dev.title": "把你自己改的版本推上去",
     "install.dev.text": "这条是在另一台机器上跑 —— 你的台式机或笔记本，不是掌机 —— 通过 SSH 把你本地的代码拷过去。改代码的时候用它；普通用户请用第一张卡片里那条。",
@@ -982,9 +982,9 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "features.sensors.text": "想知道你剛才調的那個設定到底省了多少電？原廠的 Intel 掌機上你看不到 —— 效能監控裡處理器和繪圖的瓦數永遠是空白。裝上之後，數字就出來了。",
     "install.title": "安裝",
     "install.lead": "掌機上要先裝好 Decky Loader。下面的步驟除非特別說明，都是在掌機上操作。",
-    "install.package.tag": "尚未發佈",
-    "install.package.title": "從套件庫安裝",
-    "install.package.text": "一樣是一行指令，但裝的是簽名套件，以後更新會跟其他軟體一起透過 pacman 送達。套件庫還沒上線，所以這條現在跑不通 —— 請用上面那條。",
+    "install.package.tag": "推薦",
+    "install.package.title": "在掌機上跑一行指令",
+    "install.package.text": "把掌機切到桌面模式，打開終端機（Konsole），把這行貼進去。它裝的是簽名套件，之後的更新會跟系統裡其他軟體一起，透過 pacman 送到你手上。",
     "install.after.title": "裝完在哪裡找",
     "install.after.text": "全都在 Steam 快捷選單裡，就是那個三個點按鈕後面的選單。",
     "install.after.b1": "打開快捷選單，選 Decky 的插頭圖示。",
@@ -1014,11 +1014,11 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "more.display.text": "完整的 1920×1200，48 到 120 Hz 每一檔更新率，以及 Intel 掌機在 gamescope 下會遇到的那個顏色異常，都處理掉了。Steam 的更新率滑桿終於是整個範圍可選，而不是保守地給你兩三檔。",
     "more.updates.title": "系統更新不會把它洗掉",
     "more.updates.text": "SteamOS 更新會整個換掉系統分割區 —— 這類外掛的東西通常就是這麼無聲無息消失的。這裡所有東西都會在下次開機時放回去，你不會察覺發生過。",
-    "install.oneline.tag": "推薦",
-    "install.oneline.title": "在掌機上跑一行指令",
-    "install.oneline.text": "把掌機切到桌面模式，打開終端機（Konsole），把這行貼進去。它會下載專案、裝好兩個面板和背景服務，然後全部啟動。中途會問你要密碼。",
-    "install.oneline.note": "從來沒給這台掌機設過密碼？先跑一次 passwd —— SteamOS 出廠是沒有密碼的，而 sudo 需要它。",
-    "install.package.note": "它會按指紋釘住簽章金鑰，並把套件庫設成 SigLevel = Required TrustedOnly，所以沒簽名的東西永遠裝不進來。",
+    "install.oneline.tag": "不走套件",
+    "install.oneline.title": "直接從原始碼裝",
+    "install.oneline.text": "同樣是在掌機上跑一行，但它是把檔案拷到位，而不是裝套件，所以 pacman 不會幫你帶更新。不想加套件庫、或者想先試試還沒發佈的改動，就用這條。",
+    "install.oneline.note": "兩條路都一樣：如果你從來沒給這台掌機設過密碼，先跑一次 passwd —— SteamOS 出廠沒有密碼，而 sudo 需要它。",
+    "install.package.note": "它會先按指紋釘住簽章金鑰才信任任何東西，並把套件庫設成 SigLevel = Required TrustedOnly，所以沒簽名的東西裝不進來。",
     "install.dev.tag": "給開發者",
     "install.dev.title": "把你自己改的版本推上去",
     "install.dev.text": "這條是在另一台機器上跑 —— 你的桌機或筆電，不是掌機 —— 透過 SSH 把你本機的程式碼拷過去。改程式的時候用它；一般使用者請用第一張卡片裡那條。",
