@@ -539,3 +539,38 @@ def test_package_repository_docs_describe_github_actions_release_publisher() -> 
     assert "short-lived candidate signing key" in docs
     assert "stable releases require the protected signing secrets" in docs
     assert "ordinary pushes" in docs
+
+
+def test_one_line_installer_and_developer_installer_share_one_payload() -> None:
+    """Two install paths that each carry their own copy of the steps drift, and
+    the one nobody runs during development is the one that rots."""
+    root = Path(__file__).resolve().parents[1]
+    payload = root / "scripts/install-payload.sh"
+    oneline = (root / "scripts/install.sh").read_text()
+    developer = (root / "scripts/install-on-device.sh").read_text()
+
+    assert payload.is_file()
+    assert payload.stat().st_mode & 0o111, "install-payload.sh must be executable"
+    assert "scripts/install-payload.sh" in oneline
+    assert "scripts/install-payload.sh" in developer
+    # The developer path has to ship the payload along with the source it runs
+    # against, or the far end has nothing to execute.
+    assert "scripts/install-payload.sh \\" in developer
+
+
+def test_one_line_installer_refuses_hardware_it_was_not_built_for() -> None:
+    """Piping a power manager into a shell is only safe if it declines to
+    install itself on a machine whose power interfaces it does not know."""
+    installer = (Path(__file__).resolve().parents[1] / "scripts/install.sh").read_text()
+    assert "/sys/class/dmi/id/sys_vendor" in installer
+    assert "intel-rapl:0" in installer
+    assert "STEAMOS_INTEL_HANDHELD_FORCE" in installer
+    # And it must download only from this project's own repository.
+    assert "codeload.github.com/$REPO" in installer
+    assert 'REPO="${STEAMOS_INTEL_HANDHELD_REPO:-rivoreo/steamos-intel-handheld}"' in installer
+
+
+def test_install_payload_requires_root_and_a_real_source_tree() -> None:
+    payload = (Path(__file__).resolve().parents[1] / "scripts/install-payload.sh").read_text()
+    assert "run as root" in payload
+    assert "does not look like a steamos-intel-handheld source tree" in payload

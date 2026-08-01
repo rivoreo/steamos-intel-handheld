@@ -41,12 +41,20 @@ def test_pages_workflow_deploys_docs_but_never_over_a_published_repository() -> 
 
 def test_pages_site_points_only_at_the_signed_project_repository() -> None:
     index = SITE_INDEX.read_text()
-    assert f"{PUBLIC_REPO_BASE}/os/$arch" in index
+    assert PUBLIC_REPO_BASE in index
     assert "https://holo.libz.so" not in index
     assert "http://" not in index
-    # Anyone who copies the repository stanza off this page must copy the
-    # signature requirement with it.
+    # Wherever the page mentions the package repository it must also state that
+    # only signed packages can install from it, so nobody reads the one-line
+    # bootstrap as "pipe an unverified script at your system".
     assert "SigLevel = Required TrustedOnly" in index
+    # Every command the page tells someone to pipe into a shell must come from
+    # a host this project controls.
+    for piped in re.findall(r"curl -fsSL (\S+)", index):
+        assert piped.startswith(
+            ("https://rivoreo.github.io/steamos-intel-handheld/",
+             "https://raw.githubusercontent.com/rivoreo/steamos-intel-handheld/"),
+        ), piped
 
 
 def test_pages_site_leads_with_the_user_facing_promise() -> None:
@@ -131,10 +139,12 @@ def test_pages_site_does_not_advertise_an_install_path_that_does_not_work() -> N
     index = SITE_INDEX.read_text()
     # The signed repository is not published, so the bootstrap one-liner 404s at
     # its first download. Presenting it as ready sends people to a broken
-    # command; the source install is the one that works today.
+    # command, and the page has to name which command does work instead.
     assert "Not published yet" in index
     assert "not live yet" in index
-    assert "Install from source" in index
+    assert "the command above is the one to use" in index
+    # The path that does work today, and the developer path, both present.
+    assert "scripts/install.sh | sudo bash" in index
     assert "scripts/install-on-device.sh" in index
     assert "Repository active" not in index
     assert "Install channel open" not in index
@@ -202,8 +212,6 @@ def test_pages_site_uses_taiwan_zh_tw_wording() -> None:
     zh_tw_text = "\n".join(read_site_translations()["zh-TW"].values())
     assert "Intel 掌機" in zh_tw_text
     assert "套件庫" in zh_tw_text
-    assert "從原始碼安裝" in zh_tw_text
-    assert "簽名套件庫" in zh_tw_text
     assert "尚未發佈" in zh_tw_text
     assert "原廠韌體" in zh_tw_text
     # Names the two panels, in the words the panels themselves use.
@@ -285,6 +293,29 @@ def test_pages_site_install_command_matches_what_the_script_actually_needs() -> 
     user = usage.group(1)
     index = SITE_INDEX.read_text()
     assert f"scripts/install-on-device.sh {user}@" in index
-    # And the prerequisite has to be stated, not just implied by the command.
+    # And the prerequisite has to be stated next to that command, not implied.
     for locale in ("en", "zh-CN", "zh-TW"):
-        assert user in read_site_translations()[locale]["install.lead"], locale
+        assert user in read_site_translations()[locale]["install.dev.note"], locale
+
+
+def test_pages_site_says_which_machine_each_command_runs_on() -> None:
+    """A handheld running SteamOS is also a desktop computer, so "run this on
+    your computer" tells a reader nothing. Every command has to name the
+    machine unambiguously."""
+    translations = read_site_translations()
+    for locale in ("en", "zh-CN", "zh-TW"):
+        block = translations[locale]
+        # The one-liner runs on the handheld, and says so along with how to get
+        # a terminal there at all.
+        assert block["code.onHandheld"] != block["code.onDevMachine"], locale
+        for key in ("install.oneline.text", "code.onHandheld"):
+            assert block[key] != block.get("install.dev.text"), (locale, key)
+    # English is checked literally; the point is the words, not the structure.
+    english = translations["en"]
+    assert "Desktop Mode" in english["install.oneline.text"]
+    assert "Konsole" in english["install.oneline.text"]
+    assert "on the handheld" in english["code.onHandheld"]
+    assert "a second machine" in english["install.dev.text"]
+    assert "not the handheld" in english["install.dev.text"]
+    # The phrase that caused the ambiguity in the first place.
+    assert "on your computer, not on the handheld" not in SITE_INDEX.read_text()

@@ -1,8 +1,29 @@
+import subprocess
 from pathlib import Path
 
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_high_risk_scripts_require_explicit_authority_flags():
+    cases = [
+        ("verify-on-device.sh", ["root@example.invalid"], "--allow-device"),
+        ("verify-game-power-on-device.sh", ["root@example.invalid"], "--allow-device"),
+        ("profile-game-power-on-device.sh", ["root@example.invalid"], "--allow-device"),
+        ("steamos-qemu-build-env.sh", ["fetch-raw"], "--allow-qemu"),
+    ]
+
+    for script_name, args, expected_flag in cases:
+        result = subprocess.run(
+            [str(ROOT / "scripts" / script_name), *args],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 2
+        assert expected_flag in result.stderr
 
 
 def test_steamos_manager_remote_config_uses_rivoreo_bus_name():
@@ -176,102 +197,69 @@ def test_networkmanager_dispatcher_is_packaged_as_executable_source():
     assert 'systemctl start "$service"' in script
 
 
-def test_manual_installer_installs_ec_control_wrapper():
-    script = (ROOT / "scripts/install-on-device.sh").read_text()
-
-    assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-ec-control" in script
-    assert r"python3 -m steamos_intel_handheld.ec_charge_control \"\$@\"" in script
-
-
-def test_installer_installs_game_power_cli_wrapper():
-    script = (ROOT / "scripts/install-on-device.sh").read_text()
-
-    assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power" in script
-    assert r"python3 -m steamos_intel_handheld.game_power \"\$@\"" in script
+WRAPPERS = {
+    "steamos-intel-handheld-power-control": "power_control",
+    "steamos-intel-handheld-ec-control": "ec_charge_control",
+    "steamos-intel-handheld-restore-etc": "restore_etc",
+    "steamos-intel-handheld-game-power": "game_power",
+    "steamos-intel-handheld-game-power-profile": "game_power_profile",
+    "steamos-intel-handheld-game-power-control": "game_power_control",
+}
 
 
-def test_installer_installs_game_power_profile_cli_wrapper():
-    script = (ROOT / "scripts/install-on-device.sh").read_text()
+def _install_payload() -> str:
+    """Both install paths run this, so asserting here covers the one-line
+    installer and the developer installer at once."""
+    return (ROOT / "scripts/install-payload.sh").read_text()
 
-    assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-profile" in script
-    assert r"python3 -m steamos_intel_handheld.game_power_profile \"\$@\"" in script
 
+def test_manual_installer_installs_every_cli_wrapper():
+    payload = _install_payload()
 
-def test_installer_installs_game_power_control_cli_wrapper():
-    script = (ROOT / "scripts/install-on-device.sh").read_text()
-
-    assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-game-power-control" in script
-    assert r"python3 -m steamos_intel_handheld.game_power_control \"\$@\"" in script
+    assert '/opt/steamos-intel-handheld/bin/$name' in payload
+    assert 'exec /usr/bin/python3 -m steamos_intel_handheld.$module "\\$@"' in payload
+    for wrapper, module in WRAPPERS.items():
+        assert f"write_wrapper {wrapper} {module}" in payload
 
 
 def test_manual_installer_installs_restore_service_and_canonical_artifacts():
+    payload = _install_payload()
+
+    assert "write_wrapper steamos-intel-handheld-restore-etc restore_etc" in payload
+    assert "steamos-intel-handheld-steamos-manager-remote" in payload
+    assert "systemctl disable steamos-intel-handheld-steamos-manager-remote.service" in payload
+    assert "systemctl enable --now steamos-intel-handheld-restore.service" in payload
+    assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-restore-etc --apply" in payload
+    # Every managed file has to reach the artifact tree as well as its live
+    # location, or the restore service has nothing to replay after an update.
+    assert 'install -m "$mode" "$src/data/$relative" "$artifact_root/$relative"' in payload
+
+
+def test_manual_installer_installs_both_decky_plugins():
+    payload = _install_payload()
+
+    assert "install_decky_plugin steamos-intel-handheld-ec" in payload
+    assert "install_decky_plugin steamos-intel-handheld-game-power" in payload
+    assert '/home/deck/homebrew/plugins/$plugin' in payload
+    assert '"$plugin_src/dist/index.js" "$plugin_dst/dist/index.js"' in payload
+    assert '"$plugin_src/plugin.json" "$plugin_dst/plugin.json"' in payload
+    assert '"$plugin_src/package.json" "$plugin_dst/package.json"' in payload
+    assert "report_decky_loader_status" in payload
+    assert "/home/deck/homebrew/services/PluginLoader" in payload
+    assert "Decky Loader not detected" in payload
+
+
+def test_developer_installer_ships_the_plugin_sources_it_installs():
+    """The payload installs from an unpacked tree, so the SSH path has to put
+    those files on the far end first."""
     script = (ROOT / "scripts/install-on-device.sh").read_text()
 
-    assert "/opt/steamos-intel-handheld/bin/steamos-intel-handheld-restore-etc" in script
-    assert r"python3 -m steamos_intel_handheld.restore_etc \"\$@\"" in script
-    assert "steamos-intel-handheld-steamos-manager-remote" in script
-    assert (
-        "rm -f /opt/steamos-intel-handheld/bin/"
-        "steamos-intel-handheld-steamos-manager-remote"
-    ) in script
-    assert "artifact_root=/opt/steamos-intel-handheld/share/etc-artifacts" in script
-    assert "/opt/steamos-intel-handheld/share/etc-artifacts/manifest.toml" in script
-    assert "\\$artifact_root/dbus-1/system.d" in script
-    assert "\\$artifact_root/steamos-manager/remotes.d" in script
-    assert "rm -f /etc/steamos-manager/remotes.d/99-rivoreo-power-control.toml" not in script
-    assert (
-        "install -m 0644 '$remote_tmp/data/steamos-manager/remotes.d/"
-        "99-rivoreo-power-control.toml'"
-    in script
-    )
-    assert (
-        "install -m 0644 '$remote_tmp/data/steamos-manager/remotes.d/"
-        "99-rivoreo-power-control.toml' /etc/steamos-manager/remotes.d/"
-        "99-rivoreo-power-control.toml"
-        not in script
-    )
-    assert "\\$artifact_root/systemd/system" in script
-    assert "\\$artifact_root/NetworkManager/dispatcher.d" in script
-    assert "/etc/systemd/system/steamos-intel-handheld-restore.service" in script
-    assert (
-        "rm -f /etc/systemd/system/"
-        "steamos-intel-handheld-steamos-manager-remote.service"
-    ) in script
-    assert "systemctl enable --now steamos-intel-handheld-restore.service" in script
-    assert "steamos-intel-handheld-restore-etc --apply" in script
-    assert "restart_user_steamos_manager_without_provider" in script
-    assert "systemctl stop steamos-intel-handheld-power-control.service" in script
-    assert (
-        "systemctl enable --now steamos-intel-handheld-steamos-manager-remote.service"
-        not in script
-    )
-    assert "systemctl disable steamos-intel-handheld-steamos-manager-remote.service" in script
-
-
-def test_manual_installer_installs_decky_charge_limit_plugin():
-    script = (ROOT / "scripts/install-on-device.sh").read_text()
-
-    assert "decky/steamos-intel-handheld-ec/plugin.json" in script
-    assert "/home/deck/homebrew/plugins/steamos-intel-handheld-ec" in script
-    assert "install -m 0644" in script
-    assert "decky_src/plugin.json" in script
-    assert "decky_src/package.json" in script
-    assert "decky_src/dist/index.js" in script
-    assert "report_decky_loader_status" in script
-    assert "/home/deck/homebrew/services/PluginLoader" in script
-    assert "Decky Loader not detected" in script
-
-
-def test_manual_installer_installs_decky_game_power_plugin():
-    script = (ROOT / "scripts/install-on-device.sh").read_text()
-
-    assert "decky/steamos-intel-handheld-game-power/plugin.json" in script
-    assert "/home/deck/homebrew/plugins/steamos-intel-handheld-game-power" in script
-    assert "game_power_decky_src" in script
-    assert "game_power_decky_dst" in script
-    assert "game_power_decky_src/package.json" in script
-    assert "game_power_decky_src/dist/index.js" in script
-    assert "Game Power plugin files are installed" in script
+    for plugin in ("steamos-intel-handheld-ec", "steamos-intel-handheld-game-power"):
+        assert f"decky/{plugin}/plugin.json" in script
+        assert f"decky/{plugin}/package.json" in script
+        assert f"decky/{plugin}/dist/index.js" in script
+        assert f"decky/{plugin}/main.py" in script
+    assert "scripts/install-payload.sh" in script
 
 
 def test_arch_package_installs_decky_game_power_plugin():
@@ -420,20 +408,6 @@ def test_device_verifier_reports_mangohud_gpu_memory_fdinfo():
     assert "drm-resident-system0" in script
 
 
-def test_game_power_device_verifier_is_registered_as_guarded_harness_check():
-    payload = tomllib.loads((ROOT / "harness.toml").read_text())
-    checks = {check["id"]: check for check in payload["checks"]}
-
-    check = checks["game-power-device"]
-    assert check["command"] == "scripts/verify-game-power-on-device.sh root@10.100.0.19"
-    assert check["tier"] == "guarded"
-    assert check["safe_for_agents"] is False
-    assert check["expectation"] == "blocked"
-    assert "root-ssh" in check["requires"]
-    assert "handheld" in check["requires"]
-    assert "foreground-game" in check["requires"]
-
-
 def test_game_power_device_verifier_restores_cpu_policy_snapshot():
     script = (ROOT / "scripts/verify-game-power-on-device.sh").read_text()
 
@@ -447,21 +421,6 @@ def test_game_power_device_verifier_restores_cpu_policy_snapshot():
     assert "VERIFY_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD" in script
     assert '--cpu-cap-core-share-threshold "$cpu_cap_core_share_threshold"' in script
     assert "drm-resident-vram0" in script
-
-
-def test_game_power_profile_device_check_is_guarded():
-    payload = tomllib.loads((ROOT / "harness.toml").read_text())
-    checks = {check["id"]: check for check in payload["checks"]}
-
-    check = checks["game-power-profile-device"]
-    assert check["command"] == "scripts/profile-game-power-on-device.sh root@10.100.0.19"
-    assert check["tier"] == "guarded"
-    assert check["safe_for_agents"] is False
-    assert check["expectation"] == "blocked"
-    assert check["requires"] == ["root-ssh", "handheld", "foreground-game"]
-    assert "runtime-telemetry-contract-json" in check["evidence_artifacts"]
-    assert "profile-runtime-telemetry-contract-json" in check["evidence_artifacts"]
-    assert "action-equivalence-replay-summary" in check["evidence_artifacts"]
 
 
 def test_game_power_profile_wrapper_restores_tdp_cpu_policy_and_service_mode():
@@ -932,7 +891,7 @@ def test_device_verifier_reports_msi_claw_ec_tdp_bytes():
     assert "MSI EC shift byte" in script
 
 
-def test_gamescope_workaround_harness_can_enable_and_disable():
+def test_gamescope_workaround_script_can_enable_and_disable():
     script = (ROOT / "scripts/configure-gamescope-display-workaround.sh").read_text()
     enable_block = script.split('if [ "$action" = "enable" ]; then', 1)[1].split(
         "else", 1
@@ -982,7 +941,7 @@ def test_gamescope_workaround_harness_can_enable_and_disable():
     )
 
 
-def test_mangoapp_dropin_harness_installs_custom_binary_without_replacing_system_file():
+def test_mangoapp_dropin_script_installs_custom_binary_without_replacing_system_file():
     script = (ROOT / "scripts/configure-mangoapp-dropin.sh").read_text()
     dropin = (
         ROOT / "data/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf"
@@ -1063,14 +1022,14 @@ def test_docs_describe_game_power_governor_default_epp_only_and_reversible():
     design_text = " ".join(design.split())
 
     assert "Game power governor" in readme
-    assert "--game-power-mode target-balance" in readme
+    assert "--game-power-mode gpu-priority" in readme
     assert "restores the previous CPU EPP and frequency limits" in readme_text
     assert "--game-power-cpu-cap off" in readme
     assert "default `--game-power-cpu-cap on`" not in readme
     assert "--game-power-pcore-max-mhz 3000" in readme
     assert "--game-power-ecore-max-mhz 2400" in readme
     assert "--game-power-cpu-cap-core-share-threshold 0.30" in readme
-    assert "scripts/verify-game-power-on-device.sh root@10.100.0.19" in readme
+    assert "scripts/verify-game-power-on-device.sh --allow-device root@10.100.0.19" in readme
     assert "12W and 22W" in readme
     assert "PROFILE_GAME_POWER_CAPTURE_MODE=controlled" in readme
     assert "PROFILE_GAME_POWER_REPEATS=3" in readme
@@ -1196,7 +1155,7 @@ def test_steamos_qemu_build_env_uses_official_recovery_image():
     assert "python-mako" in script
     assert "libxrandr libxinerama libxcursor libxi libxrender libxfixes" in script
     assert "SteamOS rootfs chroot" in docs
-    assert "scripts/steamos-qemu-build-env.sh build-mangoapp-rootfs" in docs
+    assert "scripts/steamos-qemu-build-env.sh --allow-qemu build-mangoapp-rootfs" in docs
     assert ".cache/steamos-qemu/mangoapp" in docs
-    assert "scripts/steamos-qemu-build-env.sh build-mangoapp" in docs
+    assert "scripts/steamos-qemu-build-env.sh --allow-qemu build-mangoapp" in docs
     assert "scripts/configure-mangoapp-dropin.sh" in docs
