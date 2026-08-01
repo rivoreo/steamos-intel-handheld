@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
-  echo "Usage: $0 root@steamdeck-host [test-watts] [restore-watts]" >&2
+if [ "${1:-}" != "--allow-device" ] || [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
+  echo "Usage: $0 --allow-device root@steamdeck-host [test-watts] [restore-watts]" >&2
   exit 2
 fi
 
+shift
 target="$1"
 test_watts="${2:-17}"
 restore_watts="${3:-30}"

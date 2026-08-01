@@ -20,7 +20,7 @@ when the interfaces settle.
   a Decky Loader plugin and a guarded CLI for 60/80/100 percent presets.
 - Prepare package and uncore RAPL `energy_uj` access so MangoHud can report
   CPU power and Intel integrated GPU power from real kernel counters.
-- Provide install and verification harnesses for real SteamOS devices.
+- Provide install and verification scripts for real SteamOS devices.
 - Provide an optional gamescope display workaround for color pipeline
   instability on Intel handhelds.
 - Restore package-owned `/etc` integration files from canonical
@@ -41,11 +41,11 @@ Planned target family:
 
 ## Quick development install
 
-The harness expects root SSH access to the target SteamOS machine.
+The development scripts expect root SSH access to the target SteamOS machine.
 
 ```bash
 scripts/install-on-device.sh root@10.100.0.19
-scripts/verify-on-device.sh root@10.100.0.19
+scripts/verify-on-device.sh --allow-device root@10.100.0.19
 ```
 
 The development installer does not require Docker on the target device. Docker
@@ -211,7 +211,7 @@ daemon default is EPP-only because the current controlled profiles show the cap
 can hurt frame pacing in some low-TDP scenes:
 
 ```bash
---game-power-mode target-balance \
+--game-power-mode gpu-priority \
 --game-power-cpu-cap off \
 --game-power-pcore-max-mhz 3000 \
 --game-power-ecore-max-mhz 2400 \
@@ -281,7 +281,7 @@ PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
 PROFILE_GAME_POWER_REPEATS=3 \
 PROFILE_GAME_POWER_FPS_TARGET=30 \
 PROFILE_GAME_POWER_POLICIES="off target-balance off" \
-scripts/profile-game-power-on-device.sh root@10.100.0.19
+scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19
 
 # 2. Aggregate the runs into a scoped verdict.
 steamos-intel-handheld-game-power-profile aggregate \
@@ -301,7 +301,7 @@ steamos-intel-handheld-game-power-profile export-verdicts \
 
 Once controlled evidence accepts the policy, the service is launched with
 `--game-power-mode target-balance --verdict-ledger <path>` in place of the
-current `--game-power-mode target-balance`. Until then the packaged unit keeps the
+current `--game-power-mode gpu-priority`. Until then the packaged unit keeps the
 `gpu-priority` default.
 
 Only aggregates whose verdict is `BETTER` (controlled capture, exact restore,
@@ -320,7 +320,7 @@ steamos-intel-handheld-game-power --mode observe --duration-s 30
 steamos-intel-handheld-game-power --mode gpu-priority --duration-s 30 --target-appid 1091500
 steamos-intel-handheld-game-power --mode target-balance --duration-s 30 \
   --fps-target 30 --verdict-ledger /var/lib/steamos-intel-handheld/game-power-verdicts.json
-VERIFY_GAME_POWER_APPID=1091500 scripts/verify-game-power-on-device.sh root@10.100.0.19
+VERIFY_GAME_POWER_APPID=1091500 scripts/verify-game-power-on-device.sh --allow-device root@10.100.0.19
 ```
 
 `observe` only reads sensors. `gpu-priority` snapshots CPUFreq policy state,
@@ -406,22 +406,22 @@ JSONL/snapshots stay byte-identical): `persona`, `soft_pl1_w`, `gpu_freq_caps`
 `G1`-`G3`, `P1`-`P3`, `C1`, `C2`, plus verdict-gated `G4CAP`/`S3CAP`/`S4CAP`),
 `frame_feed_status` (`live`/`stale`/`absent`), and `limiter_state`.
 
-Candidate policies and device probes for sizing the V10 constants reuse the
-existing profiler and its `game-power-profile-device` harness check:
+Candidate policies and device probes for sizing the V10 constants use the
+existing profiler directly:
 
 ```bash
 # Candidate policies (one candidate per run, same A/B discipline as V9).
 PROFILE_GAME_POWER_POLICIES="off v10-battery off" \
-  scripts/profile-game-power-on-device.sh root@10.100.0.19   # full battery ladder
+  scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19   # full battery ladder
 PROFILE_GAME_POWER_POLICIES="off v10-gpu-cap off" \
-  scripts/profile-game-power-on-device.sh root@10.100.0.19   # G rungs only
+  scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19   # G rungs only
 PROFILE_GAME_POWER_POLICIES="off v10-soft-pl1 off" \
-  scripts/profile-game-power-on-device.sh root@10.100.0.19   # P rungs only
+  scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19   # P rungs only
 
 # Observe-only device probes that size the ladders (P1-P3).
-PROFILE_GAME_POWER_PROBE=pin-baseline   scripts/profile-game-power-on-device.sh root@10.100.0.19
-PROFILE_GAME_POWER_PROBE=gpu-cap-sweep  scripts/profile-game-power-on-device.sh root@10.100.0.19
-PROFILE_GAME_POWER_PROBE=soft-pl1-sweep scripts/profile-game-power-on-device.sh root@10.100.0.19
+PROFILE_GAME_POWER_PROBE=pin-baseline   scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19
+PROFILE_GAME_POWER_PROBE=gpu-cap-sweep  scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19
+PROFILE_GAME_POWER_PROBE=soft-pl1-sweep scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19
 
 # Export verdicts for the new rungs (gpu-cap / soft-pl1 mappings). A gpu-cap
 # BETTER verdict is consumed by the daemon: it unlocks the deep G4CAP rung.
@@ -439,7 +439,7 @@ The game-power profiler compares policy runs using MangoHud FPS data and
 machine-readable game-power samples:
 
 ```bash
-scripts/profile-game-power-on-device.sh root@10.100.0.19
+scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19
 ```
 
 By default the guarded wrapper runs an imported-log capture at 12W and 22W for:
@@ -462,7 +462,7 @@ PROFILE_GAME_POWER_REPEATS=3 \
 PROFILE_GAME_POWER_FPS_TARGET=40 \
 PROFILE_GAME_POWER_SCENE_EVIDENCE="save:<stable-scene>" \
 PROFILE_GAME_POWER_POLICIES="off gpu-priority" \
-scripts/profile-game-power-on-device.sh root@10.100.0.19
+scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19
 ```
 
 To include the stronger CPU max-frequency cap candidate, use a separate
@@ -479,7 +479,7 @@ PROFILE_GAME_POWER_CPU_CAP_VARIANTS="balanced:3000:2400:0.30" \
 PROFILE_GAME_POWER_PCORE_MAX_MHZ=3000 \
 PROFILE_GAME_POWER_ECORE_MAX_MHZ=2400 \
 PROFILE_GAME_POWER_CPU_CAP_CORE_SHARE_THRESHOLD=0.30 \
-scripts/profile-game-power-on-device.sh root@10.100.0.19
+scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19
 ```
 
 The wrapper temporarily forces the installed service governor to `off`, so the
@@ -619,7 +619,7 @@ Decky runtime switch:
 PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
 PROFILE_GAME_POWER_POLICIES="off gpu-priority off" \
 PROFILE_GAME_POWER_REPEATS=3 \
-scripts/profile-game-power-on-device.sh root@10.100.0.19
+scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19
 
 .venv/bin/python -m steamos_intel_handheld.game_power_profile aggregate \
   --root .cache/game-power/profiles \
@@ -633,7 +633,7 @@ scripts/profile-game-power-on-device.sh root@10.100.0.19
 PROFILE_GAME_POWER_CAPTURE_MODE=controlled \
 PROFILE_GAME_POWER_POLICIES="off gpu-priority-affinity off" \
 PROFILE_GAME_POWER_AFFINITY_PLAN_JSON=".cache/game-power/profiles/aggregate.json" \
-scripts/profile-game-power-on-device.sh root@10.100.0.19
+scripts/profile-game-power-on-device.sh --allow-device root@10.100.0.19
 ```
 
 For `gpu-priority-affinity`, the wrapper copies the aggregate or raw
@@ -668,10 +668,9 @@ a generic telemetry-driven governor rather than a per-game table.
   the safe game-power governor panel.
 - `external/MangoHud/` - MangoHud fork branch used for the Intel RAPL GPU
   power patch; keep `upstream` pointed at flightlessmango for mainline merges.
-- `scripts/` - real-device install, verification, and inventory harness.
+- `scripts/` - real-device install, verification, and inventory tools.
 - `tests/` - hardware-free unit tests.
-- `docs/` - design notes, hardware notes, upstreaming plan, and AI harness
-  guidance.
+- `docs/` - design notes, hardware notes, and upstreaming guidance.
 - `docs/release-process.md` - operator runbook for hidden Arch release
   candidates and stable repository publication.
 - `packaging/arch/` - Arch/SteamOS package draft.

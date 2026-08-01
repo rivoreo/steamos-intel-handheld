@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 1 ]; then
-  echo "Usage: $0 root@steamdeck-host" >&2
+if [ "${1:-}" != "--allow-device" ] || [ "$#" -ne 2 ]; then
+  echo "Usage: $0 --allow-device root@steamdeck-host" >&2
   exit 2
 fi
 
-target="$1"
+target="$2"
 appid="${PROFILE_GAME_POWER_APPID:-1091500}"
 tdp_levels="${PROFILE_GAME_POWER_TDPS:-12 22}"
 policies="${PROFILE_GAME_POWER_POLICIES:-off gpu-priority gpu-priority-cpu-cap}"

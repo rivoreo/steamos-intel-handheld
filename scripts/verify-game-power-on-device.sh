@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 1 ]; then
-  echo "Usage: $0 root@steamdeck-host" >&2
+if [ "${1:-}" != "--allow-device" ] || [ "$#" -ne 2 ]; then
+  echo "Usage: $0 --allow-device root@steamdeck-host" >&2
   exit 2
 fi
 
-target="$1"
+target="$2"
 duration_s="${VERIFY_GAME_POWER_DURATION_S:-30}"
 poll_s="${VERIFY_GAME_POWER_POLL_S:-2}"
 appid="${VERIFY_GAME_POWER_APPID:-}"
