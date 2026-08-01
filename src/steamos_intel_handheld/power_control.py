@@ -1264,7 +1264,9 @@ def build_game_power_governor(
         refresh_hz_provider=lambda: discover_panel_refresh_hz(args.user),
         limiter_writer=build_limiter_writer(args.user),
         input_idle_provider=_build_input_idle_provider(),
-        gpu_utilisation_provider=_build_gpu_utilisation_provider(),
+        gpu_utilisation_provider=_build_gpu_utilisation_provider(
+            getattr(args, "game_power_gpu_pmu", "off") == "on"
+        ),
         config_provider=config_provider,
         hint_store=hint_store,
         hint_context_provider=_build_game_power_hint_context_provider(args, backend),
@@ -1431,8 +1433,16 @@ def _read_root_atom(
     return None
 
 
-def _build_gpu_utilisation_provider() -> Callable[[], object | None]:
-    """Latest GPU PMU window, or a constant None when the PMU is absent."""
+def _build_gpu_utilisation_provider(enabled: bool = False) -> Callable[[], object | None]:
+    """Latest GPU PMU window, or a constant None when disabled or absent.
+
+    Off by default. Sampling keeps a system-wide perf event open essentially
+    continuously, and an open PMU event stops the SoC reaching the deep package
+    C-states that s2idle needs: the machine enters suspend but the fan and power
+    LED stay on. That is a bad trade for telemetry no policy consumes yet.
+    """
+    if not enabled:
+        return lambda: None
     monitor = GpuUtilisationMonitor()
     if not monitor.start():
         print("game-power: no xe PMU; GPU utilisation unavailable", file=sys.stderr)
@@ -1718,6 +1728,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--game-power-mode",
         choices=[mode.value for mode in GamePowerMode],
         default=GamePowerMode.GPU_PRIORITY.value,
+    )
+    parser.add_argument(
+        "--game-power-gpu-pmu",
+        choices=["on", "off"],
+        default="off",
+        help=(
+            "sample GPU utilisation from the xe PMU. Off by default: it holds a "
+            "system-wide perf event open, which blocks the deep package C-states "
+            "s2idle needs, so the machine suspends without the fan or LED going off."
+        ),
     )
     parser.add_argument("--game-power-poll-s", type=float, default=2.0)
     parser.add_argument("--game-power-epp", default="balance_power")
