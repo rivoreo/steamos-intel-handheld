@@ -1022,7 +1022,13 @@ def test_docs_describe_game_power_governor_default_epp_only_and_reversible():
     design_text = " ".join(design.split())
 
     assert "Game power governor" in readme
-    assert "--game-power-mode gpu-priority" in readme
+    # The packaged unit ships target-balance; the README used to describe a
+    # rollout gate that had already been passed and still called gpu-priority
+    # the default.
+    assert "--game-power-mode target-balance" in readme
+    assert "the packaged unit keeps the" not in readme
+    unit = (ROOT / "data/systemd/steamos-intel-handheld-power-control.service").read_text()
+    assert "--game-power-mode target-balance" in unit
     assert "restores the previous CPU EPP and frequency limits" in readme_text
     assert "--game-power-cpu-cap off" in readme
     assert "default `--game-power-cpu-cap on`" not in readme

@@ -205,13 +205,14 @@ until the `xe` kernel driver exposes a real DRM hwmon temperature input such as
 
 The optional game power governor helps Intel integrated graphics keep package
 headroom when CPU boost competes with the iGPU under the same SteamOS TDP. It
-is installed default-on with the reversible GPU-priority EPP policy. CPU
-max-frequency caps stay available as explicit profiler candidates, but the
-daemon default is EPP-only because the current controlled profiles show the cap
-can hurt frame pacing in some low-TDP scenes:
+is installed default-on in `target-balance`, which works from a frame rate
+target rather than a power ceiling. CPU max-frequency caps stay available as
+explicit profiler candidates, but the daemon default leaves them off because
+the controlled profiles show the cap can hurt frame pacing in some low-TDP
+scenes:
 
 ```bash
---game-power-mode gpu-priority \
+--game-power-mode target-balance \
 --game-power-cpu-cap off \
 --game-power-pcore-max-mhz 3000 \
 --game-power-ecore-max-mhz 2400 \
@@ -299,10 +300,11 @@ steamos-intel-handheld-game-power-profile export-verdicts \
 #    /var/lib/steamos-intel-handheld/game-power-verdicts.json
 ```
 
-Once controlled evidence accepts the policy, the service is launched with
-`--game-power-mode target-balance --verdict-ledger <path>` in place of the
-current `--game-power-mode gpu-priority`. Until then the packaged unit keeps the
-`gpu-priority` default.
+The packaged unit now launches with `--game-power-mode target-balance`. Adding
+`--verdict-ledger <path>` on top of it is what unlocks the verdict-gated lanes
+described below; without a ledger the governor runs the ungated rungs only.
+`gpu-priority` remains selectable, and is what the panel offers as the legacy
+profile.
 
 Only aggregates whose verdict is `BETTER` (controlled capture, exact restore,
 pairwise gate) are exported, and a ledger entry unlocks a lane only on an exact
