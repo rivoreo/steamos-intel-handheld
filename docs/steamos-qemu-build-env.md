@@ -58,13 +58,13 @@ Use this path on Linux x86_64 CI:
 ```bash
 STEAMOS_ROOTFS_DIR="$PWD/.cache/steamos-rootfs/rootfs" \
 STEAMOS_QEMU_MANGOAPP_ARTIFACT="$PWD/.cache/arch-release/mangoapp/mangoapp" \
-scripts/steamos-qemu-build-env.sh fetch-raw
+scripts/steamos-qemu-build-env.sh --allow-qemu fetch-raw
 STEAMOS_ROOTFS_DIR="$PWD/.cache/steamos-rootfs/rootfs" \
-scripts/steamos-qemu-build-env.sh prepare-rootfs
+scripts/steamos-qemu-build-env.sh --allow-qemu prepare-rootfs
 STEAMOS_ROOTFS_DIR="$PWD/.cache/steamos-rootfs/rootfs" \
 STEAMOS_QEMU_BUILD_JOBS=3 \
 STEAMOS_QEMU_MANGOAPP_ARTIFACT="$PWD/.cache/arch-release/mangoapp/mangoapp" \
-scripts/steamos-qemu-build-env.sh build-mangoapp-rootfs
+scripts/steamos-qemu-build-env.sh --allow-qemu build-mangoapp-rootfs
 ```
 
 `fetch-raw` downloads and decompresses the recovery image without converting it
@@ -83,8 +83,8 @@ binfmt layer before using a chroot build.
 Use this path for local VM-based development:
 
 ```bash
-scripts/steamos-qemu-build-env.sh fetch
-scripts/steamos-qemu-build-env.sh provision
+scripts/steamos-qemu-build-env.sh --allow-qemu fetch
+scripts/steamos-qemu-build-env.sh --allow-qemu provision
 ```
 
 The script stores images under `.cache/steamos-qemu/`, converts the downloaded
@@ -103,7 +103,7 @@ Run the provisioned VM in one terminal:
 ```bash
 STEAMOS_QEMU_MEMORY=4G \
 STEAMOS_QEMU_SSH_PORT=2224 \
-scripts/steamos-qemu-build-env.sh run-build
+scripts/steamos-qemu-build-env.sh --allow-qemu run-build
 ```
 
 The QEMU user network forwards `127.0.0.1:2222` to guest port `22` by default.
@@ -112,13 +112,13 @@ Override with `STEAMOS_QEMU_SSH_PORT`.
 For a headless smoke boot of the generic qcow2 overlay:
 
 ```bash
-STEAMOS_QEMU_DISPLAY=none scripts/steamos-qemu-build-env.sh run
+STEAMOS_QEMU_DISPLAY=none scripts/steamos-qemu-build-env.sh --allow-qemu run
 ```
 
 For an interactive shell into the provisioned build VM:
 
 ```bash
-STEAMOS_QEMU_SSH_PORT=2224 scripts/steamos-qemu-build-env.sh ssh
+STEAMOS_QEMU_SSH_PORT=2224 scripts/steamos-qemu-build-env.sh --allow-qemu ssh
 ```
 
 ## Build MangoHud Mangoapp
@@ -128,7 +128,7 @@ With `run-build` still running:
 ```bash
 STEAMOS_QEMU_SSH_PORT=2224 \
 STEAMOS_QEMU_BUILD_JOBS=3 \
-scripts/steamos-qemu-build-env.sh build-mangoapp
+scripts/steamos-qemu-build-env.sh --allow-qemu build-mangoapp
 ```
 
 `build-mangoapp` installs the SteamOS build dependencies, including a reinstall
@@ -154,7 +154,20 @@ Deploy the locally built binary to the target handheld from the host:
 scripts/configure-mangoapp-dropin.sh \
   enable root@<host> \
   .cache/steamos-qemu/mangoapp
-scripts/verify-on-device.sh root@<host>
+scripts/verify-on-device.sh --allow-device root@<host>
+```
+
+Disable the drop-in when restoring the packaged binary:
+
+```bash
+scripts/configure-mangoapp-dropin.sh disable root@<host>
+```
+
+The verifier tests 28W and restores 30W by default. Override both explicitly
+when the target has different safe values:
+
+```bash
+scripts/verify-on-device.sh --allow-device root@<host> <test-watts> <restore-watts>
 ```
 
 ## Notes
@@ -164,5 +177,9 @@ scripts/verify-on-device.sh root@<host>
 - The provisioned raw build image uses `.cache/steamos-qemu/ovmf-vars-build.fd`.
 - Use the real handheld as the final verification source for sensors and
   gamescope/systemd behavior.
+- On the tested Intel handheld, CPU power comes from RAPL `package-0` and
+  integrated GPU power from RAPL `uncore`. Do not fabricate GPU temperature
+  when no compatible DRM hwmon sensor exists, and preserve discrete Intel
+  temperature paths.
 - If Valve publishes a newer recovery image, rerun `fetch`; the helper resolves
   the newest image at runtime unless `STEAMOS_IMAGE_URL` is set.
