@@ -204,6 +204,35 @@ some later restore. Wiring this up means first moving the frame cap into the
 actuation pipeline so it inherits the same discipline; that is a refactor, not an
 addition.
 
+## What the GPU PMU sampler cost, measured
+
+Sampling the xe PMU continuously stops the machine reaching a real low-power
+state in suspend. Two ~1 minute suspends on the same machine and scene, energy
+measured across the suspend window itself via systemd sleep-ordered units:
+
+| GPU PMU sampler | suspend power | power LED |
+|---|---|---|
+| off | **0.22 W** | goes out |
+| on | **0.87 W** | stays lit |
+
+Nearly 4x. Left suspended overnight that is roughly 5 Wh on an ~80 Wh battery -
+about 6% of charge, with no visible cause.
+
+Mechanism: an open system-wide perf event keeps the SoC out of the deep package
+C-states s2idle depends on. The kernel still reports a successful suspend, and
+`systemd-sleep` still logs normally, so nothing in the logs indicates a problem.
+
+**How to measure this here.** `pmc_core`'s `slp_s0_residency_usec` and
+`package_cstate_show` read zero for every state including C2 on this Lunar Lake
+kernel - almost certainly unimplemented, not never-entered - and `s0ix_blocker`
+reports nothing. They cannot be used. What does work is differencing RAPL
+`energy_uj` across the suspend window using two oneshot units, one ordered
+`Before=sleep.target` and one `After=suspend.target`, both `WantedBy=sleep.target`.
+Note that `systemd-sleep` on this build scans only `/usr/lib/systemd/system-sleep`,
+which is read-only here, so the `/etc` hook directory does not work.
+
+The sampler is off by default as a result. Nothing consumes the signal yet.
+
 ## Telemetry integrity
 
 200-sample audit comparing what the runtime snapshot claimed against sysfs:
