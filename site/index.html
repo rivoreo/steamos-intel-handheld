@@ -685,7 +685,7 @@
             <div>
               <div class="card-heading">
                 <h2 id="quick-install-title" data-i18n="preview.title">Install preview</h2>
-                <span class="status"><span class="status-dot" aria-hidden="true"></span><span data-i18n="status.repositoryNotActivated">Repository active</span></span>
+                <span class="status"><span class="status-dot" aria-hidden="true"></span><span data-i18n="status.repositoryNotActivated">Package repository not published yet</span></span>
               </div>
               <div class="flow-map" aria-label="System integration path">
                 <div class="flow-row">
@@ -719,8 +719,10 @@
               </div>
             </div>
             <div class="code-block">
-              <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.preview">install command</span></div>
-              <pre><code>curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
+              <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.preview">install from source</span></div>
+              <pre><code>git clone https://github.com/rivoreo/steamos-intel-handheld
+cd steamos-intel-handheld
+scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
             </div>
           </aside>
         </section>
@@ -785,53 +787,47 @@
 
         <section class="section" id="install" aria-labelledby="install-title">
           <div class="section-heading">
-            <h2 id="install-title" data-i18n="install.title">Install path.</h2>
-            <p data-i18n="install.lead">
-              The signed package repository is published through GitHub Actions.
-              SteamOS targets can install from the pinned bootstrap endpoint.
-            </p>
+            <h2 id="install-title" data-i18n="install.title">Installing.</h2>
+            <p data-i18n="install.lead">The signed package repository is not published yet, so the one-line install below will not work until it is. Until then, install from source onto a handheld you can reach over SSH.</p>
           </div>
 
           <div class="install-layout">
             <article class="install-panel">
               <div class="card-heading">
-                <h3 data-i18n="install.bootstrap.title">Install command</h3>
-                <span class="status"><span class="status-dot" aria-hidden="true"></span><span data-i18n="status.installChannelClosed">Install channel open</span></span>
+                <h3 data-i18n="install.bootstrap.title">Install from source (works today)</h3>
+                <span class="status"><span class="status-dot" aria-hidden="true"></span><span data-i18n="status.installChannelClosed">Install from source for now</span></span>
               </div>
               <div class="code-block">
                 <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.target">SteamOS target</span></div>
                 <pre><code>curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
               </div>
-              <p class="note" data-i18n="install.bootstrap.note">
-                Review the script before running it. It imports the pinned signing
-                key, configures pacman, and installs the package.
-              </p>
+              <p class="note" data-i18n="install.bootstrap.note">Clone the repository on your computer and run the installer against the handheld. It copies the service, the CLI and both Decky panels, then enables the background service. Decky Loader must already be installed on the handheld.</p>
             </article>
 
             <article class="install-panel">
-              <h3 data-i18n="install.pacman.title">Active pacman stanza</h3>
+              <h3 data-i18n="install.pacman.title">One-line install (once the repository is published)</h3>
               <div class="code-block">
-                <div class="code-label"><span>pacman.conf</span><span data-i18n="code.planned">active</span></div>
+                <div class="code-label"><span>pacman.conf</span><span data-i18n="code.planned">not published yet</span></div>
                 <pre><code>[rivoreo-steamos]
 SigLevel = Required TrustedOnly
 Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$arch</code></pre>
               </div>
               <ul class="list">
-                <li data-i18n="install.pacman.item1">Packages and repository metadata are signed by the Rivoreo release key.</li>
-                <li data-i18n="install.pacman.item2">GitHub Pages serves this site from rivoreo/steamos-intel-handheld.</li>
-                <li data-i18n="install.pacman.item3">HTTPS endpoint: rivoreo.github.io/steamos-intel-handheld.</li>
+                <li data-i18n="install.pacman.item1">This command is not usable yet: the signing key and package database are not on the server, so it will fail at the first download.</li>
+                <li data-i18n="install.pacman.item2">When it does work it will import the pinned Rivoreo signing key, add the pacman repository and install the package.</li>
+                <li data-i18n="install.pacman.item3">Packages and repository metadata will be signed by the Rivoreo release key, and pacman will verify them.</li>
               </ul>
             </article>
 
             <article class="install-panel wide">
               <div class="card-heading">
-                <h3 data-i18n="release.title">Release behavior</h3>
+                <h3 data-i18n="release.title">Release state</h3>
                 <span class="status waiting"><span class="status-dot warning" aria-hidden="true"></span><span data-i18n="status.candidateHidden">Candidate builds hidden</span></span>
               </div>
               <ul class="list">
-                <li data-i18n="release.stable">Stable tags update the public pacman repository.</li>
-                <li data-i18n="release.candidate">release-candidate tags build signed artifacts without deploying Pages.</li>
-                <li data-i18n="release.users">Users install from rivoreo.github.io/steamos-intel-handheld after a stable release.</li>
+                <li data-i18n="release.stable">No stable release has been published to the package repository yet.</li>
+                <li data-i18n="release.candidate">Release candidates build and verify signed artifacts without deploying them.</li>
+                <li data-i18n="release.users">Install from source until the repository goes live.</li>
                 <li data-i18n="release.maintainers">Maintainers inspect candidate artifacts in GitHub Actions.</li>
               </ul>
             </article>
@@ -872,8 +868,8 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
           "meta.title": "SteamOS support for Intel handhelds",
           "meta.description": "Makes SteamOS behave properly on Intel handhelds: longer battery life while gaming, a battery charge limit, and working power sensors. Installed from a signed pacman repository.",
           "brand.name": "steamos-intel-handheld",
-          "status.repositoryNotActivated": "Repository active",
-          "status.installChannelClosed": "Install channel open",
+          "status.repositoryNotActivated": "Package repository not published yet",
+          "status.installChannelClosed": "Install from source for now",
           "status.candidateHidden": "Candidate builds hidden",
           "nav.install": "Install",
           "usage.title": "Using it.",
@@ -902,9 +898,9 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
           "flow.hud.title": "5. MangoHud shows it",
           "flow.hud.text": "real CPU and GPU watts",
           "code.shell": "Shell",
-          "code.preview": "install command",
+          "code.preview": "install from source",
           "code.target": "SteamOS target",
-          "code.planned": "active",
+          "code.planned": "not published yet",
           "answers.title": "What this is, in plain terms.",
           "answers.lead": "Four questions worth answering before you install anything on your handheld.",
           "answers.what.title": "What it is",
@@ -929,18 +925,18 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
           "capability.qemu.text": "Delivered through a signed pacman repository, so updates arrive the normal way and pacman verifies them against a pinned key.",
           "capability.verify.title": "Tested on the real device",
           "capability.verify.text": "Developed and measured on an MSI Claw 8 AI+. Claims about power and frame pacing come from on-device measurements, not estimates.",
-          "install.title": "Install path.",
-          "install.lead": "The signed package repository is published through GitHub Actions. SteamOS targets can install from the pinned bootstrap endpoint.",
-          "install.bootstrap.title": "Install command",
-          "install.bootstrap.note": "Review the script before running it. It imports the pinned signing key, configures pacman, and installs the package.",
-          "install.pacman.title": "Active pacman stanza",
-          "install.pacman.item1": "Packages and repository metadata are signed by the Rivoreo release key.",
-          "install.pacman.item2": "GitHub Pages serves this site from rivoreo/steamos-intel-handheld.",
-          "install.pacman.item3": "HTTPS endpoint: rivoreo.github.io/steamos-intel-handheld.",
-          "release.title": "Release behavior",
-          "release.stable": "Stable tags update the public pacman repository.",
-          "release.candidate": "release-candidate tags build signed artifacts without deploying Pages.",
-          "release.users": "Users install from rivoreo.github.io/steamos-intel-handheld after a stable release.",
+          "install.title": "Installing.",
+          "install.lead": "The signed package repository is not published yet, so the one-line install below will not work until it is. Until then, install from source onto a handheld you can reach over SSH.",
+          "install.bootstrap.title": "Install from source (works today)",
+          "install.bootstrap.note": "Clone the repository on your computer and run the installer against the handheld. It copies the service, the CLI and both Decky panels, then enables the background service. Decky Loader must already be installed on the handheld.",
+          "install.pacman.title": "One-line install (once the repository is published)",
+          "install.pacman.item1": "This command is not usable yet: the signing key and package database are not on the server, so it will fail at the first download.",
+          "install.pacman.item2": "When it does work it will import the pinned Rivoreo signing key, add the pacman repository and install the package.",
+          "install.pacman.item3": "Packages and repository metadata will be signed by the Rivoreo release key, and pacman will verify them.",
+          "release.title": "Release state",
+          "release.stable": "No stable release has been published to the package repository yet.",
+          "release.candidate": "Release candidates build and verify signed artifacts without deploying them.",
+          "release.users": "Install from source until the repository goes live.",
           "release.maintainers": "Maintainers inspect candidate artifacts in GitHub Actions.",
           "footer.status": "rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos"
         },
@@ -948,8 +944,8 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
           "meta.title": "面向 Intel 掌机的 SteamOS 支持层",
           "meta.description": "让 SteamOS 在 Intel 掌机上正常工作：游戏时更省电、可设电池充电上限、传感器能读到真实数值。通过签名的 pacman 软件源安装。",
           "brand.name": "steamos-intel-handheld",
-          "status.repositoryNotActivated": "软件源已启用",
-          "status.installChannelClosed": "可以安装",
+          "status.repositoryNotActivated": "软件源尚未发布",
+          "status.installChannelClosed": "目前请从源代码安装",
           "status.candidateHidden": "候选版本隐藏",
           "nav.install": "安装",
           "usage.title": "怎么用。",
@@ -978,9 +974,9 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
           "flow.hud.title": "5. MangoHud 看得到",
           "flow.hud.text": "真实的处理器与显卡瓦数",
           "code.shell": "Shell",
-          "code.preview": "安装命令",
+          "code.preview": "从源代码安装",
           "code.target": "SteamOS 目标机",
-          "code.planned": "当前",
+          "code.planned": "尚未发布",
           "answers.title": "用大白话讲，这是什么。",
           "answers.lead": "在你往掌机里装任何东西之前，这四个问题值得先有答案。",
           "answers.what.title": "它是什么？",
@@ -1005,27 +1001,27 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
           "capability.qemu.text": "通过签名的 pacman 软件源发布，更新用系统原本的方式送达，而且 pacman 会用固定的密钥验证。",
           "capability.verify.title": "在真机上测过",
           "capability.verify.text": "在 MSI Claw 8 AI+ 上开发与测量。关于功耗和帧节奏的说法都来自真机测量，不是估算。",
-          "install.title": "安装路径。",
-          "install.lead": "签名软件源通过 GitHub Actions 发布。SteamOS 目标机可以通过固定密钥的 bootstrap 端点安装。",
-          "install.bootstrap.title": "安装命令",
-          "install.bootstrap.note": "运行前请先审阅脚本。它会导入固定的签名密钥、配置 pacman，并安装软件包。",
-          "install.pacman.title": "当前 pacman 配置",
-          "install.pacman.item1": "软件包和软件源元数据都由 Rivoreo 发布密钥签名。",
-          "install.pacman.item2": "GitHub Pages 从 rivoreo/steamos-intel-handheld 提供此站点。",
-          "install.pacman.item3": "HTTPS 端点：rivoreo.github.io/steamos-intel-handheld。",
-          "release.title": "发布行为",
-          "release.stable": "稳定版本会更新公开 pacman 软件源。",
-          "release.candidate": "候选版本会构建签名产物，但不会部署 GitHub Pages。",
-          "release.users": "用户只在稳定版本发布后从 rivoreo.github.io/steamos-intel-handheld 安装。",
-          "release.maintainers": "维护者在 GitHub Actions 中检查候选产物。",
+          "install.title": "安装方式。",
+          "install.lead": "签名软件源还没发布，所以下面那行一键安装目前还不能用。在那之前，请对一台你能用 SSH 连上的掌机从源代码安装。",
+          "install.bootstrap.title": "从源代码安装（现在就能用）",
+          "install.bootstrap.note": "在你的电脑上克隆这个仓库，然后对掌机运行安装脚本。它会复制服务、命令行工具和两个 Decky 面板，并启用后台服务。掌机上必须已经装好 Decky Loader。",
+          "install.pacman.title": "一键安装（软件源发布之后）",
+          "install.pacman.item1": "这行命令目前还不能用：签名密钥和软件包数据库都还不在服务器上，第一步下载就会失败。",
+          "install.pacman.item2": "等它可用之后，会导入固定的 Rivoreo 签名密钥、加入 pacman 软件源并安装软件包。",
+          "install.pacman.item3": "软件包与软件源元数据会由 Rivoreo 发布密钥签名，pacman 会加以验证。",
+          "release.title": "发布状态",
+          "release.stable": "目前还没有任何稳定版本发布到软件源。",
+          "release.candidate": "候选版本会构建并验证签名产物，但不会部署。",
+          "release.users": "在软件源上线之前，请从源代码安装。",
+          "release.maintainers": "维护者可在 GitHub Actions 查看候选产物。",
           "footer.status": "rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos"
         },
         "zh-TW": {
           "meta.title": "針對 Intel 掌機的 SteamOS 支援層",
           "meta.description": "讓 SteamOS 在 Intel 掌機上正常運作：遊戲時更省電、可設電池充電上限、感測器讀得到真實數值。透過簽章的 pacman 套件庫安裝。",
           "brand.name": "steamos-intel-handheld",
-          "status.repositoryNotActivated": "套件庫已啟用",
-          "status.installChannelClosed": "可以安裝",
+          "status.repositoryNotActivated": "套件庫尚未發佈",
+          "status.installChannelClosed": "目前請從原始碼安裝",
           "status.candidateHidden": "候選版本隱藏",
           "nav.install": "安裝",
           "usage.title": "怎麼用。",
@@ -1054,9 +1050,9 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
           "flow.hud.title": "5. MangoHud 看得到",
           "flow.hud.text": "真實的處理器與繪圖瓦數",
           "code.shell": "Shell",
-          "code.preview": "安裝命令",
+          "code.preview": "從原始碼安裝",
           "code.target": "SteamOS 目標機",
-          "code.planned": "目前",
+          "code.planned": "尚未發佈",
           "answers.title": "用白話講，這是什麼。",
           "answers.lead": "在你往掌機裡裝任何東西之前，這四個問題值得先有答案。",
           "answers.what.title": "它是什麼？",
@@ -1081,19 +1077,19 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
           "capability.qemu.text": "透過簽章的 pacman 套件庫發佈，更新用系統原本的方式送達，而且 pacman 會用釘選的金鑰驗證。",
           "capability.verify.title": "在真機上測過",
           "capability.verify.text": "在 MSI Claw 8 AI+ 上開發與量測。關於功耗和影格節奏的說法都來自實機量測，不是估算。",
-          "install.title": "安裝路徑。",
-          "install.lead": "簽名套件庫透過 GitHub Actions 釋出。SteamOS 目標機可以透過固定金鑰的 bootstrap 端點安裝。",
-          "install.bootstrap.title": "安裝命令",
-          "install.bootstrap.note": "執行前請先檢閱腳本。它會匯入固定的簽名金鑰、設定 pacman，並安裝套件。",
-          "install.pacman.title": "目前的 pacman 設定",
-          "install.pacman.item1": "套件和套件庫中繼資料都由 Rivoreo 釋出金鑰簽名。",
-          "install.pacman.item2": "GitHub Pages 從 rivoreo/steamos-intel-handheld 提供此網站。",
-          "install.pacman.item3": "HTTPS 端點：rivoreo.github.io/steamos-intel-handheld。",
-          "release.title": "釋出行為",
-          "release.stable": "穩定版本會更新公開 pacman 套件庫。",
-          "release.candidate": "候選版本會建置簽名產物，但不會部署 GitHub Pages。",
-          "release.users": "使用者只在穩定版本釋出後從 rivoreo.github.io/steamos-intel-handheld 安裝。",
-          "release.maintainers": "維護者在 GitHub Actions 中檢查候選產物。",
+          "install.title": "安裝方式。",
+          "install.lead": "簽名套件庫還沒發佈，所以下面那行一鍵安裝目前還不能用。在那之前，請對一台你能用 SSH 連上的掌機從原始碼安裝。",
+          "install.bootstrap.title": "從原始碼安裝（現在就能用）",
+          "install.bootstrap.note": "在你的電腦上複製這個原始碼庫，然後對掌機執行安裝腳本。它會複製服務、命令列工具和兩個 Decky 面板，並啟用背景服務。掌機上必須先裝好 Decky Loader。",
+          "install.pacman.title": "一鍵安裝（套件庫發佈之後）",
+          "install.pacman.item1": "這行指令目前還不能用：簽章金鑰和套件資料庫都還不在伺服器上，第一步下載就會失敗。",
+          "install.pacman.item2": "等它可用之後，會匯入釘選的 Rivoreo 簽章金鑰、加入 pacman 套件庫並安裝套件。",
+          "install.pacman.item3": "套件與套件庫中繼資料會由 Rivoreo 發佈金鑰簽名，pacman 會加以驗證。",
+          "release.title": "發佈狀態",
+          "release.stable": "目前還沒有任何穩定版本發佈到套件庫。",
+          "release.candidate": "候選版本會建置並驗證簽名產物，但不會部署。",
+          "release.users": "在套件庫上線之前，請從原始碼安裝。",
+          "release.maintainers": "維護者可在 GitHub Actions 檢視候選產物。",
           "footer.status": "rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos"
         }
       };

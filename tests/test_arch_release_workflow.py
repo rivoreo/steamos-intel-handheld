@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,19 @@ KEYRING_PKGBUILD = ROOT / "packaging/arch/rivoreo-keyring/PKGBUILD"
 REPO_PKGBUILD = ROOT / "packaging/arch/rivoreo-steamos-repo/PKGBUILD"
 REPO_CONF = ROOT / "packaging/arch/rivoreo-steamos-repo/rivoreo-steamos.conf"
 MANGOAPP_PKGBUILD = ROOT / "packaging/arch/steamos-intel-handheld-mangoapp/PKGBUILD"
+
+
+def test_release_builder_requires_explicit_release_authority() -> None:
+    result = subprocess.run(
+        [str(BUILD_SCRIPT)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "--allow-release" in result.stderr
 
 
 def _logical_shell_lines(text: str) -> list[str]:
@@ -88,11 +102,12 @@ def test_arch_release_workflow_builds_mangoapp_before_repository_package_build()
 
     assert "build-mangoapp:" in workflow
     assert "Build patched mangoapp in SteamOS rootfs chroot" in workflow
-    assert "scripts/steamos-qemu-build-env.sh fetch-raw" in workflow
-    assert "scripts/steamos-qemu-build-env.sh prepare-rootfs" in workflow
-    assert "scripts/steamos-qemu-build-env.sh build-mangoapp-rootfs" in workflow
-    assert "scripts/steamos-qemu-build-env.sh provision" not in workflow
-    assert "scripts/steamos-qemu-build-env.sh run-build" not in workflow
+    assert "scripts/steamos-qemu-build-env.sh --allow-qemu fetch-raw" in workflow
+    assert "scripts/steamos-qemu-build-env.sh --allow-qemu prepare-rootfs" in workflow
+    assert "scripts/steamos-qemu-build-env.sh --allow-qemu build-mangoapp-rootfs" in workflow
+    assert "scripts/build-arch-release-repo.sh --allow-release" in workflow
+    assert "scripts/steamos-qemu-build-env.sh --allow-qemu provision" not in workflow
+    assert "scripts/steamos-qemu-build-env.sh --allow-qemu run-build" not in workflow
     assert "ssh_ready" not in workflow
     assert "mangoapp-binary" in workflow
     assert "needs: [validate, build-mangoapp]" in workflow
@@ -243,11 +258,19 @@ def test_arch_release_workflow_can_use_ephemeral_candidate_signing_key_without_s
 
 
 def test_ordinary_pages_workflow_cannot_overwrite_release_repository() -> None:
+    """Documentation may reach the site on its own, but never at the cost of the
+    packages. A Pages deployment replaces everything, so the site-only job has to
+    check the live repository and refuse rather than silently delete it."""
     workflow = PAGES_WORKFLOW.read_text()
 
-    assert "deploy-pages" not in workflow
-    assert "upload-pages-artifact" not in workflow
-    assert "push:" not in workflow
+    guard = workflow.split("Refuse to overwrite a published package repository")[1]
+    deploy = guard.split("Deploy to GitHub Pages")[0]
+    # The check precedes the upload, so a published repository stops the deploy
+    # before any artifact is built.
+    assert "upload-pages-artifact" in deploy
+    assert "rivoreo-steamos.db.tar.gz" in guard
+    assert "key/rivoreo.gpg" in guard
+    assert "exit 1" in guard
 
 
 def test_release_build_script_signs_packages_and_regularizes_repo_aliases() -> None:

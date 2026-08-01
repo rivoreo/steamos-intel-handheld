@@ -19,14 +19,23 @@ def read_site_translations() -> dict[str, dict[str, str]]:
     return json.loads(index[start:end])
 
 
-def test_pages_workflow_validates_static_site_without_deploying() -> None:
+def test_pages_workflow_deploys_docs_but_never_over_a_published_repository() -> None:
     workflow = PAGES_WORKFLOW.read_text()
     assert "Static Site Check" in workflow
     assert "cp -R site/. _site/" in workflow
     assert "test -f _site/index.html" in workflow
-    assert "actions/upload-pages-artifact" not in workflow
-    assert "actions/deploy-pages" not in workflow
-    assert "pages: write" not in workflow
+    # Documentation changes reach the public site without cutting a release.
+    assert "actions/deploy-pages" in workflow
+    assert "pages: write" in workflow
+    # But a Pages deployment replaces the whole site, so a site-only deploy must
+    # refuse to run once the signed repository is live - otherwise it deletes the
+    # package database and key out from under anyone who configured the repo.
+    assert "Refuse to overwrite a published package repository" in workflow
+    assert "rivoreo-steamos.db.tar.gz" in workflow
+    assert "key/rivoreo.gpg" in workflow
+    assert "exit 1" in workflow
+    # Pull requests validate only.
+    assert "github.event_name != 'pull_request'" in workflow
 
 
 def test_pages_site_documents_project_repo_url() -> None:
@@ -53,24 +62,24 @@ def test_pages_site_explains_capabilities_and_active_release_state() -> None:
     # And the page has to say how to use them, not only how to install them.
     assert 'id="usage"' in index
     assert "Steam quick access menu" in index
-    assert "Repository active" in index
-    assert "Install channel open" in index
-    assert "signed package repository is published through GitHub Actions" in index
-    assert "Repository not activated" not in index
-    assert "Install channel not open" not in index
-    assert "signed package database has not been published to Pages" not in index
-    assert "Packages not released" not in index
-    assert "Packages pending" not in index
+    # The page must not advertise an install path that does not work. The signed
+    # repository is not published, so the one-line bootstrap 404s at its first
+    # download, and saying otherwise sends people to a broken command.
+    assert "Package repository not published yet" in index
+    assert "Install from source for now" in index
+    assert "scripts/install-on-device.sh" in index
+    assert "Repository active" not in index
+    assert "Install channel open" not in index
     assert "Safe placeholder" not in index
     assert "exits without changing the system" not in index
 
 
 def test_pages_site_explains_stable_install_and_candidate_release_flow() -> None:
     index = SITE_INDEX.read_text()
-    assert "Stable tags update the public pacman repository" in index
-    assert "release-candidate tags build signed artifacts without deploying Pages" in index
+    assert "No stable release has been published to the package repository yet" in index
+    assert "Release candidates build and verify signed artifacts without deploying them" in index
     assert (
-        "Users install from rivoreo.github.io/steamos-intel-handheld after a stable release"
+        "Install from source until the repository goes live"
         in index
     )
     assert "Maintainers inspect candidate artifacts in GitHub Actions" in index
@@ -115,11 +124,11 @@ def test_pages_site_uses_taiwan_zh_tw_wording() -> None:
     zh_tw_text = "\n".join(read_site_translations()["zh-TW"].values())
     assert "Intel 掌機" in zh_tw_text
     assert "套件庫" in zh_tw_text
-    assert "套件庫已啟用" in zh_tw_text
-    assert "可以安裝" in zh_tw_text
+    assert "套件庫尚未發佈" in zh_tw_text
+    assert "從原始碼安裝" in zh_tw_text
     assert "簽名套件庫" in zh_tw_text
     assert "候選版本" in zh_tw_text
-    assert "不會部署 GitHub Pages" in zh_tw_text
+    assert "但不會部署" in zh_tw_text
     assert "裝置" in zh_tw_text
     # Names the two panels, in the words the panels themselves use.
     assert "遊戲電力" in zh_tw_text
