@@ -174,3 +174,45 @@ def test_pmu_monitor_reports_absent_pmu_rather_than_guessing(monkeypatch):
 
     assert monitor.start() is False
     assert monitor.latest() is None
+
+
+def test_monitor_picks_up_devices_that_appear_after_start(tmp_path, monkeypatch):
+    """Steam Input's virtual pad - the only node carrying in-game input - is
+    created late, and devices are renumbered on reconnect and resume. Watching
+    only what existed at startup left neither controller watched, which makes an
+    active player look idle: the failure this signal exists to avoid."""
+    from steamos_intel_handheld import game_power_input as mod
+
+    read_fd, write_fd = os.pipe()
+    later_read, later_write = os.pipe()
+    now = [1000.0]
+    monitor = InputActivityMonitor(clock=lambda: now[0], rediscover_s=5.0)
+    # Simulate discovery: only the first device exists to begin with.
+    available = {"/dev/first": read_fd}
+    monkeypatch.setattr(mod, "discover_input_event_devices", lambda *a, **k: list(available))
+    monkeypatch.setattr(mod.os, "open", lambda path, flags: available[path])
+
+    assert monitor.start() is True
+    assert monitor.watched == ["/dev/first"]
+
+    # The pad shows up later.
+    available["/dev/pad"] = later_read
+    now[0] += 6.0
+    deadline = time.monotonic() + 3.0
+    while "/dev/pad" not in monitor.watched and time.monotonic() < deadline:
+        time.sleep(0.05)
+    try:
+        assert "/dev/pad" in monitor.watched, "a device appearing later must be watched"
+
+        # And an event on it must count as activity.
+        monitor._last_event = monitor._clock() - 99.0
+        os.write(later_write, b"x" * 64)
+        deadline = time.monotonic() + 3.0
+        while monitor.idle_s() > 1.0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert monitor.idle_s() < 1.0
+    finally:
+        monitor.stop()
+        for fd in (write_fd, later_write):
+            with contextlib.suppress(OSError):
+                os.close(fd)

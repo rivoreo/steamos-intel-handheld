@@ -92,9 +92,14 @@ class InputActivityMonitor:
         paths: list[str] | None = None,
         *,
         clock=time.monotonic,
+        rediscover_s: float = 20.0,
     ) -> None:
         self._clock = clock
+        # None means "keep asking the system"; an explicit list is fixed (tests).
+        self._fixed_paths = paths
         self._paths = paths if paths is not None else discover_input_event_devices()
+        self._rediscover_s = rediscover_s
+        self._last_discovery = clock()
         self._lock = threading.Lock()
         self._last_event = clock()
         self._fds: dict[int, str] = {}
@@ -106,6 +111,7 @@ class InputActivityMonitor:
         return list(self._fds.values())
 
     def start(self) -> bool:
+        self._last_discovery = self._clock() - self._rediscover_s
         for path in self._paths:
             try:
                 fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
@@ -113,7 +119,7 @@ class InputActivityMonitor:
                 # A device we cannot read simply is not watched; never fatal.
                 continue
             self._fds[fd] = path
-        if not self._fds:
+        if not self._fds and self._fixed_paths is not None:
             return False
         self._thread = threading.Thread(
             target=self._run, name="game-power-input", daemon=True
@@ -128,18 +134,62 @@ class InputActivityMonitor:
                 os.close(fd)
         self._fds.clear()
 
+    def _rediscover(self) -> None:
+        """Pick up devices that appeared after start.
+
+        Input devices are renumbered when a controller reconnects or the machine
+        resumes, and Steam Input's virtual pad - the only node that carries
+        in-game input - is created late. Enumerating once at startup left the
+        monitor watching neither controller, which would make an actively playing
+        user look idle: the exact failure this signal was chosen to avoid.
+        """
+        if self._fixed_paths is not None:
+            return
+        now = self._clock()
+        if now - self._last_discovery < self._rediscover_s:
+            return
+        self._last_discovery = now
+        watched = set(self._fds.values())
+        for path in discover_input_event_devices():
+            if path in watched:
+                continue
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            except OSError:
+                continue
+            self._fds[fd] = path
+
+    def _drop(self, fd: int) -> None:
+        self._fds.pop(fd, None)
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
     def _run(self) -> None:
         while not self._stop.is_set():
+            self._rediscover()
+            if not self._fds:
+                self._stop.wait(1.0)
+                continue
             try:
                 readable, _, _ = select.select(list(self._fds), [], [], 0.5)
             except (OSError, ValueError):
-                return
+                # A device vanished; drop the dead ones and carry on rather than
+                # killing the watcher and silently losing idle detection.
+                for fd in list(self._fds):
+                    try:
+                        select.select([fd], [], [], 0)
+                    except (OSError, ValueError):
+                        self._drop(fd)
+                continue
             if not readable:
                 continue
             for fd in readable:
                 try:
-                    os.read(fd, _EVENT_SIZE * 64)
+                    if not os.read(fd, _EVENT_SIZE * 64):
+                        self._drop(fd)
+                        continue
                 except OSError:
+                    self._drop(fd)
                     continue
             with self._lock:
                 self._last_event = self._clock()
