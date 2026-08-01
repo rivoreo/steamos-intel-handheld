@@ -57,7 +57,7 @@ jobs:
           python-version: "3.13"
       - name: Install test dependencies
         run: python -m pip install -e ".[dev]"
-      - name: Run local harness
+      - name: Run local checks
         run: scripts/check-local.sh
 
   build-repo:
@@ -156,7 +156,7 @@ jobs:
       - name: Build signed pacman repository
         run: |
           set -euo pipefail
-          su builder -c "cd '$GITHUB_WORKSPACE' && RELEASE_TAG='$RELEASE_TAG' ARCH_REPO_GPG_KEY_ID='$ARCH_REPO_GPG_KEY_ID' GPGKEY='$ARCH_REPO_GPG_KEY_ID' KEY_OUT='$KEY_OUT' MANGOAPP_BINARY='$GITHUB_WORKSPACE/.cache/arch-release/mangoapp/mangoapp' scripts/build-arch-release-repo.sh"
+          su builder -c "cd '$GITHUB_WORKSPACE' && RELEASE_TAG='$RELEASE_TAG' ARCH_REPO_GPG_KEY_ID='$ARCH_REPO_GPG_KEY_ID' GPGKEY='$ARCH_REPO_GPG_KEY_ID' KEY_OUT='$KEY_OUT' MANGOAPP_BINARY='$GITHUB_WORKSPACE/.cache/arch-release/mangoapp/mangoapp' scripts/build-arch-release-repo.sh --allow-release"
       - name: Upload signed repository artifact
         uses: actions/upload-artifact@v4
         with:
@@ -367,9 +367,9 @@ jobs:
           export STEAMOS_QEMU_BUILD_JOBS=3
           export STEAMOS_QEMU_MANGOAPP_ARTIFACT="$PWD/.cache/arch-release/mangoapp/mangoapp"
 
-          scripts/steamos-qemu-build-env.sh fetch-raw
-          scripts/steamos-qemu-build-env.sh prepare-rootfs
-          scripts/steamos-qemu-build-env.sh build-mangoapp-rootfs
+          scripts/steamos-qemu-build-env.sh --allow-qemu fetch-raw
+          scripts/steamos-qemu-build-env.sh --allow-qemu prepare-rootfs
+          scripts/steamos-qemu-build-env.sh --allow-qemu build-mangoapp-rootfs
       - name: Upload patched mangoapp binary
         uses: actions/upload-artifact@v4
         with:

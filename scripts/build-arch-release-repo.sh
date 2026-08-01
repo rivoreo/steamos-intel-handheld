@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ "${1:-}" != "--allow-release" ] || [ "$#" -ne 1 ]; then
+  echo "Usage: $0 --allow-release" >&2
+  echo "Refusing signed release repository assembly without --allow-release." >&2
+  exit 2
+fi
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 

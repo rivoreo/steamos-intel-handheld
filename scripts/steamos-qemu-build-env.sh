@@ -5,7 +5,7 @@ RECOVERY_INDEX_URL="${RECOVERY_INDEX_URL:-https://steamdeck-images.steamos.cloud
 
 usage() {
   cat >&2 <<'EOF'
-Usage: scripts/steamos-qemu-build-env.sh <action>
+Usage: scripts/steamos-qemu-build-env.sh --allow-qemu <action>
 
 Actions:
   latest-url  Print the newest SteamOS recovery image URL
@@ -459,7 +459,7 @@ provision_build_image() {
   set +e
   expect <<EOF
 set timeout 300
-spawn sh -c "STEAMOS_QEMU_MEMORY='$memory' STEAMOS_QEMU_SSH_PORT='$ssh_port' STEAMOS_QEMU_DISPLAY=none STEAMOS_QEMU_EXTRA_ARGS='-serial mon:stdio' '$script_path' run-build"
+spawn sh -c "STEAMOS_QEMU_MEMORY='$memory' STEAMOS_QEMU_SSH_PORT='$ssh_port' STEAMOS_QEMU_DISPLAY=none STEAMOS_QEMU_EXTRA_ARGS='-serial mon:stdio' '$script_path' --allow-qemu run-build"
 expect {
   -re {root@.*# } {}
   timeout {
@@ -722,7 +722,13 @@ EOS
   file "$mangoapp_artifact"
 }
 
-action="${1:-}"
+if [ "${1:-}" != "--allow-qemu" ] || [ "$#" -ne 2 ]; then
+  usage
+  echo "Refusing QEMU, download, or privileged rootfs work without --allow-qemu." >&2
+  exit 2
+fi
+
+action="$2"
 case "$action" in
   latest-url)
     latest_url
