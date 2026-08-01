@@ -1165,3 +1165,40 @@ def test_steamos_qemu_build_env_uses_official_recovery_image():
     assert ".cache/steamos-qemu/mangoapp" in docs
     assert "scripts/steamos-qemu-build-env.sh --allow-qemu build-mangoapp" in docs
     assert "scripts/configure-mangoapp-dropin.sh" in docs
+
+
+def test_every_install_path_ships_the_steamos_manager_device_profile():
+    """Valve's profile for this board declares no TDP method, so without our
+    profile Steam's own TDP slider does nothing. A path that installs everything
+    else but omits this ships a machine missing the feature, silently."""
+    fragment = "steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
+    assert (ROOT / "data" / fragment).is_file()
+
+    payload = (ROOT / "scripts/install-payload.sh").read_text()
+    pkgbuild = (ROOT / "packaging/arch/PKGBUILD").read_text()
+    manifest = (ROOT / "data/restore/manifest.toml").read_text()
+
+    for name, text in (("install-payload.sh", payload), ("PKGBUILD", pkgbuild)):
+        assert fragment in text, name
+
+    # Both install paths place only the artifact copy. The live copy is on the
+    # read-only system partition, which only the restore service may write.
+    assert '/usr/share/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml' in manifest
+    assert "/usr/share/steamos-manager" not in payload
+    assert "/usr/share/steamos-manager" not in pkgbuild
+
+
+def test_device_profile_declares_the_remote_tdp_method_valve_omits():
+    profile = (ROOT / "data/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml").read_text()
+    parsed = tomllib.loads(profile)
+
+    assert parsed["tdp_limit"]["method"] == "remote"
+    # The range has to match what the daemon actually clamps to, or Steam offers
+    # a slider position the hardware will never honour.
+    assert parsed["tdp_limit"]["range"] == {"min": 8, "max": 30}
+    unit = (ROOT / "data/systemd/steamos-intel-handheld-power-control.service").read_text()
+    assert "--min-w 8" in unit
+    assert "--max-w 30" in unit
+    # Matched to this board only; a wrong DMI match would apply Claw power
+    # behaviour to somebody else's hardware.
+    assert [d["dmi"]["board_name"] for d in parsed["device"]] == ["MS-1T52"]

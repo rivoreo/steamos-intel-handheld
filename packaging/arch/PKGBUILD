@@ -41,6 +41,10 @@ package() {
     "$artifact_root/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf"
   install -Dm0644 data/steamos-manager/remotes.d/99-rivoreo-power-control.toml \
     "$artifact_root/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+  # Artifact copy only. The live copy belongs on the read-only system partition,
+  # so the restore service places it; a package cannot write there.
+  install -Dm0644 data/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml \
+    "$artifact_root/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
   install -Dm0755 data/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg \
     "$pkgdir/etc/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg"
   install -Dm0755 data/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg \
