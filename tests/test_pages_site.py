@@ -63,17 +63,41 @@ def test_pages_site_leads_with_the_user_facing_promise() -> None:
     assert "Working power sensors" in index
 
 
-def test_pages_site_shows_what_the_panels_look_like_and_where_to_find_them() -> None:
+def test_pages_site_shows_the_real_panels_and_never_a_mock_up() -> None:
     index = SITE_INDEX.read_text()
     # This is a product whose entire surface is two Steam panels. A page that
     # never shows one leaves the visitor guessing what they are installing.
-    assert index.count('class="device"') >= 3
-    assert 'class="panel-status"' in index
-    # And it has to say where they appear after installing, not only how to
-    # install them.
+    for shot in ("panel-game-power.png", "panel-charge-limit.png"):
+        asset = ROOT / "site/assets" / shot
+        assert asset.is_file(), shot
+        assert asset.stat().st_size > 20_000, shot
+        assert f'src="assets/{shot}"' in index
+    # Nothing on the page may be a drawing of the product dressed as a capture
+    # of it. These class names belonged to hand-built panel replicas.
+    for mock_marker in ('class="device"', 'class="panel-status"', 'class="panel-row"'):
+        assert mock_marker not in index, mock_marker
+    # And the page has to say where the panels appear after installing, not only
+    # how to install them.
     assert 'id="usage"' in index
     assert "Steam quick access menu" in index
     assert "Decky plug icon" in index
+
+
+def test_pages_site_screenshots_carry_translated_alt_text_and_captions() -> None:
+    index = SITE_INDEX.read_text()
+    translations = read_site_translations()
+    # A screenshot with no alt text is invisible to a screen reader, and an
+    # untranslated caption undoes the point of shipping three locales.
+    assert index.count("data-i18n-alt=") == 2
+    for key in ("shot.power.alt", "shot.power.caption", "shot.charge.alt", "shot.charge.caption"):
+        for locale in ("en", "zh-CN", "zh-TW"):
+            assert translations[locale][key].strip(), (locale, key)
+        assert translations["zh-TW"][key] != translations["en"][key], key
+        assert translations["zh-CN"][key] != translations["en"][key], key
+    # Both captions must name the device the capture came from, so a reader can
+    # tell a real screenshot from an illustration.
+    assert translations["en"]["shot.power.caption"].count("MSI Claw 8 AI+") == 1
+    assert translations["en"]["shot.charge.caption"].count("MSI Claw 8 AI+") == 1
 
 
 def test_pages_site_quotes_only_measurements_that_were_actually_taken() -> None:
@@ -148,7 +172,7 @@ def test_pages_site_locale_dictionaries_have_matching_keys() -> None:
 
 def test_every_translated_key_is_used_and_every_used_key_is_translated() -> None:
     index = SITE_INDEX.read_text()
-    markup_keys = set(re.findall(r'data-i18n="([^"]+)"', index))
+    markup_keys = set(re.findall(r'data-i18n(?:-alt)?="([^"]+)"', index))
     english_keys = set(read_site_translations()["en"])
     # A key in the markup with no entry leaves the element stuck in English when
     # the visitor switches language, which is exactly the failure a reader
@@ -156,22 +180,6 @@ def test_every_translated_key_is_used_and_every_used_key_is_translated() -> None
     assert markup_keys - english_keys == set()
     # Keys applied by the script rather than by a data-i18n attribute.
     assert english_keys - markup_keys == {"meta.title", "meta.description"}
-
-
-def test_pages_site_translates_the_panel_renderings_too() -> None:
-    # The panels shown on the page are the product. A Chinese reader must see
-    # them in Chinese, not an English screenshot with translated captions.
-    translations = read_site_translations()
-    for locale in ("zh-CN", "zh-TW"):
-        panel_keys = [key for key in translations[locale] if key.startswith("mock.")]
-        assert len(panel_keys) >= 10
-        for key in panel_keys:
-            value = translations[locale][key]
-            # A bare reading such as "60 FPS" is the same in every language;
-            # anything with words in it has to be rendered in Chinese.
-            if re.fullmatch(r"[\d\s.%]*(FPS|W)?", value):
-                continue
-            assert re.search(r"[一-鿿]", value), (locale, key)
 
 
 def test_pages_site_uses_taiwan_zh_tw_wording() -> None:

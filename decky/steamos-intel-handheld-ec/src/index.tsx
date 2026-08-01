@@ -258,6 +258,9 @@ const EcChargePanel: FC = () => {
           <DropdownItem
             label={t.limitLabel}
             description={t.why}
+            // Inline puts the value in a narrow column beside the label, where
+            // anything longer than a couple of characters is cut off mid-word.
+            layout="below"
             rgOptions={PRESETS.map((limit) => ({
               data: String(limit),
               label: limit >= 100 ? t.presetUnlimited : t.presetLabel(limit),

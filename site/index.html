@@ -223,98 +223,34 @@
         margin: 1.1rem 0 0;
       }
 
-      /* ---------------- panel rendering ---------------- */
+      /* ---------------- product screenshots ---------------- */
 
-      .device {
-        background: var(--surface);
-        border: 1px solid var(--line);
-        border-radius: 18px;
-        padding: 0.85rem;
-        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+      /* Every image on this page is a real capture from a real handheld. There
+         are no mocked-up panels: a drawing of the product is a promise the
+         product has not made. */
+      .shot {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
       }
 
-      .device-bar {
-        display: flex;
-        align-items: center;
-        gap: 0.45rem;
-        padding: 0.15rem 0.35rem 0.7rem;
+      .shot img {
+        display: block;
+        width: 100%;
+        max-width: 360px;
+        height: auto;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+      }
+
+      .shot figcaption {
         color: var(--dim);
-        font-size: 0.78rem;
-      }
-
-      .device-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: var(--accent);
-        flex: none;
-      }
-
-      .panel {
-        background: var(--bg-lift);
-        border-radius: 12px;
-        padding: 1rem;
-      }
-
-      .panel-status {
-        font-size: 1.1rem;
-        font-weight: 650;
-        margin: 0 0 0.2rem;
-      }
-
-      .panel-sub {
-        color: var(--muted);
-        font-size: 0.88rem;
-        margin: 0 0 1rem;
-      }
-
-      .panel-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 1rem;
-        padding: 0.7rem 0;
-        border-top: 1px solid var(--line);
-      }
-
-      .panel-row > span:first-child {
-        color: var(--muted);
-        font-size: 0.9rem;
-      }
-
-      .panel-row.first {
-        border-top: 0;
-        padding-top: 0;
-      }
-
-      .pill {
-        background: var(--surface-2);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 0.3rem 0.7rem;
-        font-size: 0.86rem;
-        white-space: nowrap;
-      }
-
-      .switch {
-        width: 36px;
-        height: 20px;
-        border-radius: 999px;
-        background: var(--surface-2);
-        border: 1px solid var(--line);
-        position: relative;
-        flex: none;
-      }
-
-      .switch::after {
-        content: "";
-        position: absolute;
-        top: 2px;
-        left: 2px;
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        background: var(--dim);
+        font-size: 0.82rem;
+        margin-top: 0.8rem;
+        text-align: center;
+        max-width: 30em;
       }
 
       /* ---------------- measured numbers ---------------- */
@@ -387,6 +323,21 @@
 
       .feature.flipped .feature-visual {
         order: -1;
+      }
+
+      /* Sections whose story is carried by the copy rather than a screenshot. */
+      .feature.wide {
+        grid-template-columns: 1fr;
+        gap: 1.4rem;
+      }
+
+      .feature.wide p {
+        max-width: 54em;
+      }
+
+      .feature.wide .ticks {
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 0.6rem 2.5rem;
       }
 
       .feature h3 {
@@ -655,16 +606,10 @@
             <p class="hero-note" data-i18n="hero.note">Free and open source. No account, no telemetry.</p>
           </div>
           <div class="feature-visual">
-            <div class="device">
-              <div class="device-bar"><span class="device-dot"></span><span data-i18n="mock.menu">Steam quick access menu</span></div>
-              <div class="panel">
-                <p class="panel-status" data-i18n="mock.power.status">Holding steady at 60 FPS</p>
-                <p class="panel-sub" data-i18n="mock.power.sub">59 FPS now, 21.3 W</p>
-                <div class="panel-row"><span data-i18n="mock.power.profile">Power profile</span><span class="pill" data-i18n="mock.power.profileValue">Automatic</span></div>
-                <div class="panel-row"><span data-i18n="mock.power.target">Frame rate target</span><span class="pill" data-i18n="mock.power.targetValue">Automatic (60)</span></div>
-                <div class="panel-row"><span data-i18n="mock.details">Show technical details</span><span class="switch"></span></div>
-              </div>
-            </div>
+            <figure class="shot">
+              <img src="assets/panel-game-power.png" width="643" height="900" data-i18n-alt="shot.power.alt" alt="The Game Power panel open in the Steam quick access menu">
+              <figcaption data-i18n="shot.power.caption">The Game Power panel, captured on an MSI Claw 8 AI+</figcaption>
+            </figure>
           </div>
         </section>
 
@@ -690,27 +635,15 @@
             <p data-i18n="features.lead">Two panels, and the layer underneath that makes them possible.</p>
           </div>
 
-          <article class="feature">
+          <article class="feature wide">
             <div>
               <h3 data-i18n="features.power.title">Game Power</h3>
-              <p data-i18n="features.power.text">Most handheld power tools hand you a wattage slider and leave the guessing to you. This one starts from the frame rate instead: it finds the least power that still holds your target, and gives the power straight back the moment frame pacing suffers.</p>
+              <p data-i18n="features.power.text">Most handheld power tools hand you a wattage slider and leave the guessing to you. This one starts from the frame rate instead: it finds the least power that still holds your target, and gives the power straight back the moment frame pacing suffers. Two controls, shown above — everything else is a technical readout you can leave switched off.</p>
               <ul class="ticks">
                 <li data-i18n="features.power.b1">Put the device down and it settles to 30 FPS, then comes back on the first button press</li>
                 <li data-i18n="features.power.b2">Judges frame times rather than averages, so a stutter registers before you feel it</li>
                 <li data-i18n="features.power.b3">Never goes above the wattage or frame limit you set yourself</li>
               </ul>
-            </div>
-            <div class="feature-visual">
-              <div class="device">
-                <div class="device-bar"><span class="device-dot"></span><span data-i18n="mock.power.name">Game Power</span></div>
-                <div class="panel">
-                  <p class="panel-status" data-i18n="mock.power.status2">Steady, and using less power</p>
-                  <p class="panel-sub" data-i18n="mock.power.sub2">60 FPS now, 20.1 W</p>
-                  <div class="panel-row"><span data-i18n="mock.power.profile">Power profile</span><span class="pill" data-i18n="mock.power.profileValue2">Save battery</span></div>
-                  <div class="panel-row"><span data-i18n="mock.power.target">Frame rate target</span><span class="pill" data-i18n="mock.power.targetValue2">60 FPS</span></div>
-                  <div class="panel-row"><span data-i18n="mock.details">Show technical details</span><span class="switch"></span></div>
-                </div>
-              </div>
             </div>
           </article>
 
@@ -725,19 +658,14 @@
               </ul>
             </div>
             <div class="feature-visual">
-              <div class="device">
-                <div class="device-bar"><span class="device-dot"></span><span data-i18n="mock.charge.name">Charge Limit</span></div>
-                <div class="panel">
-                  <p class="panel-status" data-i18n="mock.charge.status">Charging stops at 80%</p>
-                  <p class="panel-sub" data-i18n="mock.charge.sub">Starts charging again once it falls below 75%</p>
-                  <div class="panel-row"><span data-i18n="mock.charge.limit">Charge limit</span><span class="pill" data-i18n="mock.charge.limitValue">Stop at 80%</span></div>
-                  <div class="panel-row"><span data-i18n="mock.details">Show technical details</span><span class="switch"></span></div>
-                </div>
-              </div>
+              <figure class="shot">
+                <img src="assets/panel-charge-limit.png" width="643" height="900" data-i18n-alt="shot.charge.alt" alt="The Charge Limit panel set to stop charging at 80 percent">
+                <figcaption data-i18n="shot.charge.caption">The Charge Limit panel, captured on an MSI Claw 8 AI+</figcaption>
+              </figure>
             </div>
           </article>
 
-          <article class="feature">
+          <article class="feature wide">
             <div>
               <h3 data-i18n="features.sensors.title">Working power sensors</h3>
               <p data-i18n="features.sensors.text">On an untouched Intel handheld the performance overlay leaves the processor and graphics power fields blank, because the counters it looks for are never exposed. This connects them, so the overlay reports real watts and you can finally see what each of your settings costs.</p>
@@ -746,17 +674,6 @@
                 <li data-i18n="features.sensors.b2">Built on the standard Intel interfaces, not a private telemetry stack</li>
                 <li data-i18n="features.sensors.b3">Works with the overlay you already use</li>
               </ul>
-            </div>
-            <div class="feature-visual">
-              <div class="device">
-                <div class="device-bar"><span class="device-dot"></span><span data-i18n="mock.hud.name">Performance overlay</span></div>
-                <div class="panel">
-                  <div class="panel-row first"><span>CPU</span><span class="pill">4.5 W</span></div>
-                  <div class="panel-row"><span data-i18n="mock.hud.gpu">Graphics</span><span class="pill">8.6 W</span></div>
-                  <div class="panel-row"><span data-i18n="mock.hud.total">Whole machine</span><span class="pill">20.1 W</span></div>
-                  <div class="panel-row"><span>FPS</span><span class="pill">60</span></div>
-                </div>
-              </div>
             </div>
           </article>
         </section>
@@ -858,27 +775,6 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "hero.primaryCta": "Install it",
     "hero.secondaryCta": "Read the source",
     "hero.note": "Free and open source. No account, no telemetry.",
-    "mock.menu": "Steam quick access menu",
-    "mock.details": "Show technical details",
-    "mock.power.name": "Game Power",
-    "mock.power.status": "Holding steady at 60 FPS",
-    "mock.power.sub": "59 FPS now, 21.3 W",
-    "mock.power.status2": "Steady, and using less power",
-    "mock.power.sub2": "60 FPS now, 20.1 W",
-    "mock.power.profile": "Power profile",
-    "mock.power.profileValue": "Automatic",
-    "mock.power.profileValue2": "Save battery",
-    "mock.power.target": "Frame rate target",
-    "mock.power.targetValue": "Automatic (60)",
-    "mock.power.targetValue2": "60 FPS",
-    "mock.charge.name": "Charge Limit",
-    "mock.charge.status": "Charging stops at 80%",
-    "mock.charge.sub": "Starts charging again once it falls below 75%",
-    "mock.charge.limit": "Charge limit",
-    "mock.charge.limitValue": "Stop at 80%",
-    "mock.hud.name": "Performance overlay",
-    "mock.hud.gpu": "Graphics",
-    "mock.hud.total": "Whole machine",
     "stat.idle": "power while you are not touching it",
     "stat.load": "power at the same frame rate",
     "stat.suspend": "draw in suspend",
@@ -886,7 +782,7 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "features.title": "What it does",
     "features.lead": "Two panels, and the layer underneath that makes them possible.",
     "features.power.title": "Game Power",
-    "features.power.text": "Most handheld power tools hand you a wattage slider and leave the guessing to you. This one starts from the frame rate instead: it finds the least power that still holds your target, and gives the power straight back the moment frame pacing suffers.",
+    "features.power.text": "Most handheld power tools hand you a wattage slider and leave the guessing to you. This one starts from the frame rate instead: it finds the least power that still holds your target, and gives the power straight back the moment frame pacing suffers. Two controls, shown above — everything else is a technical readout you can leave switched off.",
     "features.power.b1": "Put the device down and it settles to 30 FPS, then comes back on the first button press",
     "features.power.b2": "Judges frame times rather than averages, so a stutter registers before you feel it",
     "features.power.b3": "Never goes above the wattage or frame limit you set yourself",
@@ -929,7 +825,11 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "faq.a5": "No. Every setting is reachable from a command line tool, and the whole thing can be set to watch without acting, or switched off entirely, from either the panel or the command line.",
     "footer.source": "Source on GitHub",
     "footer.issues": "Report a problem",
-    "footer.license": "MIT licensed"
+    "footer.license": "MIT licensed",
+    "shot.power.alt": "The Game Power panel open in the Steam quick access menu",
+    "shot.power.caption": "The Game Power panel, captured on an MSI Claw 8 AI+",
+    "shot.charge.alt": "The Charge Limit panel set to stop charging at 80 percent",
+    "shot.charge.caption": "The Charge Limit panel, captured on an MSI Claw 8 AI+"
   },
   "zh-CN": {
     "meta.title": "steamos-intel-handheld",
@@ -945,27 +845,6 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "hero.primaryCta": "安装",
     "hero.secondaryCta": "看源码",
     "hero.note": "自由开源，不用注册，不收集任何数据。",
-    "mock.menu": "Steam 快捷菜单",
-    "mock.details": "显示技术细节",
-    "mock.power.name": "游戏电力",
-    "mock.power.status": "稳定维持 60 FPS",
-    "mock.power.sub": "当前 59 FPS，21.3 W",
-    "mock.power.status2": "一样稳，但更省电",
-    "mock.power.sub2": "当前 60 FPS，20.1 W",
-    "mock.power.profile": "电力模式",
-    "mock.power.profileValue": "自动",
-    "mock.power.profileValue2": "省电",
-    "mock.power.target": "帧数目标",
-    "mock.power.targetValue": "自动（60）",
-    "mock.power.targetValue2": "60 FPS",
-    "mock.charge.name": "充电上限",
-    "mock.charge.status": "充到 80% 就停",
-    "mock.charge.sub": "掉到 75% 以下才会再充",
-    "mock.charge.limit": "充电上限",
-    "mock.charge.limitValue": "充到 80% 就停",
-    "mock.hud.name": "性能浮层",
-    "mock.hud.gpu": "显卡",
-    "mock.hud.total": "整机",
     "stat.idle": "放着不动时省下的功耗",
     "stat.load": "同样帧数下省下的功耗",
     "stat.suspend": "休眠时的功耗",
@@ -973,7 +852,7 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "features.title": "它能做什么",
     "features.lead": "两个面板，以及底下把它们撑起来的那一层。",
     "features.power.title": "游戏电力",
-    "features.power.text": "多数掌机功耗工具给你一根瓦数滑杆，剩下的靠你猜。这个反过来，从帧数出发：找到还守得住你要的帧数的最低功耗，一旦帧节奏变差，立刻把功耗还回去。",
+    "features.power.text": "多数掌机功耗工具给你一根瓦数滑杆，剩下的靠你猜。这个反过来，从帧数出发：找到还守得住你要的帧数的最低功耗，一旦帧节奏变差，立刻把功耗还回去。上面那张图里就两个选项，其余都是技术读数，不想看就关着。",
     "features.power.b1": "把机器放下就降到 30 帧，按一下键马上回来",
     "features.power.b2": "看的是帧时间而不是平均值，卡顿在你感觉到之前就被逮到",
     "features.power.b3": "绝不超过你自己设的瓦数上限和帧数限制",
@@ -1016,7 +895,11 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "faq.a5": "不用。每一项设置都能从命令行操作，整套也可以设成只看不动，或者干脆关掉 —— 面板和命令行都做得到。",
     "footer.source": "GitHub 源码",
     "footer.issues": "反馈问题",
-    "footer.license": "MIT 授权"
+    "footer.license": "MIT 授权",
+    "shot.power.alt": "Steam 快捷菜单里打开的游戏电力面板",
+    "shot.power.caption": "游戏电力面板，摄于 MSI Claw 8 AI+ 实机",
+    "shot.charge.alt": "设为充到 80% 就停的充电上限面板",
+    "shot.charge.caption": "充电上限面板，摄于 MSI Claw 8 AI+ 实机"
   },
   "zh-TW": {
     "meta.title": "steamos-intel-handheld",
@@ -1032,27 +915,6 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "hero.primaryCta": "安裝",
     "hero.secondaryCta": "看原始碼",
     "hero.note": "自由開源，不用註冊，不蒐集任何資料。",
-    "mock.menu": "Steam 快捷選單",
-    "mock.details": "顯示技術細節",
-    "mock.power.name": "遊戲電力",
-    "mock.power.status": "穩定維持 60 FPS",
-    "mock.power.sub": "目前 59 FPS，21.3 W",
-    "mock.power.status2": "一樣穩，但更省電",
-    "mock.power.sub2": "目前 60 FPS，20.1 W",
-    "mock.power.profile": "電力模式",
-    "mock.power.profileValue": "自動",
-    "mock.power.profileValue2": "省電",
-    "mock.power.target": "張數目標",
-    "mock.power.targetValue": "自動（60）",
-    "mock.power.targetValue2": "60 FPS",
-    "mock.charge.name": "充電上限",
-    "mock.charge.status": "充到 80% 就停",
-    "mock.charge.sub": "掉到 75% 以下才會再充",
-    "mock.charge.limit": "充電上限",
-    "mock.charge.limitValue": "充到 80% 就停",
-    "mock.hud.name": "效能疊加層",
-    "mock.hud.gpu": "繪圖",
-    "mock.hud.total": "整機",
     "stat.idle": "放著不動時省下的功耗",
     "stat.load": "同樣張數下省下的功耗",
     "stat.suspend": "休眠時的功耗",
@@ -1060,7 +922,7 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "features.title": "它能做什麼",
     "features.lead": "兩個面板，以及底下把它們撐起來的那一層。",
     "features.power.title": "遊戲電力",
-    "features.power.text": "多數掌機功耗工具給你一根瓦數滑桿，剩下的靠你猜。這個反過來，從張數出發：找到還守得住你要的張數的最低功耗，一旦影格節奏變差，立刻把功耗還回去。",
+    "features.power.text": "多數掌機功耗工具給你一根瓦數滑桿，剩下的靠你猜。這個反過來，從張數出發：找到還守得住你要的張數的最低功耗，一旦影格節奏變差，立刻把功耗還回去。上面那張圖裡就兩個選項，其餘都是技術讀數，不想看就關著。",
     "features.power.b1": "把機器放下就降到 30 張，按一下鍵馬上回來",
     "features.power.b2": "看的是影格時間而不是平均值，卡頓在你感覺到之前就被逮到",
     "features.power.b3": "絕不超過你自己設的瓦數上限和張數限制",
@@ -1103,7 +965,11 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "faq.a5": "不用。每一項設定都能從命令列操作，整套也可以設成只看不動，或者乾脆關掉 —— 面板和命令列都做得到。",
     "footer.source": "GitHub 原始碼",
     "footer.issues": "回報問題",
-    "footer.license": "MIT 授權"
+    "footer.license": "MIT 授權",
+    "shot.power.alt": "Steam 快捷選單裡打開的遊戲電力面板",
+    "shot.power.caption": "遊戲電力面板，攝於 MSI Claw 8 AI+ 實機",
+    "shot.charge.alt": "設為充到 80% 就停的充電上限面板",
+    "shot.charge.caption": "充電上限面板，攝於 MSI Claw 8 AI+ 實機"
   }
 };
 
@@ -1170,6 +1036,13 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
           const key = node.getAttribute("data-i18n");
           if (Object.prototype.hasOwnProperty.call(messages, key)) {
             node.textContent = messages[key];
+          }
+        });
+
+        document.querySelectorAll("[data-i18n-alt]").forEach((node) => {
+          const key = node.getAttribute("data-i18n-alt");
+          if (Object.prototype.hasOwnProperty.call(messages, key)) {
+            node.setAttribute("alt", messages[key]);
           }
         });
 

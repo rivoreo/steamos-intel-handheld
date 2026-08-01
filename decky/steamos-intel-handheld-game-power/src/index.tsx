@@ -1089,6 +1089,9 @@ const GamePowerPanel: FC = () => {
           <DropdownItem
             label={t.profileLabel}
             description={t.profileHints[profile]}
+            // Inline puts the value in a narrow column beside the label, where
+            // anything longer than a couple of characters is cut off mid-word.
+            layout="below"
             rgOptions={PROFILE_ORDER.map((key) => ({ data: key, label: t.profiles[key] }))}
             selectedOption={profile}
             disabled={busy}
@@ -1107,6 +1110,7 @@ const GamePowerPanel: FC = () => {
                   ? t.targetManualDescription(String(control?.fps_target_override.fps ?? ""))
                   : t.targetAutoDescription()
               }
+              layout="below"
               rgOptions={targetOptions}
               selectedOption={selectedTarget}
               disabled={busy}

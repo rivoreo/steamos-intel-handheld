@@ -325,3 +325,18 @@ def test_game_power_decky_frame_target_control_is_never_dead():
     assert "targetOptions.length < 2" not in frontend
     # And there is a fallback list so the options are never empty.
     assert "reported.length" in frontend
+
+
+def test_dropdown_values_are_not_truncated_by_an_inline_layout():
+    """Decky's default inline layout gives the dropdown a narrow column beside
+    the label, which cut real values down to "自動（目..." and "充到 80...".
+    Every dropdown that can hold a phrase must put its control on its own row."""
+    sources = {
+        "game-power": (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text(),
+        "charge-limit": (PLUGIN / "src" / "index.tsx").read_text(),
+    }
+    for name, source in sources.items():
+        blocks = re.findall(r"<DropdownItem\b(.*?)/>", source, re.DOTALL)
+        assert blocks, name
+        for block in blocks:
+            assert 'layout="below"' in block, (name, block[:120])
