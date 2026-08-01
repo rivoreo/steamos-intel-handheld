@@ -43,7 +43,7 @@ def test_systemd_unit_waits_for_user_steamos_manager_before_serving_remote():
 def test_power_control_service_enables_game_power_governor_by_default():
     unit = (ROOT / "data/systemd/steamos-intel-handheld-power-control.service").read_text()
 
-    assert "--game-power-mode gpu-priority" in unit
+    assert "--game-power-mode target-balance" in unit
     assert "--game-power-target-appid" not in unit
     assert "--game-power-cpu-cap off" in unit
     assert "--game-power-cpu-cap on" not in unit
@@ -1063,7 +1063,7 @@ def test_docs_describe_game_power_governor_default_epp_only_and_reversible():
     design_text = " ".join(design.split())
 
     assert "Game power governor" in readme
-    assert "--game-power-mode gpu-priority" in readme
+    assert "--game-power-mode target-balance" in readme
     assert "restores the previous CPU EPP and frequency limits" in readme_text
     assert "--game-power-cpu-cap off" in readme
     assert "default `--game-power-cpu-cap on`" not in readme

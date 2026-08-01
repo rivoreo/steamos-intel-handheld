@@ -211,7 +211,7 @@ daemon default is EPP-only because the current controlled profiles show the cap
 can hurt frame pacing in some low-TDP scenes:
 
 ```bash
---game-power-mode gpu-priority \
+--game-power-mode target-balance \
 --game-power-cpu-cap off \
 --game-power-pcore-max-mhz 3000 \
 --game-power-ecore-max-mhz 2400 \
@@ -301,7 +301,7 @@ steamos-intel-handheld-game-power-profile export-verdicts \
 
 Once controlled evidence accepts the policy, the service is launched with
 `--game-power-mode target-balance --verdict-ledger <path>` in place of the
-current `--game-power-mode gpu-priority`. Until then the packaged unit keeps the
+current `--game-power-mode target-balance`. Until then the packaged unit keeps the
 `gpu-priority` default.
 
 Only aggregates whose verdict is `BETTER` (controlled capture, exact restore,

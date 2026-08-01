@@ -186,11 +186,13 @@ def test_monitor_picks_up_devices_that_appear_after_start(tmp_path, monkeypatch)
     read_fd, write_fd = os.pipe()
     later_read, later_write = os.pipe()
     now = [1000.0]
-    monitor = InputActivityMonitor(clock=lambda: now[0], rediscover_s=5.0)
-    # Simulate discovery: only the first device exists to begin with.
+    # Patch discovery BEFORE constructing: the constructor enumerates, so on a
+    # host that actually has /dev/input/* the monitor would otherwise pick up
+    # real devices and this test would only pass where none exist.
     available = {"/dev/first": read_fd}
     monkeypatch.setattr(mod, "discover_input_event_devices", lambda *a, **k: list(available))
     monkeypatch.setattr(mod.os, "open", lambda path, flags: available[path])
+    monitor = InputActivityMonitor(clock=lambda: now[0], rediscover_s=5.0)
 
     assert monitor.start() is True
     assert monitor.watched == ["/dev/first"]
