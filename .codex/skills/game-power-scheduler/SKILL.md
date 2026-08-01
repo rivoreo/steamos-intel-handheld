@@ -185,6 +185,26 @@ Priority order, and never invent a value:
 
 No target means degrade to NO_TARGET, not a guessed default.
 
+## "Observe-only" is not the same as "no side effects"
+
+A telemetry addition that changes no scheduling decision can still cost the user
+something real. Device evidence: a GPU PMU sampler added purely to publish
+utilisation kept a system-wide perf event open continuously, which stopped the
+SoC reaching the deep package C-states s2idle needs - the machine suspended and
+kept the fan and power LED on. It was reasoned about as zero-risk because it did
+not touch policy. That reasoning was wrong.
+
+Before adding anything that runs continuously, state what it holds open and what
+that costs when the machine is *not* gaming: suspend, idle power, wakeups,
+journal volume. Two of tonight's regressions were exactly this shape - the other
+was a PAM-opening demotion in a 2 s poll writing ~86k journal lines a day.
+
+Telemetry no policy consumes yet defaults to off.
+
+A related trap: a long-lived process cannot be trusted to have noticed the world
+change. Enumerating devices once at startup left the input monitor watching
+neither controller after they were renumbered. Anything long-lived re-checks.
+
 ## Boundaries
 
 - **Reduction-only under user intent.** No actuator may exceed what the user
