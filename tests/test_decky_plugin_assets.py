@@ -54,19 +54,27 @@ def test_decky_frontend_contains_safe_presets_and_apply_copy():
     assert "definePlugin" in frontend
     assert "callable" in frontend
     assert '"get_status"' in frontend
-    assert '"preview_limit"' in frontend
     assert '"apply_limit"' in frontend
     assert "GetCurrentLanguage" in frontend
     assert "tchinese" in frontend
     assert "充電上限" in frontend
-    assert "設為" in frontend
-    assert "Battery Charge Limit" in frontend
-    assert "Set" in frontend
-    assert "60%" in frontend
-    assert "80%" in frontend
-    assert "100%" in frontend
+    assert "Charge Limit" in frontend
+    # The presets are a single list, rendered through one control, so the panel
+    # cannot drift out of sync with what the backend accepts.
+    assert "const PRESETS = [60, 80, 100]" in frontend
+    assert "DropdownItem" in frontend
+    # Says what the setting does for the user, not what byte it writes.
+    assert "slows battery ageing" in frontend
+    assert "減緩電池老化" in frontend
+    # The controller register is a technical detail, not a headline.
+    assert "detailsToggle" in frontend
+    # Only the rendered always-visible JSX matters; type definitions naturally
+    # name the raw fields.
+    panel_jsx = frontend.split("const EcChargePanel")[1]
+    always_on = panel_jsx.split("{showDetails && status ? (")[0]
+    for jargon in ("address_hex", "raw_hex", "EC byte", "EC 位元"):
+        assert jargon not in always_on, f"{jargon} must not be always-visible"
     assert "Unknown" not in frontend
-    assert "EC status unavailable" not in frontend
     assert "Intel Handheld EC" not in frontend
 
 

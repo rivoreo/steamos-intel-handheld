@@ -44,9 +44,15 @@ def test_pages_site_documents_project_repo_url() -> None:
 
 def test_pages_site_explains_capabilities_and_active_release_state() -> None:
     index = SITE_INDEX.read_text()
-    assert "SteamOS Manager TDP remote" in index
-    assert "Intel RAPL power path" in index
-    assert "MangoHud sensor access" in index
+    # The capability cards name what the user gets, not the internal components
+    # that deliver it. A visitor deciding whether to install should be able to
+    # tell what changes on their handheld.
+    assert "Game Power" in index
+    assert "Charge Limit" in index
+    assert "Working power sensors" in index
+    # And the page has to say how to use them, not only how to install them.
+    assert 'id="usage"' in index
+    assert "Steam quick access menu" in index
     assert "Repository active" in index
     assert "Install channel open" in index
     assert "signed package repository is published through GitHub Actions" in index
@@ -107,7 +113,7 @@ def test_pages_site_locale_dictionaries_have_matching_keys() -> None:
 
 def test_pages_site_uses_taiwan_zh_tw_wording() -> None:
     zh_tw_text = "\n".join(read_site_translations()["zh-TW"].values())
-    assert "針對 Intel 掌機的 SteamOS 支援層" in zh_tw_text
+    assert "Intel 掌機" in zh_tw_text
     assert "套件庫" in zh_tw_text
     assert "套件庫已啟用" in zh_tw_text
     assert "可以安裝" in zh_tw_text
@@ -115,6 +121,9 @@ def test_pages_site_uses_taiwan_zh_tw_wording() -> None:
     assert "候選版本" in zh_tw_text
     assert "不會部署 GitHub Pages" in zh_tw_text
     assert "裝置" in zh_tw_text
+    # Names the two panels, in the words the panels themselves use.
+    assert "遊戲電力" in zh_tw_text
+    assert "充電上限" in zh_tw_text
     assert "輸出套件狀態" not in zh_tw_text
     assert "套件尚未釋出" not in zh_tw_text
     assert "頁面已上線" not in zh_tw_text

@@ -125,6 +125,15 @@ type AutoTargetState = {
   refresh_hz?: number | null;
   candidates?: number[];
   drops_this_session?: number;
+  input_idle_s?: number | null;
+  cap_applied_fps?: number | null;
+  cap_reason?: string | null;
+  gpu?: {
+    render_busy: number | null;
+    c6_ms: number | null;
+    actual_mhz: number | null;
+    saturated: boolean | null;
+  } | null;
   proposal?: {
     fps: number;
     reason: string;
@@ -276,7 +285,24 @@ type Copy = {
   // --- diagnostics (opt-in) ---
   diagnosticsToggle: string;
   diagnosticsDescription: string;
-  diag: Record<string, string>;
+  diag: {
+    doing: string;
+    activityNothing: string;
+    activityTrimming: string;
+    activityFullPower: string;
+    activityLoading: string;
+    activityCapped: (fps: string) => string;
+    power: string;
+    core: string;
+    graphics: string;
+    pacing: string;
+    gpuLoad: string;
+    service: string;
+    game: string;
+    learning: string;
+    restore: string;
+    refresh: string;
+  };
   phases: Record<string, string>;
   actions: Record<string, string>;
   actuatorStates: Record<string, string>;
@@ -345,37 +371,20 @@ const COPY: Record<LocaleKey, Copy> = {
     diagnosticsToggle: "Show technical details",
     diagnosticsDescription: "Live scheduler internals. Not needed for normal use.",
     diag: {
+      doing: "Doing",
+      activityNothing: "Nothing - the game is within its target",
+      activityTrimming: "Lowering power while holding the target",
+      activityFullPower: "Full power - the target is not being met",
+      activityLoading: "Full power - the game is loading",
+      activityCapped: (fps: string) => `Holding a ${fps} FPS cap`,
+      power: "Power draw",
+      core: "CPU",
+      graphics: "graphics",
+      pacing: "Frame time p95 / allowed",
+      gpuLoad: "Graphics load",
       service: "Background service",
       game: "App ID",
-      evidence: "Local evidence",
-      phase: "Phase",
-      step: "Ladder step",
-      trims: "Active trims",
-      budget: "Power budget",
-      boost: "Boost",
-      boostActive: "active",
-      boostIdle: "idle",
-      frameFeed: "Frame feed",
-      pacing: "Pacing p95 / budget",
-      baseline: "Pacing baseline",
-      package: "Package",
-      core: "CPU",
-      graphics: "Graphics",
-      render: "Render busy",
       learning: "Learning",
-      colors: "Thread groups",
-      lanes: "Gated lanes",
-      verdict: "Verdict ledger",
-      truncated: "truncated",
-      limiter: "Frame limiter",
-      limiterNote: "Applies a limit through the compositor. Cleared on request.",
-      limiterRead: "Read limiter state",
-      limiterApply: "Apply limiter",
-      limiterClear: "Clear limiter",
-      probe: "One-off sample",
-      probeNote: "A single reading. Does not change control.",
-      probeRead: "Take a sample",
-      action: "Last action",
       restore: "Restore defaults",
       refresh: "Refresh now",
     },
@@ -499,37 +508,20 @@ const COPY: Record<LocaleKey, Copy> = {
     diagnosticsToggle: "顯示技術細節",
     diagnosticsDescription: "調度器的即時內部狀態，一般使用不需要看。",
     diag: {
-      service: "背景服務",
-      game: "App ID",
-      evidence: "本機證據",
-      phase: "階段",
-      step: "階梯層級",
-      trims: "生效中的調整",
-      budget: "功耗預算",
-      boost: "增壓",
-      boostActive: "作用中",
-      boostIdle: "閒置",
-      frameFeed: "影格資料",
-      pacing: "節奏 p95 / 預算",
-      baseline: "節奏基線",
-      package: "整體",
+      doing: "正在做什麼",
+      activityNothing: "沒有介入 —— 遊戲在目標之內",
+      activityTrimming: "維持目標的同時降低功耗",
+      activityFullPower: "全力輸出 —— 目標未達成",
+      activityLoading: "全力輸出 —— 遊戲載入中",
+      activityCapped: (fps: string) => `限制在 ${fps} FPS`,
+      power: "功耗",
       core: "處理器",
       graphics: "繪圖",
-      render: "繪圖忙碌",
+      pacing: "影格時間 p95 / 容許值",
+      gpuLoad: "繪圖負載",
+      service: "背景服務",
+      game: "App ID",
       learning: "學習",
-      colors: "執行緒分組",
-      lanes: "受管制通道",
-      verdict: "判定紀錄",
-      truncated: "已截斷",
-      limiter: "限幀",
-      limiterNote: "透過合成器套用限制，可隨時清除。",
-      limiterRead: "讀取限幀狀態",
-      limiterApply: "套用限幀",
-      limiterClear: "清除限幀",
-      probe: "單次取樣",
-      probeNote: "只是一次讀值，不會改變控制。",
-      probeRead: "取樣一次",
-      action: "最後動作",
       restore: "還原預設",
       refresh: "立即重新整理",
     },
@@ -827,71 +819,27 @@ const Diagnostics: FC<{
     return null;
   }
   const rows: [string, string][] = [];
+  // Deliberately not shown: ladder step, rung ids, thread-group tallies, gated
+  // lanes, verdict ledger. They are scheduler bookkeeping with no meaning to
+  // anyone who is not us, and the runtime snapshot carries them for debugging.
+  rows.push([t.diag.doing, describeActivity(t, runtime)]);
+  rows.push([
+    t.diag.power,
+    `${fmtWatts(runtime.package_w)} (${t.diag.core} ${fmtWatts(runtime.core_w)} / ${t.diag.graphics} ${fmtWatts(runtime.uncore_w)})`,
+  ]);
+  rows.push([
+    t.diag.pacing,
+    `${fmtMs(runtime.frame_source.p95_ms)} / ${fmtMs(runtime.p95_budget_ms)}`,
+  ]);
+  const gpu = runtime.auto_target?.gpu;
+  if (gpu && gpu.render_busy !== null && gpu.render_busy !== undefined) {
+    rows.push([t.diag.gpuLoad, fmtPercent(gpu.render_busy)]);
+  }
   if (status) {
     rows.push([t.diag.service, `${status.active_state}/${status.sub_state}`]);
   }
   if (runtime.appid) {
     rows.push([t.diag.game, runtime.appid]);
-  }
-  rows.push([t.diag.evidence, mappedText(t.evidenceStates, runtime.evidence_readiness?.status)]);
-  rows.push([t.diag.action, mappedText(t.actions, runtime.last_action)]);
-  if (runtime.phase) {
-    rows.push([t.diag.phase, mappedText(t.phases, runtime.phase)]);
-  }
-  if (runtime.ladder_step !== undefined && runtime.ladder_step !== null) {
-    rows.push([t.diag.step, String(runtime.ladder_step)]);
-  }
-  rows.push([
-    t.diag.trims,
-    runtime.trim_rungs_active?.length ? runtime.trim_rungs_active.join(", ") : t.none,
-  ]);
-  rows.push([
-    t.diag.budget,
-    runtime.soft_pl1_w === null || runtime.soft_pl1_w === undefined
-      ? fmtWatts(runtime.pl1_w)
-      : fmtWatts(runtime.soft_pl1_w),
-  ]);
-  rows.push([t.diag.boost, runtime.boost_active ? t.diag.boostActive : t.diag.boostIdle]);
-  rows.push([t.diag.frameFeed, mappedText(t.frameStates, runtime.frame_source.status)]);
-  rows.push([
-    t.diag.pacing,
-    `${fmtMs(runtime.frame_source.p95_ms)} / ${fmtMs(runtime.p95_budget_ms)}`,
-  ]);
-  if (runtime.p95_baseline_ms !== null && runtime.p95_baseline_ms !== undefined) {
-    rows.push([t.diag.baseline, fmtMs(runtime.p95_baseline_ms)]);
-  }
-  rows.push([t.diag.package, fmtWatts(runtime.package_w)]);
-  rows.push([t.diag.core, fmtWatts(runtime.core_w)]);
-  rows.push([t.diag.graphics, fmtWatts(runtime.uncore_w)]);
-  rows.push([t.diag.render, fmtPercent(runtime.render_busy)]);
-  if (runtime.verdict_ledger_health) {
-    const health = runtime.verdict_ledger_health;
-    const count = health.entry_count === null ? "" : ` (${health.entry_count})`;
-    rows.push([t.diag.verdict, `${mappedText(t.verdictStates, health.status)}${count}`]);
-  }
-  if (runtime.color_ledger?.colors.length) {
-    const text = runtime.color_ledger.colors
-      .map((color) => `${color.color}:${color.tid_count}`)
-      .join(" ");
-    rows.push([
-      t.diag.colors,
-      runtime.color_ledger.truncated ? `${text} (${t.diag.truncated})` : text,
-    ]);
-  }
-  if (runtime.gated_lanes) {
-    const text = Object.entries(runtime.gated_lanes)
-      .map(([name, lane]) => {
-        const key = name.includes("foreground")
-          ? "foreground"
-          : name.includes("background")
-            ? "background"
-            : name.includes("ladder")
-              ? "ladder"
-              : "other";
-        return `${t.laneNames[key]}:${mappedText(t.laneStates, lane.state)}`;
-      })
-      .join(" ");
-    rows.push([t.diag.lanes, text]);
   }
 
   return (
@@ -906,6 +854,21 @@ const Diagnostics: FC<{
     </PanelSectionRow>
   );
 };
+
+function describeActivity(t: Copy, runtime: RuntimeSnapshot): string {
+  const trims = runtime.trim_rungs_active?.length ?? 0;
+  const cap = runtime.auto_target?.cap_applied_fps ?? null;
+  if (cap) {
+    return t.diag.activityCapped(String(cap));
+  }
+  if (runtime.phase === "loading") {
+    return t.diag.activityLoading;
+  }
+  if (isBelowTarget(runtime.phase)) {
+    return t.diag.activityFullPower;
+  }
+  return trims > 0 ? t.diag.activityTrimming : t.diag.activityNothing;
+}
 
 const PluginTitle: FC = () => {
   const t = COPY[useLocale()];
@@ -1189,63 +1152,6 @@ const GamePowerPanel: FC = () => {
             </PanelSectionRow>
           </PanelSection>
 
-          <PanelSection title={t.diag.limiter}>
-            <PanelSectionRow>
-              <Field
-                label={t.diag.limiter}
-                description={t.diag.limiterNote}
-                focusable={false}
-              >
-                {limiter
-                  ? `${mappedText(t.limiterStates, limiter.status)}${
-                      limiter.fps ? ` ${limiter.fps} FPS` : ""
-                    }`
-                  : "-"}
-              </Field>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <ButtonItem layout="below" disabled={busy} onClick={() => runLimiter("read")}>
-                {busy ? t.applying : t.diag.limiterRead}
-              </ButtonItem>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <ButtonItem layout="below" disabled={busy} onClick={() => runLimiter("apply")}>
-                {busy ? t.applying : `${t.diag.limiterApply}: ${sliderFps} FPS`}
-              </ButtonItem>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <ButtonItem layout="below" disabled={busy} onClick={() => runLimiter("clear")}>
-                {busy ? t.applying : t.diag.limiterClear}
-              </ButtonItem>
-            </PanelSectionRow>
-          </PanelSection>
-
-          <PanelSection title={t.diag.probe}>
-            <PanelSectionRow>
-              <div style={blockStyle}>
-                <div style={detailStyle}>{t.diag.probeNote}</div>
-                {sample ? (
-                  <>
-                    <div style={detailStyle}>
-                      {t.diag.action}: {mappedText(t.actions, sample.action)}
-                    </div>
-                    <div style={detailStyle}>
-                      {t.diag.package}: {fmtWatts(sample.package_w)} / {t.diag.core}:{" "}
-                      {fmtWatts(sample.core_w)} / {t.diag.graphics}: {fmtWatts(sample.uncore_w)}
-                    </div>
-                    <div style={detailStyle}>
-                      {t.diag.frameFeed}: {mappedText(t.frameStates, sample.frame_source.status)}
-                    </div>
-                  </>
-                ) : null}
-              </div>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <ButtonItem layout="below" disabled={busy} onClick={readProbe}>
-                {busy ? t.applying : t.diag.probeRead}
-              </ButtonItem>
-            </PanelSectionRow>
-          </PanelSection>
         </>
       ) : null}
     </>

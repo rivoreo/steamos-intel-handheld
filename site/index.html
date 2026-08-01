@@ -6,7 +6,7 @@
     <title>SteamOS support for Intel handhelds</title>
     <meta
       name="description"
-      content="steamos-intel-handheld is a SteamOS support layer for Intel handheld PCs, distributed through the signed rivoreo-steamos pacman repository."
+      content="Makes SteamOS behave properly on Intel handhelds: longer battery life while gaming, a battery charge limit, and working power sensors. Installed from a signed pacman repository."
     >
     <style>
       :root {
@@ -664,6 +664,7 @@
             </div>
           </div>
           <a href="#install" data-i18n="nav.install">Install</a>
+          <a href="#usage" data-i18n="nav.usage">Use</a>
           <a href="https://github.com/rivoreo/steamos-intel-handheld" data-i18n="nav.github">GitHub</a>
         </nav>
       </header>
@@ -673,14 +674,9 @@
           <div class="hero-copy">
             <p class="eyebrow">rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos</p>
             <h1 id="hero-title" data-i18n="hero.title">SteamOS support for Intel handhelds</h1>
-            <p class="lead" data-i18n="hero.lead">
-              A small support layer for Intel handheld PCs running SteamOS. It keeps
-              TDP control, MangoHud sensor access, package delivery, and hardware
-              verification in one auditable repository instead of patching SteamOS
-              Manager in place.
-            </p>
+            <p class="lead" data-i18n="hero.lead">SteamOS is built around AMD handhelds, so parts of it do not work on Intel hardware. This adds what is missing: two panels in the Steam menu that manage power while you play and protect the battery, plus the sensor plumbing MangoHud needs to show real numbers.</p>
             <div class="hero-actions">
-              <a class="button" href="#install" data-i18n="hero.primaryCta">View install path</a>
+              <a class="button" href="#install" data-i18n="hero.primaryCta">Install it</a>
               <a class="button secondary" href="https://github.com/rivoreo/steamos-intel-handheld" data-i18n="hero.secondaryCta">Read the source</a>
             </div>
           </div>
@@ -694,30 +690,30 @@
               <div class="flow-map" aria-label="System integration path">
                 <div class="flow-row">
                   <div class="flow-node">
-                    <strong data-i18n="flow.ui.title">SteamOS UI</strong>
-                    <span data-i18n="flow.ui.text">TDP request</span>
+                    <strong data-i18n="flow.ui.title">1. You pick a frame rate</strong>
+                    <span data-i18n="flow.ui.text">or let it choose one</span>
                   </div>
                   <div class="flow-arrow" aria-hidden="true">-></div>
                   <div class="flow-node">
-                    <strong data-i18n="flow.manager.title">SteamOS Manager</strong>
-                    <span data-i18n="flow.manager.text">remote endpoint</span>
+                    <strong data-i18n="flow.manager.title">2. It watches frame times</strong>
+                    <span data-i18n="flow.manager.text">not just averages</span>
                   </div>
                 </div>
                 <div class="flow-row single">
                   <div class="flow-node">
-                    <strong data-i18n="flow.remote.title">Rivoreo remote</strong>
-                    <span data-i18n="flow.remote.text">Intel handheld policy and validation</span>
+                    <strong data-i18n="flow.remote.title">3. It lowers power step by step</strong>
+                    <span data-i18n="flow.remote.text">graphics clock and power budget together, backing off the moment pacing suffers</span>
                   </div>
                 </div>
                 <div class="flow-row">
                   <div class="flow-node">
-                    <strong data-i18n="flow.power.title">Intel RAPL</strong>
-                    <span data-i18n="flow.power.text">CPU package power</span>
+                    <strong data-i18n="flow.power.title">4. You keep your frame rate</strong>
+                    <span data-i18n="flow.power.text">on less power</span>
                   </div>
                   <div class="flow-arrow" aria-hidden="true">+</div>
                   <div class="flow-node">
-                    <strong data-i18n="flow.hud.title">MangoHud</strong>
-                    <span data-i18n="flow.hud.text">sensor visibility</span>
+                    <strong data-i18n="flow.hud.title">5. MangoHud shows it</strong>
+                    <span data-i18n="flow.hud.text">real CPU and GPU watts</span>
                   </div>
                 </div>
               </div>
@@ -731,64 +727,58 @@
 
         <section class="section" aria-labelledby="answers-title">
           <div class="section-heading">
-            <h2 id="answers-title" data-i18n="answers.title">What this repository explains.</h2>
-            <p data-i18n="answers.lead">
-              It is the product surface for Intel SteamOS adaptation: clear scope,
-              tracked delivery, and a safe path from source code to an activated pacman repository.
-            </p>
+            <h2 id="answers-title" data-i18n="answers.title">What this is, in plain terms.</h2>
+            <p data-i18n="answers.lead">Four questions worth answering before you install anything on your handheld.</p>
           </div>
           <div class="info-grid">
             <article class="info-card">
               <h3 data-i18n="answers.what.title">What it is</h3>
-              <p data-i18n="answers.what.text">A SteamOS support layer for Intel handheld PCs, owned as source, packaging, service drop-ins, and release documentation.</p>
+              <p data-i18n="answers.what.text">A package plus two panels in the Steam quick access menu: Game Power, which manages power while a game runs, and Charge Limit, which stops charging before the battery is full.</p>
             </article>
             <article class="info-card">
               <h3 data-i18n="answers.can.title">What it can do</h3>
-              <p data-i18n="answers.can.text">Route TDP requests, expose sensor paths MangoHud can read, package the result, and verify behavior on real hardware.</p>
+              <p data-i18n="answers.can.text">Hold your frame rate using less power, drop the frame rate while you are not touching the device, stop charging at 60% or 80% to slow battery ageing, and let MangoHud read real CPU and graphics power.</p>
             </article>
             <article class="info-card">
               <h3 data-i18n="answers.why.title">Why it exists</h3>
-              <p data-i18n="answers.why.text">SteamOS targets AMD handheld assumptions first. Intel handhelds need a tracked compatibility layer that survives system updates.</p>
+              <p data-i18n="answers.why.text">SteamOS assumes AMD hardware. On an Intel handheld the power controls do not reach the right knobs and MangoHud cannot see the sensors, so the built-in tools report nothing useful and manage power badly.</p>
             </article>
             <article class="info-card">
               <h3 data-i18n="answers.install.title">How to install</h3>
-              <p data-i18n="answers.install.text">Use the bootstrap endpoint to import the pinned Rivoreo signing key, enable the pacman repository, and install the support package.</p>
+              <p data-i18n="answers.install.text">One command imports the signing key, adds the package repository and installs everything. Then turn on the two panels in Decky Loader. Details below.</p>
             </article>
           </div>
         </section>
 
         <section class="section" aria-labelledby="capabilities-title">
           <div class="section-heading">
-            <h2 id="capabilities-title" data-i18n="capabilities.title">What the repository owns.</h2>
-            <p data-i18n="capabilities.lead">
-              Each part is kept small enough to review and practical enough to test on
-              the target handheld before it reaches users.
-            </p>
+            <h2 id="capabilities-title" data-i18n="capabilities.title">What you get.</h2>
+            <p data-i18n="capabilities.lead">Everything here is tested on real hardware before release, and the measurements behind these claims are published in the repository.</p>
           </div>
           <div class="capability-grid">
             <article class="capability">
-              <h3 data-i18n="capability.tdp.title">SteamOS Manager TDP remote</h3>
-              <p data-i18n="capability.tdp.text">Adds a remote endpoint so existing SteamOS controls can request Intel-specific power behavior.</p>
+              <h3 data-i18n="capability.tdp.title">Game Power</h3>
+              <p data-i18n="capability.tdp.text">Holds the frame rate you asked for at the lowest power the scene actually needs, instead of running the chip flat out and hoping. Backs off immediately if frame pacing suffers.</p>
             </article>
             <article class="capability">
-              <h3 data-i18n="capability.rapl.title">Intel RAPL power path</h3>
-              <p data-i18n="capability.rapl.text">Uses the Intel RAPL interface for CPU package power instead of inventing a separate telemetry stack.</p>
+              <h3 data-i18n="capability.rapl.title">Saves power while you are away</h3>
+              <p data-i18n="capability.rapl.text">A game left running with nobody holding the device drops to 30 FPS, measured at around 26% less power, and returns to full speed the moment you touch a button.</p>
             </article>
             <article class="capability">
-              <h3 data-i18n="capability.mangohud.title">MangoHud sensor access</h3>
-              <p data-i18n="capability.mangohud.text">Keeps the goal focused on making MangoHud see real sensors, not replacing MangoHud with a custom overlay.</p>
+              <h3 data-i18n="capability.mangohud.title">Charge Limit</h3>
+              <p data-i18n="capability.mangohud.text">Stop charging at 60% or 80%. Keeping a battery off a full charge slows how fast it ages, which matters if the device mostly sits plugged in.</p>
             </article>
             <article class="capability">
-              <h3 data-i18n="capability.repo.title">Pacman repository hosting</h3>
-              <p data-i18n="capability.repo.text">Reserves a signed Arch-style package repository at rivoreo.github.io/steamos-intel-handheld for SteamOS installs.</p>
+              <h3 data-i18n="capability.repo.title">Working power sensors</h3>
+              <p data-i18n="capability.repo.text">MangoHud can read real CPU package power and Intel integrated graphics power, so the overlay shows actual watts instead of blanks.</p>
             </article>
             <article class="capability">
-              <h3 data-i18n="capability.qemu.title">QEMU build environment</h3>
-              <p data-i18n="capability.qemu.text">Documents a SteamOS image based build path so artifacts match the target system instead of the host machine.</p>
+              <h3 data-i18n="capability.qemu.title">Signed updates</h3>
+              <p data-i18n="capability.qemu.text">Delivered through a signed pacman repository, so updates arrive the normal way and pacman verifies them against a pinned key.</p>
             </article>
             <article class="capability">
-              <h3 data-i18n="capability.verify.title">Hardware verification harness</h3>
-              <p data-i18n="capability.verify.text">Scripts collect device data, verify counters, host pacman repo paths, and record results from real hardware.</p>
+              <h3 data-i18n="capability.verify.title">Tested on the real device</h3>
+              <p data-i18n="capability.verify.text">Developed and measured on an MSI Claw 8 AI+. Claims about power and frame pacing come from on-device measurements, not estimates.</p>
             </article>
           </div>
         </section>
@@ -847,6 +837,27 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
             </article>
           </div>
         </section>
+
+        <section class="section" id="usage" aria-labelledby="usage-title">
+          <div class="section-heading">
+            <h2 id="usage-title" data-i18n="usage.title">Using it.</h2>
+            <p data-i18n="usage.lead">Both panels live in the Steam quick access menu, under the Decky plug icon.</p>
+          </div>
+          <div class="capability-grid">
+            <article class="capability">
+              <h3 data-i18n="usage.power.title">Game Power</h3>
+              <p data-i18n="usage.power.text">Pick a power profile and, if you want, a frame rate target. Automatic follows whether you are on battery or plugged in. Leave the frame target on Automatic and it follows the limit you already set in Steam.</p>
+            </article>
+            <article class="capability">
+              <h3 data-i18n="usage.charge.title">Charge Limit</h3>
+              <p data-i18n="usage.charge.text">Choose 60%, 80%, or charge to full. The setting lives in the hardware, so it keeps working after a reboot and while the device is switched off.</p>
+            </article>
+            <article class="capability">
+              <h3 data-i18n="usage.hud.title">Seeing the numbers</h3>
+              <p data-i18n="usage.hud.text">Turn on Steam's performance overlay to watch CPU and graphics power while you play. Each panel also has a technical details toggle, off by default.</p>
+            </article>
+          </div>
+        </section>
       </main>
 
       <footer>
@@ -859,56 +870,65 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
       const TRANSLATIONS = {
         "en": {
           "meta.title": "SteamOS support for Intel handhelds",
-          "meta.description": "steamos-intel-handheld is a SteamOS support layer for Intel handheld PCs, distributed through the signed rivoreo-steamos pacman repository.",
+          "meta.description": "Makes SteamOS behave properly on Intel handhelds: longer battery life while gaming, a battery charge limit, and working power sensors. Installed from a signed pacman repository.",
           "brand.name": "steamos-intel-handheld",
           "status.repositoryNotActivated": "Repository active",
           "status.installChannelClosed": "Install channel open",
           "status.candidateHidden": "Candidate builds hidden",
           "nav.install": "Install",
+          "usage.title": "Using it.",
+          "usage.lead": "Both panels live in the Steam quick access menu, under the Decky plug icon.",
+          "usage.power.title": "Game Power",
+          "usage.power.text": "Pick a power profile and, if you want, a frame rate target. Automatic follows whether you are on battery or plugged in. Leave the frame target on Automatic and it follows the limit you already set in Steam.",
+          "usage.charge.title": "Charge Limit",
+          "usage.charge.text": "Choose 60%, 80%, or charge to full. The setting lives in the hardware, so it keeps working after a reboot and while the device is switched off.",
+          "usage.hud.title": "Seeing the numbers",
+          "usage.hud.text": "Turn on Steam's performance overlay to watch CPU and graphics power while you play. Each panel also has a technical details toggle, off by default.",
+          "nav.usage": "Use",
           "nav.github": "GitHub",
           "hero.title": "SteamOS support for Intel handhelds",
-          "hero.lead": "A small support layer for Intel handheld PCs running SteamOS. It keeps TDP control, MangoHud sensor access, package delivery, and hardware verification in one auditable repository instead of patching SteamOS Manager in place.",
-          "hero.primaryCta": "View install path",
+          "hero.lead": "SteamOS is built around AMD handhelds, so parts of it do not work on Intel hardware. This adds what is missing: two panels in the Steam menu that manage power while you play and protect the battery, plus the sensor plumbing MangoHud needs to show real numbers.",
+          "hero.primaryCta": "Install it",
           "hero.secondaryCta": "Read the source",
           "preview.title": "Install preview",
-          "flow.ui.title": "SteamOS UI",
-          "flow.ui.text": "TDP request",
-          "flow.manager.title": "SteamOS Manager",
-          "flow.manager.text": "remote endpoint",
-          "flow.remote.title": "Rivoreo remote",
-          "flow.remote.text": "Intel handheld policy and validation",
-          "flow.power.title": "Intel RAPL",
-          "flow.power.text": "CPU package power",
-          "flow.hud.title": "MangoHud",
-          "flow.hud.text": "sensor visibility",
+          "flow.ui.title": "1. You pick a frame rate",
+          "flow.ui.text": "or let it choose one",
+          "flow.manager.title": "2. It watches frame times",
+          "flow.manager.text": "not just averages",
+          "flow.remote.title": "3. It lowers power step by step",
+          "flow.remote.text": "graphics clock and power budget together, backing off the moment pacing suffers",
+          "flow.power.title": "4. You keep your frame rate",
+          "flow.power.text": "on less power",
+          "flow.hud.title": "5. MangoHud shows it",
+          "flow.hud.text": "real CPU and GPU watts",
           "code.shell": "Shell",
           "code.preview": "install command",
           "code.target": "SteamOS target",
           "code.planned": "active",
-          "answers.title": "What this repository explains.",
-          "answers.lead": "It is the product surface for Intel SteamOS adaptation: clear scope, tracked delivery, and a safe path from source code to an activated pacman repository.",
+          "answers.title": "What this is, in plain terms.",
+          "answers.lead": "Four questions worth answering before you install anything on your handheld.",
           "answers.what.title": "What it is",
-          "answers.what.text": "A SteamOS support layer for Intel handheld PCs, owned as source, packaging, service drop-ins, and release documentation.",
+          "answers.what.text": "A package plus two panels in the Steam quick access menu: Game Power, which manages power while a game runs, and Charge Limit, which stops charging before the battery is full.",
           "answers.can.title": "What it can do",
-          "answers.can.text": "Route TDP requests, expose sensor paths MangoHud can read, package the result, and verify behavior on real hardware.",
+          "answers.can.text": "Hold your frame rate using less power, drop the frame rate while you are not touching the device, stop charging at 60% or 80% to slow battery ageing, and let MangoHud read real CPU and graphics power.",
           "answers.why.title": "Why it exists",
-          "answers.why.text": "SteamOS targets AMD handheld assumptions first. Intel handhelds need a tracked compatibility layer that survives system updates.",
+          "answers.why.text": "SteamOS assumes AMD hardware. On an Intel handheld the power controls do not reach the right knobs and MangoHud cannot see the sensors, so the built-in tools report nothing useful and manage power badly.",
           "answers.install.title": "How to install",
-          "answers.install.text": "Use the bootstrap endpoint to import the pinned Rivoreo signing key, enable the pacman repository, and install the support package.",
-          "capabilities.title": "What the repository owns.",
-          "capabilities.lead": "Each part is kept small enough to review and practical enough to test on the target handheld before it reaches users.",
-          "capability.tdp.title": "SteamOS Manager TDP remote",
-          "capability.tdp.text": "Adds a remote endpoint so existing SteamOS controls can request Intel-specific power behavior.",
-          "capability.rapl.title": "Intel RAPL power path",
-          "capability.rapl.text": "Uses the Intel RAPL interface for CPU package power instead of inventing a separate telemetry stack.",
-          "capability.mangohud.title": "MangoHud sensor access",
-          "capability.mangohud.text": "Keeps the goal focused on making MangoHud see real sensors, not replacing MangoHud with a custom overlay.",
-          "capability.repo.title": "Pacman repository hosting",
-          "capability.repo.text": "Reserves a signed Arch-style package repository at rivoreo.github.io/steamos-intel-handheld for SteamOS installs.",
-          "capability.qemu.title": "QEMU build environment",
-          "capability.qemu.text": "Documents a SteamOS image based build path so artifacts match the target system instead of the host machine.",
-          "capability.verify.title": "Hardware verification harness",
-          "capability.verify.text": "Scripts collect device data, verify counters, host pacman repo paths, and record results from real hardware.",
+          "answers.install.text": "One command imports the signing key, adds the package repository and installs everything. Then turn on the two panels in Decky Loader. Details below.",
+          "capabilities.title": "What you get.",
+          "capabilities.lead": "Everything here is tested on real hardware before release, and the measurements behind these claims are published in the repository.",
+          "capability.tdp.title": "Game Power",
+          "capability.tdp.text": "Holds the frame rate you asked for at the lowest power the scene actually needs, instead of running the chip flat out and hoping. Backs off immediately if frame pacing suffers.",
+          "capability.rapl.title": "Saves power while you are away",
+          "capability.rapl.text": "A game left running with nobody holding the device drops to 30 FPS, measured at around 26% less power, and returns to full speed the moment you touch a button.",
+          "capability.mangohud.title": "Charge Limit",
+          "capability.mangohud.text": "Stop charging at 60% or 80%. Keeping a battery off a full charge slows how fast it ages, which matters if the device mostly sits plugged in.",
+          "capability.repo.title": "Working power sensors",
+          "capability.repo.text": "MangoHud can read real CPU package power and Intel integrated graphics power, so the overlay shows actual watts instead of blanks.",
+          "capability.qemu.title": "Signed updates",
+          "capability.qemu.text": "Delivered through a signed pacman repository, so updates arrive the normal way and pacman verifies them against a pinned key.",
+          "capability.verify.title": "Tested on the real device",
+          "capability.verify.text": "Developed and measured on an MSI Claw 8 AI+. Claims about power and frame pacing come from on-device measurements, not estimates.",
           "install.title": "Install path.",
           "install.lead": "The signed package repository is published through GitHub Actions. SteamOS targets can install from the pinned bootstrap endpoint.",
           "install.bootstrap.title": "Install command",
@@ -926,56 +946,65 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
         },
         "zh-CN": {
           "meta.title": "面向 Intel 掌机的 SteamOS 支持层",
-          "meta.description": "steamos-intel-handheld 是面向 Intel 掌机 PC 的 SteamOS 支持层，通过签名的 rivoreo-steamos pacman 软件源分发。",
+          "meta.description": "让 SteamOS 在 Intel 掌机上正常工作：游戏时更省电、可设电池充电上限、传感器能读到真实数值。通过签名的 pacman 软件源安装。",
           "brand.name": "steamos-intel-handheld",
           "status.repositoryNotActivated": "软件源已启用",
           "status.installChannelClosed": "可以安装",
           "status.candidateHidden": "候选版本隐藏",
           "nav.install": "安装",
+          "usage.title": "怎么用。",
+          "usage.lead": "两个面板都在 Steam 快捷菜单里，Decky 那个插头图标底下。",
+          "usage.power.title": "游戏电力",
+          "usage.power.text": "选一个电力模式，想要的话再选一个帧数目标。「自动」会依照你在用电池还是插着电切换。帧数目标留在「自动」，它就会跟随你原本在 Steam 里设置的限制。",
+          "usage.charge.title": "充电上限",
+          "usage.charge.text": "选 60%、80%，或充满。这个设置存在硬件里，所以重启之后、甚至关机期间都持续有效。",
+          "usage.hud.title": "想看到数字",
+          "usage.hud.text": "打开 Steam 的性能叠加层，就能在游戏中看到处理器和显卡功耗。两个面板也各有一个「显示技术细节」开关，默认关闭。",
+          "nav.usage": "怎么用",
           "nav.github": "GitHub",
           "hero.title": "面向 Intel 掌机的 SteamOS 支持层",
-          "hero.lead": "这是一个给运行 SteamOS 的 Intel 掌机 PC 使用的小型支持层。它把 TDP 控制、MangoHud 传感器访问、软件包分发和硬件验证放在一个可审计的仓库里，而不是直接修改系统里的 SteamOS Manager。",
-          "hero.primaryCta": "查看安装路径",
-          "hero.secondaryCta": "阅读源码",
+          "hero.lead": "SteamOS 是围绕 AMD 掌机设计的，有些部分在 Intel 硬件上根本不工作。这个项目补上缺失的东西：Steam 菜单里的两个面板，一个在你游戏时管理功耗、一个保护电池，加上让 MangoHud 能读到真实数值所需的传感器管线。",
+          "hero.primaryCta": "安装",
+          "hero.secondaryCta": "看源代码",
           "preview.title": "安装预览",
-          "flow.ui.title": "SteamOS 界面",
-          "flow.ui.text": "TDP 请求",
-          "flow.manager.title": "SteamOS Manager",
-          "flow.manager.text": "远程端点",
-          "flow.remote.title": "Rivoreo remote",
-          "flow.remote.text": "Intel 掌机策略与验证",
-          "flow.power.title": "Intel RAPL",
-          "flow.power.text": "CPU 封装功耗",
-          "flow.hud.title": "MangoHud",
-          "flow.hud.text": "传感器可见性",
+          "flow.ui.title": "1. 你选一个帧数",
+          "flow.ui.text": "或让它自己判断",
+          "flow.manager.title": "2. 它看实际的帧时间",
+          "flow.manager.text": "不只看平均值",
+          "flow.remote.title": "3. 一级一级降低功耗",
+          "flow.remote.text": "显卡频率和功耗预算一起收，一发现节奏变差就立刻退回",
+          "flow.power.title": "4. 帧数保持住",
+          "flow.power.text": "但功耗更低",
+          "flow.hud.title": "5. MangoHud 看得到",
+          "flow.hud.text": "真实的处理器与显卡瓦数",
           "code.shell": "Shell",
           "code.preview": "安装命令",
           "code.target": "SteamOS 目标机",
           "code.planned": "当前",
-          "answers.title": "这个仓库说明什么。",
-          "answers.lead": "它是 Intel SteamOS 适配的产品入口：范围清楚、交付可追踪，并提供从源码到已启用 pacman 软件源的安全路径。",
+          "answers.title": "用大白话讲，这是什么。",
+          "answers.lead": "在你往掌机里装任何东西之前，这四个问题值得先有答案。",
           "answers.what.title": "它是什么？",
-          "answers.what.text": "一个面向 Intel 掌机 PC 的 SteamOS 支持层，包含源码、打包、service drop-in 和发布说明。",
+          "answers.what.text": "一个软件包，加上 Steam 快捷菜单里的两个面板：「游戏电力」在游戏运行时管理功耗，「充电上限」让电池不要充到满。",
           "answers.can.title": "它能做什么？",
-          "answers.can.text": "转发 TDP 请求，暴露 MangoHud 能读取的传感器路径，打包交付结果，并在真实硬件上验证行为。",
+          "answers.can.text": "用更低的功耗维持你要的帧数；你没在操作的时候自动降帧；充到 60% 或 80% 就停止充电以减缓电池老化；让 MangoHud 读得到真实的处理器与显卡功耗。",
           "answers.why.title": "为什么需要它？",
-          "answers.why.text": "SteamOS 优先覆盖 AMD 掌机假设。Intel 掌机需要一套可追踪、能跨系统升级保留的兼容层。",
+          "answers.why.text": "SteamOS 默认你用的是 AMD 硬件。在 Intel 掌机上，内置的功耗控制够不到正确的旋钮，MangoHud 也读不到传感器 —— 结果就是数值一片空白，功耗也管得不好。",
           "answers.install.title": "如何安装？",
-          "answers.install.text": "通过 bootstrap 端点导入固定的 Rivoreo 签名密钥，启用 pacman 软件源，并安装支持包。",
-          "capabilities.title": "仓库负责哪些内容。",
-          "capabilities.lead": "每个部分都保持足够小，便于 review；也足够贴近目标设备，能在交付用户前于掌机上验证。",
-          "capability.tdp.title": "SteamOS Manager TDP remote",
-          "capability.tdp.text": "增加远程端点，让现有 SteamOS 控制界面可以请求 Intel 专用的功耗行为。",
-          "capability.rapl.title": "Intel RAPL 功耗路径",
-          "capability.rapl.text": "使用 Intel RAPL 接口读取 CPU 封装功耗，而不是另做一套遥测系统。",
-          "capability.mangohud.title": "MangoHud 传感器访问",
-          "capability.mangohud.text": "目标是让 MangoHud 看见真实传感器，而不是用自定义 overlay 替代 MangoHud。",
-          "capability.repo.title": "Pacman 软件源托管",
-          "capability.repo.text": "在 rivoreo.github.io/steamos-intel-handheld 预留签名的 Arch 风格软件源，供 SteamOS 安装使用。",
-          "capability.qemu.title": "QEMU 构建环境",
-          "capability.qemu.text": "记录基于 SteamOS 镜像的构建路径，让产物匹配目标系统，而不是宿主机。",
-          "capability.verify.title": "硬件验证脚本",
-          "capability.verify.text": "脚本会收集设备数据、验证计数器、检查 pacman 源路径，并记录真实硬件结果。",
+          "answers.install.text": "一行命令导入签名密钥、加入软件源并完成安装。然后在 Decky Loader 里打开那两个面板。详细步骤在下面。",
+          "capabilities.title": "你会得到什么。",
+          "capabilities.lead": "这里的每一项都在真实硬件上测过才发布，而支撑这些说法的测量数据都公开在源代码库里。",
+          "capability.tdp.title": "游戏电力",
+          "capability.tdp.text": "用这个场景真正需要的最低功耗，维持你要求的帧数 —— 而不是把芯片催到底然后祈祷。一旦帧节奏变差就立刻退回。",
+          "capability.rapl.title": "放着不动时自动省电",
+          "capability.rapl.text": "游戏开着但没人在操作时会降到 30 帧，实测约省 26% 功耗；你一按下按键就立刻恢复。",
+          "capability.mangohud.title": "充电上限",
+          "capability.mangohud.text": "充到 60% 或 80% 就停。不让电池长期处于满电可以减缓老化速度 —— 如果你的机器大部分时间都插着电，这点很有感。",
+          "capability.repo.title": "传感器能用了",
+          "capability.repo.text": "MangoHud 读得到真实的处理器封装功耗和 Intel 核显功耗，叠加层上显示的是实际瓦数，不再是空白。",
+          "capability.qemu.title": "签名更新",
+          "capability.qemu.text": "通过签名的 pacman 软件源发布，更新用系统原本的方式送达，而且 pacman 会用固定的密钥验证。",
+          "capability.verify.title": "在真机上测过",
+          "capability.verify.text": "在 MSI Claw 8 AI+ 上开发与测量。关于功耗和帧节奏的说法都来自真机测量，不是估算。",
           "install.title": "安装路径。",
           "install.lead": "签名软件源通过 GitHub Actions 发布。SteamOS 目标机可以通过固定密钥的 bootstrap 端点安装。",
           "install.bootstrap.title": "安装命令",
@@ -993,56 +1022,65 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
         },
         "zh-TW": {
           "meta.title": "針對 Intel 掌機的 SteamOS 支援層",
-          "meta.description": "steamos-intel-handheld 是針對 Intel 掌機 PC 的 SteamOS 支援層，透過簽名的 rivoreo-steamos pacman 套件庫提供。",
+          "meta.description": "讓 SteamOS 在 Intel 掌機上正常運作：遊戲時更省電、可設電池充電上限、感測器讀得到真實數值。透過簽章的 pacman 套件庫安裝。",
           "brand.name": "steamos-intel-handheld",
           "status.repositoryNotActivated": "套件庫已啟用",
           "status.installChannelClosed": "可以安裝",
           "status.candidateHidden": "候選版本隱藏",
           "nav.install": "安裝",
+          "usage.title": "怎麼用。",
+          "usage.lead": "兩個面板都在 Steam 快速選單裡，Decky 那個插頭圖示底下。",
+          "usage.power.title": "遊戲電力",
+          "usage.power.text": "選一個電力模式，想要的話再選一個張數目標。「自動」會依照你在用電池還是插著電切換。張數目標留在「自動」，它就會跟隨你原本在 Steam 裡設定的限制。",
+          "usage.charge.title": "充電上限",
+          "usage.charge.text": "選 60%、80%，或充飽。這個設定存在硬體裡，所以重開機之後、甚至裝置關機期間都持續有效。",
+          "usage.hud.title": "想看到數字",
+          "usage.hud.text": "打開 Steam 的效能疊加層，就能在遊戲中看到處理器和繪圖功耗。兩個面板也各有一個「顯示技術細節」開關，預設關閉。",
+          "nav.usage": "怎麼用",
           "nav.github": "GitHub",
           "hero.title": "針對 Intel 掌機的 SteamOS 支援層",
-          "hero.lead": "這是一個針對執行 SteamOS 的 Intel 掌機 PC 的小型支援層。它把 TDP 控制、MangoHud 感測器存取、套件分發與硬體驗證集中在一個可稽核的儲存庫中，而不是直接修改系統中的 SteamOS Manager。",
-          "hero.primaryCta": "查看安裝路徑",
-          "hero.secondaryCta": "閱讀原始碼",
+          "hero.lead": "SteamOS 是圍繞 AMD 掌機設計的，有些部分在 Intel 硬體上根本不會動。這個專案補上缺的東西：Steam 選單裡的兩個面板，一個在你玩的時候管理功耗、一個保護電池，加上讓 MangoHud 能讀到真實數值所需的感測器管線。",
+          "hero.primaryCta": "安裝",
+          "hero.secondaryCta": "看原始碼",
           "preview.title": "安裝預覽",
-          "flow.ui.title": "SteamOS 介面",
-          "flow.ui.text": "TDP 請求",
-          "flow.manager.title": "SteamOS Manager",
-          "flow.manager.text": "遠端端點",
-          "flow.remote.title": "Rivoreo remote",
-          "flow.remote.text": "Intel 掌機策略與驗證",
-          "flow.power.title": "Intel RAPL",
-          "flow.power.text": "CPU 封裝功耗",
-          "flow.hud.title": "MangoHud",
-          "flow.hud.text": "感測器可見性",
+          "flow.ui.title": "1. 你選一個張數",
+          "flow.ui.text": "或讓它自己判斷",
+          "flow.manager.title": "2. 它看實際的影格時間",
+          "flow.manager.text": "不只看平均值",
+          "flow.remote.title": "3. 一階一階降低功耗",
+          "flow.remote.text": "繪圖頻率和功耗預算一起收，一發現節奏變差就立刻退回",
+          "flow.power.title": "4. 張數維持住",
+          "flow.power.text": "但功耗更低",
+          "flow.hud.title": "5. MangoHud 看得到",
+          "flow.hud.text": "真實的處理器與繪圖瓦數",
           "code.shell": "Shell",
           "code.preview": "安裝命令",
           "code.target": "SteamOS 目標機",
           "code.planned": "目前",
-          "answers.title": "這個儲存庫說明什麼。",
-          "answers.lead": "它是 Intel SteamOS 支援工作的產品入口：範圍清楚、交付可追蹤，並提供從原始碼到已啟用 pacman 套件庫的安全路徑。",
+          "answers.title": "用白話講，這是什麼。",
+          "answers.lead": "在你往掌機裡裝任何東西之前，這四個問題值得先有答案。",
           "answers.what.title": "它是什麼？",
-          "answers.what.text": "一個針對 Intel 掌機 PC 的 SteamOS 支援層，包含原始碼、打包設定、service drop-in 和版本說明。",
+          "answers.what.text": "一個套件，加上 Steam 快速選單裡的兩個面板：「遊戲電力」在遊戲執行時管理功耗，「充電上限」讓電池不要充到滿。",
           "answers.can.title": "它能做什麼？",
-          "answers.can.text": "轉送 TDP 請求，提供 MangoHud 可讀取的感測器路徑，打包交付成果，並在真實硬體上驗證行為。",
+          "answers.can.text": "用更低的功耗維持你要的張數；你沒在操作的時候自動降張數；充到 60% 或 80% 就停止充電以減緩電池老化；讓 MangoHud 讀得到真實的處理器與繪圖功耗。",
           "answers.why.title": "為什麼需要它？",
-          "answers.why.text": "SteamOS 優先支援 AMD 掌機情境。Intel 掌機需要一套可追蹤、能在系統升級後保留的相容層。",
+          "answers.why.text": "SteamOS 預設你用的是 AMD 硬體。在 Intel 掌機上，內建的功耗控制碰不到正確的旋鈕，MangoHud 也讀不到感測器 —— 結果就是數值一片空白，功耗也管得不好。",
           "answers.install.title": "如何安裝？",
-          "answers.install.text": "透過 bootstrap 端點匯入固定的 Rivoreo 簽名金鑰，啟用 pacman 套件庫，並安裝支援套件。",
-          "capabilities.title": "儲存庫負責哪些內容。",
-          "capabilities.lead": "每個部分都保持足夠小，便於 review；也足夠貼近目標裝置，能在交付使用者前於掌機上驗證。",
-          "capability.tdp.title": "SteamOS Manager TDP remote",
-          "capability.tdp.text": "新增遠端端點，讓現有 SteamOS 控制介面可以請求 Intel 專用的功耗行為。",
-          "capability.rapl.title": "Intel RAPL 功耗路徑",
-          "capability.rapl.text": "使用 Intel RAPL 介面讀取 CPU 封裝功耗，而不是另做一套遙測系統。",
-          "capability.mangohud.title": "MangoHud 感測器存取",
-          "capability.mangohud.text": "目標是讓 MangoHud 看見真實感測器，而不是用自訂 overlay 取代 MangoHud。",
-          "capability.repo.title": "Pacman 套件庫託管",
-          "capability.repo.text": "在 rivoreo.github.io/steamos-intel-handheld 預留簽名的 Arch 風格套件庫，供 SteamOS 安裝使用。",
-          "capability.qemu.title": "QEMU 建置環境",
-          "capability.qemu.text": "記錄基於 SteamOS 映像檔的建置路徑，讓產物符合目標系統，而不是主機環境。",
-          "capability.verify.title": "硬體驗證腳本",
-          "capability.verify.text": "腳本會收集裝置資料、驗證計數器、檢查 pacman 套件庫路徑，並記錄真實硬體結果。",
+          "answers.install.text": "一行指令匯入簽章金鑰、加入套件庫並完成安裝。接著在 Decky Loader 裡打開那兩個面板。詳細步驟在下面。",
+          "capabilities.title": "你會得到什麼。",
+          "capabilities.lead": "這裡的每一項都在真實硬體上測過才發佈，而支撐這些說法的量測數據都公開在原始碼庫裡。",
+          "capability.tdp.title": "遊戲電力",
+          "capability.tdp.text": "用這個場景真正需要的最低功耗，維持你要求的張數 —— 而不是把晶片催到底然後祈禱。一旦影格節奏變差就立刻退回。",
+          "capability.rapl.title": "放著不動時自動省電",
+          "capability.rapl.text": "遊戲開著但沒人在操作時會降到 30 張，實測約省 26% 功耗；你一按下按鍵就立刻恢復。",
+          "capability.mangohud.title": "充電上限",
+          "capability.mangohud.text": "充到 60% 或 80% 就停。不讓電池長期處於滿電可以減緩老化速度 —— 如果你的機器大部分時間都插著電，這點很有感。",
+          "capability.repo.title": "感測器能用了",
+          "capability.repo.text": "MangoHud 讀得到真實的處理器封裝功耗和 Intel 內顯功耗，疊加層上顯示的是實際瓦數，不再是空白。",
+          "capability.qemu.title": "簽章更新",
+          "capability.qemu.text": "透過簽章的 pacman 套件庫發佈，更新用系統原本的方式送達，而且 pacman 會用釘選的金鑰驗證。",
+          "capability.verify.title": "在真機上測過",
+          "capability.verify.text": "在 MSI Claw 8 AI+ 上開發與量測。關於功耗和影格節奏的說法都來自實機量測，不是估算。",
           "install.title": "安裝路徑。",
           "install.lead": "簽名套件庫透過 GitHub Actions 釋出。SteamOS 目標機可以透過固定金鑰的 bootstrap 端點安裝。",
           "install.bootstrap.title": "安裝命令",

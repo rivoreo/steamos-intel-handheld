@@ -85,59 +85,54 @@ function FaBatteryHalf (props) {
 }
 
 const getStatus = callable("get_status");
-callable("preview_limit");
 const applyPreset = callable("apply_limit");
-const PRESETS = [
-    { value: 60, label: "60%" },
-    { value: 80, label: "80%" },
-    { value: 100, label: "100%" },
-];
+// 100% is "no limit" from the user's point of view; calling it 100% invites the
+// question of what the other numbers do to the battery.
+const PRESETS = [60, 80, 100];
 const COPY = {
     en: {
         pluginName: "Charge Limit",
-        panelTitle: "Battery Charge Limit",
-        loadingTitle: "Reading charge limit",
-        loadingMessage: "Checking the MSI charge-limit byte...",
-        unavailableTitle: "Unable to read charge limit",
-        unavailableBody: "The Decky backend did not return a status.",
+        loading: "Reading the charge limit...",
+        unavailable: "Charge limit is unavailable",
         errorPrefix: "Error",
-        refresh: "Refresh",
-        rawValue: "EC byte",
-        rule: "Rule",
-        writeMode: "Mode",
-        readOnly: "Read-only",
-        writeEnabled: "Writable",
-        writeNotice: "Writes are enabled for validated 60/80/100% presets.",
-        setPreset: (limit) => `Set ${limit}%`,
-        previewing: (limit) => `Previewing ${limit}% preset...`,
-        previewReady: (limit, rawHex) => `${limit}% preview: ${rawHex}. No EC write was sent.`,
-        applying: (limit) => `Setting ${limit}%...`,
-        appliedReady: (limit, rawHex) => `Set ${limit}% (${rawHex}).`,
-        stopRestart: (stop, restart) => `${stop}% stop / ${restart}% restart`,
-        restartRule: (stop, restart) => `Stops at ${stop}% and restarts below ${restart}%.`,
+        limitLabel: "Charge limit",
+        headline: (stop) => `Charging stops at ${stop}%`,
+        headlineUnlimited: "Charging to full",
+        restartNote: (stop, restart) => `Charges back up once it falls below ${restart}%, so it settles between ${restart}% and ${stop}%.`,
+        why: "Staying off a full charge slows battery ageing. Use a lower limit when the device mostly stays plugged in.",
+        presetLabel: (limit) => `Stop at ${limit}%`,
+        presetUnlimited: "Charge to full (100%)",
+        applying: "Applying...",
+        readOnlyWarning: "Read-only: the controller is not accepting writes right now.",
+        detailsToggle: "Show technical details",
+        detailsRegister: "Controller register",
+        detailsValue: "Stored value",
+        detailsWrites: "Writes",
+        detailsWritable: "allowed",
+        detailsReadOnly: "blocked",
+        refresh: "Re-read from the controller",
     },
     zhHant: {
         pluginName: "充電上限",
-        panelTitle: "電池充電上限",
-        loadingTitle: "正在讀取充電上限",
-        loadingMessage: "正在檢查 MSI 充電限制 EC 位元...",
-        unavailableTitle: "無法讀取充電上限",
-        unavailableBody: "Decky 後端沒有回傳狀態。",
+        loading: "正在讀取充電上限...",
+        unavailable: "無法讀取充電上限",
         errorPrefix: "錯誤",
-        refresh: "重新讀取",
-        rawValue: "EC 位元",
-        rule: "規則",
-        writeMode: "模式",
-        readOnly: "唯讀",
-        writeEnabled: "可寫",
-        writeNotice: "已驗證 60/80/100% 設定，現在可以寫入。",
-        setPreset: (limit) => `設為 ${limit}%`,
-        previewing: (limit) => `正在預覽 ${limit}% 設定...`,
-        previewReady: (limit, rawHex) => `${limit}% 預覽值：${rawHex}。沒有寫入 EC。`,
-        applying: (limit) => `正在設為 ${limit}%...`,
-        appliedReady: (limit, rawHex) => `已設為 ${limit}%（${rawHex}）。`,
-        stopRestart: (stop, restart) => `${stop}% 停止 / ${restart}% 重新充電`,
-        restartRule: (stop, restart) => `充到 ${stop}% 停止，低於 ${restart}% 才重新充電。`,
+        limitLabel: "充電上限",
+        headline: (stop) => `充到 ${stop}% 就停`,
+        headlineUnlimited: "充飽為止",
+        restartNote: (stop, restart) => `掉到 ${restart}% 以下才會再充，所以電量會在 ${restart}% 到 ${stop}% 之間。`,
+        why: "不充到滿可以減緩電池老化。經常插著電用的話，建議設低一點。",
+        presetLabel: (limit) => `充到 ${limit}% 就停`,
+        presetUnlimited: "充飽（100%）",
+        applying: "套用中...",
+        readOnlyWarning: "唯讀：控制器目前不接受寫入。",
+        detailsToggle: "顯示技術細節",
+        detailsRegister: "控制器暫存器",
+        detailsValue: "儲存值",
+        detailsWrites: "寫入",
+        detailsWritable: "允許",
+        detailsReadOnly: "阻擋",
+        refresh: "重新讀取控制器",
     },
 };
 const blockStyle = {
@@ -147,8 +142,12 @@ const blockStyle = {
     overflowWrap: "break-word",
     lineHeight: 1.28,
 };
-const titleStyle = {
-    marginBottom: "8px",
+const headlineStyle = {
+    fontSize: "17px",
+    fontWeight: 600,
+    lineHeight: 1.25,
+    whiteSpace: "normal",
+    overflowWrap: "break-word",
 };
 const detailStyle = {
     opacity: 0.72,
@@ -200,41 +199,53 @@ const PluginTitle = () => {
 const EcChargePanel = () => {
     const t = COPY[useLocale()];
     const [status, setStatus] = SP_REACT.useState(null);
-    const [notice, setNotice] = SP_REACT.useState(null);
     const [error, setError] = SP_REACT.useState(null);
+    const [busy, setBusy] = SP_REACT.useState(false);
+    const [showDetails, setShowDetails] = SP_REACT.useState(false);
     const loadStatus = async () => {
-        setNotice(null);
         setError(null);
         try {
             setStatus(await getStatus());
-            setNotice(t.writeNotice);
         }
-        catch (error) {
+        catch (err) {
             setStatus(null);
-            setError(errorText(error));
+            setError(errorText(err));
         }
     };
     const applyLimit = async (limit) => {
-        setNotice(t.applying(limit));
+        if (busy) {
+            return;
+        }
+        setBusy(true);
         setError(null);
         try {
             const result = await applyPreset(limit);
             setStatus(result.applied);
-            setNotice(t.appliedReady(limit, result.applied.raw_hex));
         }
-        catch (error) {
-            setError(errorText(error));
-            setNotice(null);
+        catch (err) {
+            setError(errorText(err));
+        }
+        finally {
+            setBusy(false);
         }
     };
     SP_REACT.useEffect(() => {
         loadStatus();
     }, []);
-    return (SP_JSX.jsxs(DFL.PanelSection, { title: t.panelTitle, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, style: titleStyle, children: status
-                                ? t.stopRestart(status.end_threshold, status.start_threshold)
-                                : error
-                                    ? t.unavailableTitle
-                                    : t.loadingTitle }), status ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { children: [t.rawValue, ": ", status.address_hex, " = ", status.raw_hex] }), SP_JSX.jsxs("div", { children: [t.rule, ": ", t.restartRule(status.end_threshold, status.start_threshold)] }), SP_JSX.jsxs("div", { children: [t.writeMode, ": ", status.writes_enabled ? t.writeEnabled : t.readOnly] })] })) : (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx("div", { children: error ? t.unavailableBody : t.loadingMessage }), error ? (SP_JSX.jsxs("div", { style: detailStyle, children: [t.errorPrefix, ": ", error] })) : null] }))] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: loadStatus, children: t.refresh }) }), PRESETS.map((preset) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => applyLimit(preset.value), children: t.setPreset(preset.value) }) }, preset.value))), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: blockStyle, children: notice ?? (status ? t.writeNotice : t.loadingMessage) }) })] }));
+    const stop = status?.end_threshold ?? null;
+    const restart = status?.start_threshold ?? null;
+    const unlimited = stop !== null && stop >= 100;
+    const headline = !status
+        ? error
+            ? t.unavailable
+            : t.loading
+        : unlimited
+            ? t.headlineUnlimited
+            : t.headline(stop);
+    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsx("div", { style: headlineStyle, children: headline }), status && !unlimited && restart !== null ? (SP_JSX.jsx("div", { style: detailStyle, children: t.restartNote(stop, restart) })) : null, status && !status.writes_enabled ? (SP_JSX.jsx("div", { style: detailStyle, children: t.readOnlyWarning })) : null, error ? (SP_JSX.jsxs("div", { role: "alert", style: detailStyle, children: [t.errorPrefix, ": ", error] })) : null] }) }) }), SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.DropdownItem, { label: t.limitLabel, description: t.why, rgOptions: PRESETS.map((limit) => ({
+                            data: String(limit),
+                            label: limit >= 100 ? t.presetUnlimited : t.presetLabel(limit),
+                        })), selectedOption: stop === null ? "" : String(stop), disabled: busy || !status, onChange: (option) => applyLimit(Number(option.data)) }) }) }), SP_JSX.jsxs(DFL.PanelSection, { children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: t.detailsToggle, checked: showDetails, onChange: setShowDetails }) }), showDetails && status ? (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: blockStyle, children: [SP_JSX.jsxs("div", { style: detailStyle, children: [t.detailsRegister, ": ", status.address_hex] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.detailsValue, ": ", status.raw_hex] }), SP_JSX.jsxs("div", { style: detailStyle, children: [t.detailsWrites, ":", " ", status.writes_enabled ? t.detailsWritable : t.detailsReadOnly] })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: busy, onClick: loadStatus, children: busy ? t.applying : t.refresh }) })] })) : null] })] }));
 };
 var index = definePlugin(() => ({
     name: "Charge Limit",
