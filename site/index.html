@@ -3,31 +3,28 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SteamOS support for Intel handhelds</title>
+    <title>steamos-intel-handheld</title>
     <meta
       name="description"
-      content="Makes SteamOS behave properly on Intel handhelds: longer battery life while gaming, a battery charge limit, and working power sensors. Installed from a signed pacman repository."
+      content="Longer battery and steadier frame rates on Intel handhelds running SteamOS. Two panels in the Steam menu: Game Power and Charge Limit."
     >
     <style>
       :root {
         color-scheme: dark;
-        --bg: #0f172a;
-        --bg-soft: #111827;
-        --panel: #172033;
-        --panel-strong: #1e293b;
-        --text: #f1f5f9;
-        --muted: #cbd5e1;
-        --subtle: #94a3b8;
-        --border: #334155;
-        --primary: #3b82f6;
-        --primary-strong: #2563eb;
-        --success: #22c55e;
-        --warning: #f59e0b;
-        --shadow: rgba(2, 6, 23, 0.36);
-        font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        line-height: 1.5;
-        background: var(--bg);
-        color: var(--text);
+        --bg: #0b0f14;
+        --bg-lift: #111820;
+        --surface: #151d26;
+        --surface-2: #1b2530;
+        --line: #26313d;
+        --text: #eef4f8;
+        --muted: #a8b7c4;
+        --dim: #74848f;
+        --accent: #5ee08a;
+        --accent-ink: #06301a;
+        --accent-soft: rgba(94, 224, 138, 0.12);
+        --radius: 14px;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "Noto Sans SC", sans-serif;
+        line-height: 1.6;
       }
 
       * {
@@ -40,1059 +37,1075 @@
 
       body {
         margin: 0;
-        min-width: 320px;
-        overflow-x: hidden;
         background:
-          linear-gradient(180deg, rgba(30, 41, 59, 0.82), rgba(15, 23, 42, 0) 440px),
+          radial-gradient(900px 480px at 78% -10%, rgba(94, 224, 138, 0.10), transparent 62%),
           var(--bg);
         color: var(--text);
+        -webkit-font-smoothing: antialiased;
       }
 
-      a {
-        color: inherit;
-        text-decoration-color: rgba(148, 163, 184, 0.7);
-        text-underline-offset: 0.22em;
-        transition: color 180ms ease, border-color 180ms ease, background-color 180ms ease;
-      }
-
-      a:hover {
-        color: #bfdbfe;
-      }
-
-      a:focus-visible,
-      button:focus-visible {
-        outline: 3px solid rgba(59, 130, 246, 0.72);
-        outline-offset: 3px;
-      }
-
-      code,
-      pre {
-        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      }
-
-      pre {
-        margin: 0;
-        overflow-x: auto;
-        white-space: pre;
-        -webkit-overflow-scrolling: touch;
-      }
-
-      .shell {
-        max-width: 1180px;
+      .wrap {
+        width: min(1120px, calc(100% - 2.5rem));
         margin: 0 auto;
-        padding: 24px 18px 56px;
       }
+
+      /* ---------------- top bar ---------------- */
 
       .topbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        padding: 14px 0 32px;
-      }
-
-      .brand {
-        display: inline-flex;
-        align-items: center;
-        gap: 10px;
-        min-width: 0;
-        font-weight: 700;
-        letter-spacing: 0;
-      }
-
-      .brand-mark {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        flex: 0 0 auto;
-        width: 30px;
-        height: 30px;
-        border: 1px solid rgba(59, 130, 246, 0.85);
-        border-radius: 8px;
-        background: linear-gradient(135deg, rgba(59, 130, 246, 0.24), rgba(34, 197, 94, 0.1));
-        box-shadow: 0 10px 30px var(--shadow);
-      }
-
-      .brand-mark svg {
-        width: 20px;
-        height: 20px;
-        fill: none;
-        stroke: #dbeafe;
-        stroke-width: 1.8;
-        stroke-linecap: round;
-        stroke-linejoin: round;
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        background: rgba(11, 15, 20, 0.84);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid var(--line);
       }
 
       .nav {
         display: flex;
         align-items: center;
-        justify-content: flex-end;
-        gap: 10px;
-        flex-wrap: wrap;
+        gap: 1.25rem;
+        padding: 0.8rem 0;
       }
 
-      .nav a,
-      .language-switcher {
+      .brand {
         display: inline-flex;
         align-items: center;
-        min-height: 36px;
-        border: 1px solid rgba(148, 163, 184, 0.24);
-        border-radius: 8px;
-        background: rgba(15, 23, 42, 0.56);
-        color: var(--muted);
-        font-size: 0.875rem;
-        font-weight: 600;
+        gap: 0.55rem;
+        font-weight: 650;
+        letter-spacing: -0.01em;
+        color: var(--text);
         text-decoration: none;
       }
 
-      .nav a {
-        gap: 8px;
-        padding: 8px 12px;
+      .brand-mark svg {
+        display: block;
+        width: 26px;
+        height: 26px;
+        fill: none;
+        stroke: var(--accent);
+        stroke-width: 1.5;
+        stroke-linecap: round;
+      }
+
+      .brand-mark .handheld-body {
+        fill: rgba(94, 224, 138, 0.12);
+      }
+
+      .brand-mark .chip-core {
+        fill: rgba(94, 224, 138, 0.28);
+      }
+
+      .nav-links {
+        display: flex;
+        gap: 1.1rem;
+        margin-left: auto;
+        font-size: 0.94rem;
+      }
+
+      .nav-links a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+
+      .nav-links a:hover {
+        color: var(--text);
       }
 
       .language-switcher {
-        gap: 6px;
-        padding: 5px 6px 5px 9px;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
       }
 
       .language-icon {
         width: 17px;
         height: 17px;
         fill: none;
-        stroke: var(--muted);
-        stroke-width: 1.8;
+        stroke: var(--dim);
+        stroke-width: 1.6;
         stroke-linecap: round;
-        stroke-linejoin: round;
       }
 
       .language-options {
         display: inline-flex;
-        gap: 2px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        overflow: hidden;
       }
 
       .language-option {
-        min-width: 34px;
-        min-height: 26px;
         border: 0;
-        border-radius: 6px;
         background: transparent;
-        color: var(--subtle);
-        cursor: pointer;
+        color: var(--dim);
+        padding: 0.24rem 0.62rem;
         font: inherit;
-        font-size: 0.75rem;
-        font-weight: 800;
-        letter-spacing: 0;
-        transition: color 180ms ease, background-color 180ms ease;
-      }
-
-      .language-option:hover {
-        background: rgba(59, 130, 246, 0.16);
-        color: #dbeafe;
+        font-size: 0.82rem;
+        cursor: pointer;
       }
 
       .language-option[aria-pressed="true"] {
-        background: rgba(59, 130, 246, 0.28);
-        color: #eff6ff;
+        background: var(--accent-soft);
+        color: var(--accent);
       }
 
-      .status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 999px;
-        background: var(--success);
-        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
-      }
-
-      .status-dot.warning {
-        background: var(--warning);
-        box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.13);
-      }
-
-      .hero {
-        display: grid;
-        grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
-        gap: 28px;
-        align-items: stretch;
-        padding: 28px 0 42px;
-      }
-
-      .hero-copy,
-      .install-card,
-      .info-card,
-      .capability,
-      .install-panel {
-        min-width: 0;
-        border: 1px solid rgba(148, 163, 184, 0.22);
-        background: linear-gradient(180deg, rgba(30, 41, 59, 0.72), rgba(15, 23, 42, 0.82));
-        box-shadow: 0 24px 80px var(--shadow);
-      }
-
-      .hero-copy {
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        min-height: 430px;
-        padding: clamp(26px, 5vw, 54px);
-        border-radius: 8px;
-      }
-
-      .eyebrow {
-        margin: 0 0 16px;
-        color: #bfdbfe;
-        font-size: 0.82rem;
-        font-weight: 800;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-      }
-
-      h1,
-      h2,
-      h3,
-      p {
-        overflow-wrap: anywhere;
-      }
-
-      h1 {
-        max-width: 780px;
-        margin: 0;
-        color: var(--text);
-        font-size: 5rem;
-        line-height: 0.96;
-        letter-spacing: 0;
-      }
-
-      .lead {
-        max-width: 700px;
-        margin: 24px 0 0;
-        color: var(--muted);
-        font-size: 1.2rem;
-      }
-
-      .hero-actions {
-        display: flex;
-        gap: 12px;
-        flex-wrap: wrap;
-        margin-top: 32px;
-      }
+      /* ---------------- buttons ---------------- */
 
       .button {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-height: 44px;
-        padding: 10px 16px;
-        border: 1px solid rgba(96, 165, 250, 0.7);
-        border-radius: 8px;
-        background: var(--primary);
-        color: #eff6ff;
-        font-weight: 800;
-        line-height: 1.25;
+        padding: 0.72rem 1.35rem;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.98rem;
         text-decoration: none;
-        text-align: center;
-        white-space: normal;
-        overflow-wrap: anywhere;
-        transition: transform 180ms ease, background-color 180ms ease, border-color 180ms ease;
+        border: 1px solid transparent;
+        background: var(--accent);
+        color: var(--accent-ink);
       }
 
       .button:hover {
-        background: var(--primary-strong);
-        color: #eff6ff;
+        filter: brightness(1.07);
       }
 
       .button.secondary {
-        background: rgba(15, 23, 42, 0.56);
-        color: #dbeafe;
+        background: transparent;
+        color: var(--text);
+        border-color: var(--line);
       }
 
-      .install-card {
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        min-height: 430px;
-        padding: 24px;
-        border-radius: 8px;
+      .button.secondary:hover {
+        border-color: var(--dim);
       }
 
-      .card-heading {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 14px;
-        margin-bottom: 18px;
-      }
+      /* ---------------- hero ---------------- */
 
-      .card-heading h2,
-      .card-heading h3 {
-        margin: 0;
-        font-size: 1rem;
-      }
-
-      .status {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 5px 9px;
-        border-radius: 999px;
-        font-size: 0.75rem;
-        font-weight: 800;
-        white-space: nowrap;
-      }
-
-      .status.waiting {
-        border: 1px solid rgba(245, 158, 11, 0.35);
-        color: #fde68a;
-      }
-
-      .code-block {
-        border: 1px solid rgba(51, 65, 85, 0.94);
-        border-radius: 8px;
-        background: #020617;
-      }
-
-      .flow-map {
+      .hero {
         display: grid;
-        gap: 8px;
-        margin-bottom: 16px;
-      }
-
-      .flow-row {
-        display: grid;
-        grid-template-columns: 1fr auto 1fr;
-        gap: 8px;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 3.5rem;
         align-items: center;
+        padding: 5rem 0 3.5rem;
       }
 
-      .flow-row.single {
-        grid-template-columns: 1fr;
+      .eyebrow {
+        color: var(--accent);
+        font-size: 0.85rem;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        margin: 0 0 0.9rem;
       }
 
-      .flow-node {
-        min-height: 72px;
-        padding: 12px;
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 8px;
-        background: rgba(15, 23, 42, 0.72);
+      h1 {
+        font-size: clamp(2.1rem, 4.4vw, 3.15rem);
+        line-height: 1.12;
+        letter-spacing: -0.025em;
+        margin: 0 0 1.1rem;
       }
 
-      .flow-node strong,
-      .flow-node span {
-        display: block;
+      .lead {
+        color: var(--muted);
+        font-size: 1.07rem;
+        margin: 0 0 1.8rem;
+        max-width: 34em;
       }
 
-      .flow-node strong {
-        color: #f8fafc;
-        font-size: 0.92rem;
+      .hero-actions {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
       }
 
-      .flow-node span {
-        margin-top: 4px;
-        color: var(--subtle);
+      .hero-note {
+        color: var(--dim);
+        font-size: 0.86rem;
+        margin: 1.1rem 0 0;
+      }
+
+      /* ---------------- panel rendering ---------------- */
+
+      .device {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 0.85rem;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+      }
+
+      .device-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.15rem 0.35rem 0.7rem;
+        color: var(--dim);
         font-size: 0.78rem;
       }
 
-      .flow-arrow {
-        color: #93c5fd;
-        font-weight: 900;
+      .device-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent);
+        flex: none;
+      }
+
+      .panel {
+        background: var(--bg-lift);
+        border-radius: 12px;
+        padding: 1rem;
+      }
+
+      .panel-status {
+        font-size: 1.1rem;
+        font-weight: 650;
+        margin: 0 0 0.2rem;
+      }
+
+      .panel-sub {
+        color: var(--muted);
+        font-size: 0.88rem;
+        margin: 0 0 1rem;
+      }
+
+      .panel-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.7rem 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .panel-row > span:first-child {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .panel-row.first {
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .pill {
+        background: var(--surface-2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.3rem 0.7rem;
+        font-size: 0.86rem;
+        white-space: nowrap;
+      }
+
+      .switch {
+        width: 36px;
+        height: 20px;
+        border-radius: 999px;
+        background: var(--surface-2);
+        border: 1px solid var(--line);
+        position: relative;
+        flex: none;
+      }
+
+      .switch::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--dim);
+      }
+
+      /* ---------------- measured numbers ---------------- */
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+
+      .stat {
+        background: var(--bg-lift);
+        padding: 1.6rem 1.4rem;
+      }
+
+      .stat-value {
+        font-size: 2rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        color: var(--accent);
+      }
+
+      .stat-label {
+        color: var(--muted);
+        font-size: 0.92rem;
+        margin-top: 0.25rem;
+      }
+
+      .stats-note {
+        color: var(--dim);
+        font-size: 0.85rem;
+        margin: 1rem 0 0;
+      }
+
+      /* ---------------- sections ---------------- */
+
+      .section {
+        padding: 4rem 0;
+        border-top: 1px solid var(--line);
+        margin-top: 2rem;
+      }
+
+      .section-head {
+        max-width: 44em;
+        margin-bottom: 2.4rem;
+      }
+
+      h2 {
+        font-size: clamp(1.6rem, 2.7vw, 2.1rem);
+        letter-spacing: -0.02em;
+        margin: 0 0 0.7rem;
+      }
+
+      .section-head p {
+        color: var(--muted);
+        margin: 0;
+      }
+
+      .feature {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 3.5rem;
+        align-items: center;
+        padding: 2.4rem 0;
+      }
+
+      .feature.flipped .feature-visual {
+        order: -1;
+      }
+
+      .feature h3 {
+        font-size: 1.4rem;
+        margin: 0 0 0.7rem;
+        letter-spacing: -0.015em;
+      }
+
+      .feature p {
+        color: var(--muted);
+        margin: 0 0 1.1rem;
+      }
+
+      .ticks {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      .ticks li {
+        position: relative;
+        padding-left: 1.5rem;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      .ticks li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0.58em;
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        background: var(--accent);
+      }
+
+      /* ---------------- install ---------------- */
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+        gap: 1.25rem;
+      }
+
+      .card.usage {
+        margin-top: 1.25rem;
+      }
+
+      .card.usage .ticks {
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 0.6rem 2rem;
+      }
+
+      .card {
+        background: var(--bg-lift);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 1.5rem;
+      }
+
+      .card h3 {
+        margin: 0 0 0.5rem;
+        font-size: 1.08rem;
+      }
+
+      .card p {
+        color: var(--muted);
+        margin: 0 0 1rem;
+        font-size: 0.95rem;
+      }
+
+      .tag {
+        display: inline-block;
+        font-size: 0.73rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        padding: 0.2rem 0.58rem;
+        border-radius: 999px;
+        margin-bottom: 0.8rem;
+      }
+
+      .tag.now {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .tag.later {
+        background: rgba(168, 183, 196, 0.12);
+        color: var(--dim);
+      }
+
+      .code-block {
+        background: #080c11;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
       }
 
       .code-label {
         display: flex;
-        align-items: center;
         justify-content: space-between;
-        gap: 12px;
-        padding: 9px 12px;
-        border-bottom: 1px solid rgba(51, 65, 85, 0.94);
-        color: var(--subtle);
-        font-size: 0.75rem;
-        font-weight: 700;
+        gap: 1rem;
+        padding: 0.5rem 0.85rem;
+        border-bottom: 1px solid var(--line);
+        color: var(--dim);
+        font-size: 0.78rem;
       }
 
-      pre code {
-        display: block;
-        padding: 14px 12px;
-        color: #dbeafe;
-        font-size: 0.86rem;
-      }
-
-      .note {
-        margin: 14px 0 0;
-        color: var(--subtle);
-        font-size: 0.92rem;
-      }
-
-      .section {
-        padding: 38px 0;
-      }
-
-      .section-heading {
-        display: grid;
-        grid-template-columns: minmax(0, 0.85fr) minmax(280px, 0.75fr);
-        gap: 28px;
-        align-items: end;
-        margin-bottom: 18px;
-      }
-
-      .section-heading h2 {
+      .code-block pre {
         margin: 0;
-        font-size: 3.25rem;
-        line-height: 1;
-        letter-spacing: 0;
+        padding: 0.9rem;
+        overflow-x: auto;
+        /* Long URLs must stay readable in a narrow card. pre-wrap folds the
+           line for display without putting a newline into what gets copied. */
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
       }
 
-      .section-heading p {
-        margin: 0;
-        color: var(--muted);
+      .code-block code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.83rem;
+        line-height: 1.75;
+        color: #cfe9d8;
       }
 
-      .info-grid,
-      .capability-grid {
+      /* ---------------- faq ---------------- */
+
+      .faq {
         display: grid;
-        gap: 14px;
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        overflow: hidden;
       }
 
-      .info-grid {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+      .faq details {
+        background: var(--bg-lift);
       }
 
-      .info-card,
-      .capability,
-      .install-panel {
-        border-radius: 8px;
-        padding: 20px;
-      }
-
-      .info-card h3,
-      .capability h3,
-      .install-panel h3 {
-        margin: 0;
-        font-size: 1rem;
-      }
-
-      .info-card p,
-      .capability p,
-      .install-panel p,
-      .list {
-        color: var(--muted);
-      }
-
-      .info-card p,
-      .capability p,
-      .install-panel p {
-        margin: 10px 0 0;
-      }
-
-      .capability-grid {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-      }
-
-      .capability {
-        min-height: 176px;
-      }
-
-      .install-layout {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        gap: 14px;
-      }
-
-      .install-panel.wide {
-        grid-column: 1 / -1;
-      }
-
-      .list {
-        margin: 14px 0 0;
-        padding-left: 20px;
-      }
-
-      .list li + li {
-        margin-top: 7px;
-      }
-
-      footer {
+      .faq summary {
+        cursor: pointer;
+        padding: 1.15rem 1.4rem;
+        font-weight: 600;
+        list-style: none;
         display: flex;
         justify-content: space-between;
-        gap: 16px;
-        flex-wrap: wrap;
-        padding-top: 36px;
-        color: var(--subtle);
+        gap: 1.5rem;
+      }
+
+      .faq summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .faq summary::after {
+        content: "+";
+        color: var(--dim);
+        font-weight: 400;
+      }
+
+      .faq details[open] summary::after {
+        content: "\2212";
+      }
+
+      .faq p {
+        margin: 0;
+        padding: 0 1.4rem 1.3rem;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      /* ---------------- footer ---------------- */
+
+      footer {
+        border-top: 1px solid var(--line);
+        margin-top: 4.5rem;
+        padding: 2.5rem 0 3.5rem;
+        color: var(--dim);
         font-size: 0.88rem;
       }
 
-      @media (max-width: 920px) {
-        .topbar {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-
-        .nav {
-          justify-content: flex-start;
-        }
-
-        .hero,
-        .section-heading,
-        .install-layout {
-          grid-template-columns: 1fr;
-        }
-
-        h1 {
-          font-size: 3.35rem;
-          line-height: 1;
-        }
-
-        .lead {
-          font-size: 1.12rem;
-        }
-
-        .section-heading h2 {
-          font-size: 2.65rem;
-        }
-
-        .info-grid,
-        .capability-grid {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
+      .foot {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem 2rem;
+        align-items: center;
       }
 
-      @media (max-width: 640px) {
-        .shell {
-          padding: 18px 14px 42px;
+      .foot a {
+        color: var(--muted);
+      }
+
+      .repo-line {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.8rem;
+        color: var(--dim);
+        margin: 1rem 0 0;
+        word-break: break-all;
+      }
+
+      @media (max-width: 880px) {
+        .hero,
+        .feature {
+          grid-template-columns: 1fr;
+          gap: 2.2rem;
         }
 
-        .brand {
-          max-width: 100%;
-        }
-
-        .brand span:last-child {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .nav {
-          width: 100%;
-        }
-
-        .language-switcher,
-        .nav a {
-          flex: 1 1 auto;
-          justify-content: center;
-        }
-
-        .language-switcher {
-          justify-content: space-between;
-        }
-
-        .hero-copy,
-        .install-card,
-        .info-card,
-        .capability,
-        .install-panel {
-          padding: 18px;
-        }
-
-        .hero-copy,
-        .install-card {
-          min-height: auto;
+        .feature.flipped .feature-visual {
+          order: 0;
         }
 
         .hero {
-          padding-top: 8px;
+          padding: 3rem 0 2.5rem;
         }
 
-        h1 {
-          font-size: 2.2rem;
-          line-height: 1.08;
-        }
-
-        .lead {
-          font-size: 1rem;
-        }
-
-        .section-heading h2 {
-          font-size: 2rem;
-          line-height: 1.08;
-        }
-
-        .info-grid,
-        .capability-grid {
+        .stats {
           grid-template-columns: 1fr;
         }
 
-        .flow-row {
-          grid-template-columns: 1fr;
-        }
-
-        .flow-arrow {
-          transform: rotate(90deg);
-          text-align: center;
-        }
-
-        .card-heading {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-
-        .button {
-          width: 100%;
-        }
-      }
-
-      @media (prefers-reduced-motion: reduce) {
-        *,
-        *::before,
-        *::after {
-          scroll-behavior: auto !important;
-          transition-duration: 1ms !important;
+        .section {
+          padding: 3.2rem 0;
+          margin-top: 3.2rem;
         }
       }
     </style>
   </head>
   <body>
-    <div class="shell">
-      <header class="topbar" aria-label="Site header">
-        <div class="brand">
+    <header class="topbar">
+      <div class="wrap nav">
+        <a class="brand" href="#top">
           <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect class="handheld-body" x="3.5" y="6.5" width="17" height="11" rx="4"></rect><rect class="chip-core" x="9" y="8.75" width="6" height="6.5" rx="1.4"></rect><path d="M10.5 5v1.5"></path><path d="M13.5 5v1.5"></path><path d="M10.5 17.5V19"></path><path d="M13.5 17.5V19"></path><path d="M7 10.5v3"></path><path d="M17 10.5v3"></path><path d="M5.5 12h3"></path><path d="M15.5 12h3"></path></svg></span>
           <span data-i18n="brand.name">steamos-intel-handheld</span>
-        </div>
-        <nav class="nav" aria-label="Primary navigation">
-          <div class="language-switcher" aria-label="Language">
-            <svg class="language-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h9"></path><path d="M9 3v2"></path><path d="M6 12c2.4-1.6 4-4 4.7-7"></path><path d="M12 12c-1.7-.8-3.2-2.1-4.4-3.8"></path><path d="M15 19l3-8 3 8"></path><path d="M16.1 16h3.8"></path></svg>
-            <div class="language-options" role="group" aria-label="Language options">
-              <button class="language-option" type="button" data-language-option="en" lang="en" aria-pressed="true">EN</button>
-              <button class="language-option" type="button" data-language-option="zh-CN" lang="zh-CN" aria-pressed="false">简</button>
-              <button class="language-option" type="button" data-language-option="zh-TW" lang="zh-TW" aria-pressed="false">繁</button>
-            </div>
-          </div>
+        </a>
+        <nav class="nav-links">
+          <a href="#features" data-i18n="nav.features">Features</a>
           <a href="#install" data-i18n="nav.install">Install</a>
-          <a href="#usage" data-i18n="nav.usage">Use</a>
+          <a href="#faq" data-i18n="nav.faq">FAQ</a>
           <a href="https://github.com/rivoreo/steamos-intel-handheld" data-i18n="nav.github">GitHub</a>
         </nav>
-      </header>
+        <div class="language-switcher" aria-label="Language">
+          <svg class="language-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h9"></path><path d="M9 3v2"></path><path d="M6 12c2.4-1.6 4-4 4.7-7"></path><path d="M12 12c-1.7-.8-3.2-2.1-4.4-3.8"></path><path d="M15 19l3-8 3 8"></path><path d="M16.1 16h3.8"></path></svg>
+          <div class="language-options" role="group" aria-label="Language options">
+            <button class="language-option" type="button" data-language-option="en" lang="en" aria-pressed="true">EN</button>
+            <button class="language-option" type="button" data-language-option="zh-CN" lang="zh-CN" aria-pressed="false">简</button>
+            <button class="language-option" type="button" data-language-option="zh-TW" lang="zh-TW" aria-pressed="false">繁</button>
+          </div>
+        </div>
+      </div>
+    </header>
 
-      <main>
-        <section class="hero" aria-labelledby="hero-title">
-          <div class="hero-copy">
-            <p class="eyebrow">rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos</p>
-            <h1 id="hero-title" data-i18n="hero.title">SteamOS support for Intel handhelds</h1>
-            <p class="lead" data-i18n="hero.lead">SteamOS is built around AMD handhelds, so parts of it do not work on Intel hardware. This adds what is missing: two panels in the Steam menu that manage power while you play and protect the battery, plus the sensor plumbing MangoHud needs to show real numbers.</p>
+    <main id="top">
+      <div class="wrap">
+        <section class="hero">
+          <div>
+            <p class="eyebrow" data-i18n="hero.eyebrow">Built for the MSI Claw 8 AI+</p>
+            <h1 data-i18n="hero.title">Longer battery. Steadier frame rates.</h1>
+            <p class="lead" data-i18n="hero.lead">SteamOS was built for AMD handhelds. On Intel hardware its power controls reach for knobs that are not there, and the performance overlay reads nothing at all. This project supplies the missing layer, and puts two panels in the Steam menu to drive it.</p>
             <div class="hero-actions">
               <a class="button" href="#install" data-i18n="hero.primaryCta">Install it</a>
               <a class="button secondary" href="https://github.com/rivoreo/steamos-intel-handheld" data-i18n="hero.secondaryCta">Read the source</a>
             </div>
+            <p class="hero-note" data-i18n="hero.note">Free and open source. No account, no telemetry.</p>
+          </div>
+          <div class="feature-visual">
+            <div class="device">
+              <div class="device-bar"><span class="device-dot"></span><span data-i18n="mock.menu">Steam quick access menu</span></div>
+              <div class="panel">
+                <p class="panel-status" data-i18n="mock.power.status">Holding steady at 60 FPS</p>
+                <p class="panel-sub" data-i18n="mock.power.sub">59 FPS now, 21.3 W</p>
+                <div class="panel-row"><span data-i18n="mock.power.profile">Power profile</span><span class="pill" data-i18n="mock.power.profileValue">Automatic</span></div>
+                <div class="panel-row"><span data-i18n="mock.power.target">Frame rate target</span><span class="pill" data-i18n="mock.power.targetValue">Automatic (60)</span></div>
+                <div class="panel-row"><span data-i18n="mock.details">Show technical details</span><span class="switch"></span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="stats" aria-label="Measured results">
+          <div class="stat">
+            <div class="stat-value">-26%</div>
+            <div class="stat-label" data-i18n="stat.idle">power while you are not touching it</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">-15%</div>
+            <div class="stat-label" data-i18n="stat.load">power at the same frame rate</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">0.22 W</div>
+            <div class="stat-label" data-i18n="stat.suspend">draw in suspend</div>
+          </div>
+        </section>
+        <p class="stats-note" data-i18n="stat.note">Measured on an MSI Claw 8 AI+ during real play. The readings behind each figure are published in the repository.</p>
+
+        <section class="section" id="features">
+          <div class="section-head">
+            <h2 data-i18n="features.title">What it does</h2>
+            <p data-i18n="features.lead">Two panels, and the layer underneath that makes them possible.</p>
           </div>
 
-          <aside class="install-card" aria-labelledby="quick-install-title">
+          <article class="feature">
             <div>
-              <div class="card-heading">
-                <h2 id="quick-install-title" data-i18n="preview.title">Install preview</h2>
-                <span class="status"><span class="status-dot" aria-hidden="true"></span><span data-i18n="status.repositoryNotActivated">Package repository not published yet</span></span>
-              </div>
-              <div class="flow-map" aria-label="System integration path">
-                <div class="flow-row">
-                  <div class="flow-node">
-                    <strong data-i18n="flow.ui.title">1. You pick a frame rate</strong>
-                    <span data-i18n="flow.ui.text">or let it choose one</span>
-                  </div>
-                  <div class="flow-arrow" aria-hidden="true">-></div>
-                  <div class="flow-node">
-                    <strong data-i18n="flow.manager.title">2. It watches frame times</strong>
-                    <span data-i18n="flow.manager.text">not just averages</span>
-                  </div>
-                </div>
-                <div class="flow-row single">
-                  <div class="flow-node">
-                    <strong data-i18n="flow.remote.title">3. It lowers power step by step</strong>
-                    <span data-i18n="flow.remote.text">graphics clock and power budget together, backing off the moment pacing suffers</span>
-                  </div>
-                </div>
-                <div class="flow-row">
-                  <div class="flow-node">
-                    <strong data-i18n="flow.power.title">4. You keep your frame rate</strong>
-                    <span data-i18n="flow.power.text">on less power</span>
-                  </div>
-                  <div class="flow-arrow" aria-hidden="true">+</div>
-                  <div class="flow-node">
-                    <strong data-i18n="flow.hud.title">5. MangoHud shows it</strong>
-                    <span data-i18n="flow.hud.text">real CPU and GPU watts</span>
-                  </div>
+              <h3 data-i18n="features.power.title">Game Power</h3>
+              <p data-i18n="features.power.text">Most handheld power tools hand you a wattage slider and leave the guessing to you. This one starts from the frame rate instead: it finds the least power that still holds your target, and gives the power straight back the moment frame pacing suffers.</p>
+              <ul class="ticks">
+                <li data-i18n="features.power.b1">Put the device down and it settles to 30 FPS, then comes back on the first button press</li>
+                <li data-i18n="features.power.b2">Judges frame times rather than averages, so a stutter registers before you feel it</li>
+                <li data-i18n="features.power.b3">Never goes above the wattage or frame limit you set yourself</li>
+              </ul>
+            </div>
+            <div class="feature-visual">
+              <div class="device">
+                <div class="device-bar"><span class="device-dot"></span><span data-i18n="mock.power.name">Game Power</span></div>
+                <div class="panel">
+                  <p class="panel-status" data-i18n="mock.power.status2">Steady, and using less power</p>
+                  <p class="panel-sub" data-i18n="mock.power.sub2">60 FPS now, 20.1 W</p>
+                  <div class="panel-row"><span data-i18n="mock.power.profile">Power profile</span><span class="pill" data-i18n="mock.power.profileValue2">Save battery</span></div>
+                  <div class="panel-row"><span data-i18n="mock.power.target">Frame rate target</span><span class="pill" data-i18n="mock.power.targetValue2">60 FPS</span></div>
+                  <div class="panel-row"><span data-i18n="mock.details">Show technical details</span><span class="switch"></span></div>
                 </div>
               </div>
             </div>
-            <div class="code-block">
-              <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.preview">install from source</span></div>
-              <pre><code>git clone https://github.com/rivoreo/steamos-intel-handheld
+          </article>
+
+          <article class="feature flipped">
+            <div>
+              <h3 data-i18n="features.charge.title">Charge Limit</h3>
+              <p data-i18n="features.charge.text">A lithium battery held at full charge ages faster. If your handheld spends most of its life plugged in, stopping short of full is the easiest thing you can do for it.</p>
+              <ul class="ticks">
+                <li data-i18n="features.charge.b1">Stop at 60%, stop at 80%, or charge all the way</li>
+                <li data-i18n="features.charge.b2">Held in the hardware, so it still applies while the machine is off</li>
+                <li data-i18n="features.charge.b3">Survives reboots and SteamOS updates</li>
+              </ul>
+            </div>
+            <div class="feature-visual">
+              <div class="device">
+                <div class="device-bar"><span class="device-dot"></span><span data-i18n="mock.charge.name">Charge Limit</span></div>
+                <div class="panel">
+                  <p class="panel-status" data-i18n="mock.charge.status">Charging stops at 80%</p>
+                  <p class="panel-sub" data-i18n="mock.charge.sub">Starts charging again once it falls below 75%</p>
+                  <div class="panel-row"><span data-i18n="mock.charge.limit">Charge limit</span><span class="pill" data-i18n="mock.charge.limitValue">Stop at 80%</span></div>
+                  <div class="panel-row"><span data-i18n="mock.details">Show technical details</span><span class="switch"></span></div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="feature">
+            <div>
+              <h3 data-i18n="features.sensors.title">Working power sensors</h3>
+              <p data-i18n="features.sensors.text">On an untouched Intel handheld the performance overlay leaves the processor and graphics power fields blank, because the counters it looks for are never exposed. This connects them, so the overlay reports real watts and you can finally see what each of your settings costs.</p>
+              <ul class="ticks">
+                <li data-i18n="features.sensors.b1">Real processor package power and Intel integrated graphics power</li>
+                <li data-i18n="features.sensors.b2">Built on the standard Intel interfaces, not a private telemetry stack</li>
+                <li data-i18n="features.sensors.b3">Works with the overlay you already use</li>
+              </ul>
+            </div>
+            <div class="feature-visual">
+              <div class="device">
+                <div class="device-bar"><span class="device-dot"></span><span data-i18n="mock.hud.name">Performance overlay</span></div>
+                <div class="panel">
+                  <div class="panel-row first"><span>CPU</span><span class="pill">4.5 W</span></div>
+                  <div class="panel-row"><span data-i18n="mock.hud.gpu">Graphics</span><span class="pill">8.6 W</span></div>
+                  <div class="panel-row"><span data-i18n="mock.hud.total">Whole machine</span><span class="pill">20.1 W</span></div>
+                  <div class="panel-row"><span>FPS</span><span class="pill">60</span></div>
+                </div>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="section" id="install">
+          <div class="section-head">
+            <h2 data-i18n="install.title">Installing it</h2>
+            <p data-i18n="install.lead">You need an Intel handheld you can reach over SSH, with Decky Loader already installed on it.</p>
+          </div>
+          <div class="cards">
+            <div class="card">
+              <span class="tag now" data-i18n="install.source.tag">Available now</span>
+              <h3 data-i18n="install.source.title">Install from source</h3>
+              <p data-i18n="install.source.text">Run this on your computer, not on the handheld. It installs the background service, the command line tool and both Steam panels, then starts the service.</p>
+              <div class="code-block">
+                <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.on">on your computer</span></div>
+                <pre><code>git clone https://github.com/rivoreo/steamos-intel-handheld
 cd steamos-intel-handheld
-scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
+scripts/install-on-device.sh deck@YOUR-HANDHELD</code></pre>
+              </div>
             </div>
-          </aside>
-        </section>
-
-        <section class="section" aria-labelledby="answers-title">
-          <div class="section-heading">
-            <h2 id="answers-title" data-i18n="answers.title">What this is, in plain terms.</h2>
-            <p data-i18n="answers.lead">Four questions worth answering before you install anything on your handheld.</p>
-          </div>
-          <div class="info-grid">
-            <article class="info-card">
-              <h3 data-i18n="answers.what.title">What it is</h3>
-              <p data-i18n="answers.what.text">A package plus two panels in the Steam quick access menu: Game Power, which manages power while a game runs, and Charge Limit, which stops charging before the battery is full.</p>
-            </article>
-            <article class="info-card">
-              <h3 data-i18n="answers.can.title">What it can do</h3>
-              <p data-i18n="answers.can.text">Hold your frame rate using less power, drop the frame rate while you are not touching the device, stop charging at 60% or 80% to slow battery ageing, and let MangoHud read real CPU and graphics power.</p>
-            </article>
-            <article class="info-card">
-              <h3 data-i18n="answers.why.title">Why it exists</h3>
-              <p data-i18n="answers.why.text">SteamOS assumes AMD hardware. On an Intel handheld the power controls do not reach the right knobs and MangoHud cannot see the sensors, so the built-in tools report nothing useful and manage power badly.</p>
-            </article>
-            <article class="info-card">
-              <h3 data-i18n="answers.install.title">How to install</h3>
-              <p data-i18n="answers.install.text">One command imports the signing key, adds the package repository and installs everything. Then turn on the two panels in Decky Loader. Details below.</p>
-            </article>
-          </div>
-        </section>
-
-        <section class="section" aria-labelledby="capabilities-title">
-          <div class="section-heading">
-            <h2 id="capabilities-title" data-i18n="capabilities.title">What you get.</h2>
-            <p data-i18n="capabilities.lead">Everything here is tested on real hardware before release, and the measurements behind these claims are published in the repository.</p>
-          </div>
-          <div class="capability-grid">
-            <article class="capability">
-              <h3 data-i18n="capability.tdp.title">Game Power</h3>
-              <p data-i18n="capability.tdp.text">Holds the frame rate you asked for at the lowest power the scene actually needs, instead of running the chip flat out and hoping. Backs off immediately if frame pacing suffers.</p>
-            </article>
-            <article class="capability">
-              <h3 data-i18n="capability.rapl.title">Saves power while you are away</h3>
-              <p data-i18n="capability.rapl.text">A game left running with nobody holding the device drops to 30 FPS, measured at around 26% less power, and returns to full speed the moment you touch a button.</p>
-            </article>
-            <article class="capability">
-              <h3 data-i18n="capability.mangohud.title">Charge Limit</h3>
-              <p data-i18n="capability.mangohud.text">Stop charging at 60% or 80%. Keeping a battery off a full charge slows how fast it ages, which matters if the device mostly sits plugged in.</p>
-            </article>
-            <article class="capability">
-              <h3 data-i18n="capability.repo.title">Working power sensors</h3>
-              <p data-i18n="capability.repo.text">MangoHud can read real CPU package power and Intel integrated graphics power, so the overlay shows actual watts instead of blanks.</p>
-            </article>
-            <article class="capability">
-              <h3 data-i18n="capability.qemu.title">Signed updates</h3>
-              <p data-i18n="capability.qemu.text">Delivered through a signed pacman repository, so updates arrive the normal way and pacman verifies them against a pinned key.</p>
-            </article>
-            <article class="capability">
-              <h3 data-i18n="capability.verify.title">Tested on the real device</h3>
-              <p data-i18n="capability.verify.text">Developed and measured on an MSI Claw 8 AI+. Claims about power and frame pacing come from on-device measurements, not estimates.</p>
-            </article>
-          </div>
-        </section>
-
-        <section class="section" id="install" aria-labelledby="install-title">
-          <div class="section-heading">
-            <h2 id="install-title" data-i18n="install.title">Installing.</h2>
-            <p data-i18n="install.lead">The signed package repository is not published yet, so the one-line install below will not work until it is. Until then, install from source onto a handheld you can reach over SSH.</p>
-          </div>
-
-          <div class="install-layout">
-            <article class="install-panel">
-              <div class="card-heading">
-                <h3 data-i18n="install.bootstrap.title">Install from source (works today)</h3>
-                <span class="status"><span class="status-dot" aria-hidden="true"></span><span data-i18n="status.installChannelClosed">Install from source for now</span></span>
-              </div>
+            <div class="card">
+              <span class="tag later" data-i18n="install.package.tag">Not published yet</span>
+              <h3 data-i18n="install.package.title">Install from the package repository</h3>
+              <p data-i18n="install.package.text">The signed pacman repository is not live yet, so this configuration has nothing to download from today. Once it is published, updates will arrive through pacman like any other package, and the pinned signing key is what makes that safe.</p>
               <div class="code-block">
-                <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.target">SteamOS target</span></div>
-                <pre><code>curl -fsSL https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/bootstrap.sh | sudo bash</code></pre>
-              </div>
-              <p class="note" data-i18n="install.bootstrap.note">Clone the repository on your computer and run the installer against the handheld. It copies the service, the CLI and both Decky panels, then enables the background service. Decky Loader must already be installed on the handheld.</p>
-            </article>
-
-            <article class="install-panel">
-              <h3 data-i18n="install.pacman.title">One-line install (once the repository is published)</h3>
-              <div class="code-block">
-                <div class="code-label"><span>pacman.conf</span><span data-i18n="code.planned">not published yet</span></div>
+                <div class="code-label"><span data-i18n="code.pacman">pacman.conf</span><span data-i18n="install.package.tag">Not published yet</span></div>
                 <pre><code>[rivoreo-steamos]
 SigLevel = Required TrustedOnly
 Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$arch</code></pre>
               </div>
-              <ul class="list">
-                <li data-i18n="install.pacman.item1">This command is not usable yet: the signing key and package database are not on the server, so it will fail at the first download.</li>
-                <li data-i18n="install.pacman.item2">When it does work it will import the pinned Rivoreo signing key, add the pacman repository and install the package.</li>
-                <li data-i18n="install.pacman.item3">Packages and repository metadata will be signed by the Rivoreo release key, and pacman will verify them.</li>
+            </div>
+          </div>
+          <div class="card usage" id="usage">
+              <h3 data-i18n="install.after.title">Where it shows up</h3>
+              <p data-i18n="install.after.text">Everything lives in the Steam quick access menu, the one behind the button with three dots.</p>
+              <ul class="ticks">
+                <li data-i18n="install.after.b1">Open the quick access menu and pick the Decky plug icon</li>
+                <li data-i18n="install.after.b2">Game Power and Charge Limit are both listed there</li>
+                <li data-i18n="install.after.b3">Sensible defaults are already applied, so there is nothing you must configure</li>
               </ul>
-            </article>
-
-            <article class="install-panel wide">
-              <div class="card-heading">
-                <h3 data-i18n="release.title">Release state</h3>
-                <span class="status waiting"><span class="status-dot warning" aria-hidden="true"></span><span data-i18n="status.candidateHidden">Candidate builds hidden</span></span>
-              </div>
-              <ul class="list">
-                <li data-i18n="release.stable">No stable release has been published to the package repository yet.</li>
-                <li data-i18n="release.candidate">Release candidates build and verify signed artifacts without deploying them.</li>
-                <li data-i18n="release.users">Install from source until the repository goes live.</li>
-                <li data-i18n="release.maintainers">Maintainers inspect candidate artifacts in GitHub Actions.</li>
-              </ul>
-            </article>
           </div>
         </section>
 
-        <section class="section" id="usage" aria-labelledby="usage-title">
-          <div class="section-heading">
-            <h2 id="usage-title" data-i18n="usage.title">Using it.</h2>
-            <p data-i18n="usage.lead">Both panels live in the Steam quick access menu, under the Decky plug icon.</p>
+        <section class="section" id="faq">
+          <div class="section-head">
+            <h2 data-i18n="faq.title">Questions worth asking</h2>
           </div>
-          <div class="capability-grid">
-            <article class="capability">
-              <h3 data-i18n="usage.power.title">Game Power</h3>
-              <p data-i18n="usage.power.text">Pick a power profile and, if you want, a frame rate target. Automatic follows whether you are on battery or plugged in. Leave the frame target on Automatic and it follows the limit you already set in Steam.</p>
-            </article>
-            <article class="capability">
-              <h3 data-i18n="usage.charge.title">Charge Limit</h3>
-              <p data-i18n="usage.charge.text">Choose 60%, 80%, or charge to full. The setting lives in the hardware, so it keeps working after a reboot and while the device is switched off.</p>
-            </article>
-            <article class="capability">
-              <h3 data-i18n="usage.hud.title">Seeing the numbers</h3>
-              <p data-i18n="usage.hud.text">Turn on Steam's performance overlay to watch CPU and graphics power while you play. Each panel also has a technical details toggle, off by default.</p>
-            </article>
+          <div class="faq">
+            <details>
+              <summary data-i18n="faq.q1">Which handhelds does this support?</summary>
+              <p data-i18n="faq.a1">It is developed and measured on an MSI Claw 8 AI+. Other Intel handhelds may well work, but none have been tested, and the charge limit in particular speaks to MSI hardware directly. When it cannot recognise your machine it says so rather than guessing.</p>
+            </details>
+            <details>
+              <summary data-i18n="faq.q2">Can it damage my handheld?</summary>
+              <p data-i18n="faq.a2">It only ever lowers power below the limits you have already set, never raises them, and it records the original state before touching anything so it can put everything back. If a write fails it stops rather than carrying on blind. The charge limit uses the same controller setting the factory firmware uses.</p>
+            </details>
+            <details>
+              <summary data-i18n="faq.q3">Will a SteamOS update undo it?</summary>
+              <p data-i18n="faq.a3">A SteamOS update replaces the system partition, which is why the installed files are restored at boot and every setting that matters is kept outside that partition. The charge limit lives in the hardware, so updates cannot reach it at all.</p>
+            </details>
+            <details>
+              <summary data-i18n="faq.q4">Does it send any data anywhere?</summary>
+              <p data-i18n="faq.a4">No. There is no account, no telemetry and no network access while it runs. Measurements stay on the device, and the figures quoted on this page were taken by hand and published in the repository.</p>
+            </details>
+            <details>
+              <summary data-i18n="faq.q5">Do I have to use the panels?</summary>
+              <p data-i18n="faq.a5">No. Every setting is reachable from a command line tool, and the whole thing can be set to watch without acting, or switched off entirely, from either the panel or the command line.</p>
+            </details>
           </div>
         </section>
-      </main>
+      </div>
+    </main>
 
-      <footer>
-        <span data-i18n="footer.status">rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos</span>
-        <a href="https://github.com/rivoreo/steamos-intel-handheld">github.com/rivoreo/steamos-intel-handheld</a>
-      </footer>
-    </div>
+    <footer>
+      <div class="wrap">
+        <div class="foot">
+          <a href="https://github.com/rivoreo/steamos-intel-handheld" data-i18n="footer.source">Source on GitHub</a>
+          <a href="https://github.com/rivoreo/steamos-intel-handheld/issues" data-i18n="footer.issues">Report a problem</a>
+          <span data-i18n="footer.license">MIT licensed</span>
+        </div>
+        <p class="repo-line">https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos</p>
+      </div>
+    </footer>
 
     <script>
       const TRANSLATIONS = {
-        "en": {
-          "meta.title": "SteamOS support for Intel handhelds",
-          "meta.description": "Makes SteamOS behave properly on Intel handhelds: longer battery life while gaming, a battery charge limit, and working power sensors. Installed from a signed pacman repository.",
-          "brand.name": "steamos-intel-handheld",
-          "status.repositoryNotActivated": "Package repository not published yet",
-          "status.installChannelClosed": "Install from source for now",
-          "status.candidateHidden": "Candidate builds hidden",
-          "nav.install": "Install",
-          "usage.title": "Using it.",
-          "usage.lead": "Both panels live in the Steam quick access menu, under the Decky plug icon.",
-          "usage.power.title": "Game Power",
-          "usage.power.text": "Pick a power profile and, if you want, a frame rate target. Automatic follows whether you are on battery or plugged in. Leave the frame target on Automatic and it follows the limit you already set in Steam.",
-          "usage.charge.title": "Charge Limit",
-          "usage.charge.text": "Choose 60%, 80%, or charge to full. The setting lives in the hardware, so it keeps working after a reboot and while the device is switched off.",
-          "usage.hud.title": "Seeing the numbers",
-          "usage.hud.text": "Turn on Steam's performance overlay to watch CPU and graphics power while you play. Each panel also has a technical details toggle, off by default.",
-          "nav.usage": "Use",
-          "nav.github": "GitHub",
-          "hero.title": "SteamOS support for Intel handhelds",
-          "hero.lead": "SteamOS is built around AMD handhelds, so parts of it do not work on Intel hardware. This adds what is missing: two panels in the Steam menu that manage power while you play and protect the battery, plus the sensor plumbing MangoHud needs to show real numbers.",
-          "hero.primaryCta": "Install it",
-          "hero.secondaryCta": "Read the source",
-          "preview.title": "Install preview",
-          "flow.ui.title": "1. You pick a frame rate",
-          "flow.ui.text": "or let it choose one",
-          "flow.manager.title": "2. It watches frame times",
-          "flow.manager.text": "not just averages",
-          "flow.remote.title": "3. It lowers power step by step",
-          "flow.remote.text": "graphics clock and power budget together, backing off the moment pacing suffers",
-          "flow.power.title": "4. You keep your frame rate",
-          "flow.power.text": "on less power",
-          "flow.hud.title": "5. MangoHud shows it",
-          "flow.hud.text": "real CPU and GPU watts",
-          "code.shell": "Shell",
-          "code.preview": "install from source",
-          "code.target": "SteamOS target",
-          "code.planned": "not published yet",
-          "answers.title": "What this is, in plain terms.",
-          "answers.lead": "Four questions worth answering before you install anything on your handheld.",
-          "answers.what.title": "What it is",
-          "answers.what.text": "A package plus two panels in the Steam quick access menu: Game Power, which manages power while a game runs, and Charge Limit, which stops charging before the battery is full.",
-          "answers.can.title": "What it can do",
-          "answers.can.text": "Hold your frame rate using less power, drop the frame rate while you are not touching the device, stop charging at 60% or 80% to slow battery ageing, and let MangoHud read real CPU and graphics power.",
-          "answers.why.title": "Why it exists",
-          "answers.why.text": "SteamOS assumes AMD hardware. On an Intel handheld the power controls do not reach the right knobs and MangoHud cannot see the sensors, so the built-in tools report nothing useful and manage power badly.",
-          "answers.install.title": "How to install",
-          "answers.install.text": "One command imports the signing key, adds the package repository and installs everything. Then turn on the two panels in Decky Loader. Details below.",
-          "capabilities.title": "What you get.",
-          "capabilities.lead": "Everything here is tested on real hardware before release, and the measurements behind these claims are published in the repository.",
-          "capability.tdp.title": "Game Power",
-          "capability.tdp.text": "Holds the frame rate you asked for at the lowest power the scene actually needs, instead of running the chip flat out and hoping. Backs off immediately if frame pacing suffers.",
-          "capability.rapl.title": "Saves power while you are away",
-          "capability.rapl.text": "A game left running with nobody holding the device drops to 30 FPS, measured at around 26% less power, and returns to full speed the moment you touch a button.",
-          "capability.mangohud.title": "Charge Limit",
-          "capability.mangohud.text": "Stop charging at 60% or 80%. Keeping a battery off a full charge slows how fast it ages, which matters if the device mostly sits plugged in.",
-          "capability.repo.title": "Working power sensors",
-          "capability.repo.text": "MangoHud can read real CPU package power and Intel integrated graphics power, so the overlay shows actual watts instead of blanks.",
-          "capability.qemu.title": "Signed updates",
-          "capability.qemu.text": "Delivered through a signed pacman repository, so updates arrive the normal way and pacman verifies them against a pinned key.",
-          "capability.verify.title": "Tested on the real device",
-          "capability.verify.text": "Developed and measured on an MSI Claw 8 AI+. Claims about power and frame pacing come from on-device measurements, not estimates.",
-          "install.title": "Installing.",
-          "install.lead": "The signed package repository is not published yet, so the one-line install below will not work until it is. Until then, install from source onto a handheld you can reach over SSH.",
-          "install.bootstrap.title": "Install from source (works today)",
-          "install.bootstrap.note": "Clone the repository on your computer and run the installer against the handheld. It copies the service, the CLI and both Decky panels, then enables the background service. Decky Loader must already be installed on the handheld.",
-          "install.pacman.title": "One-line install (once the repository is published)",
-          "install.pacman.item1": "This command is not usable yet: the signing key and package database are not on the server, so it will fail at the first download.",
-          "install.pacman.item2": "When it does work it will import the pinned Rivoreo signing key, add the pacman repository and install the package.",
-          "install.pacman.item3": "Packages and repository metadata will be signed by the Rivoreo release key, and pacman will verify them.",
-          "release.title": "Release state",
-          "release.stable": "No stable release has been published to the package repository yet.",
-          "release.candidate": "Release candidates build and verify signed artifacts without deploying them.",
-          "release.users": "Install from source until the repository goes live.",
-          "release.maintainers": "Maintainers inspect candidate artifacts in GitHub Actions.",
-          "footer.status": "rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos"
-        },
-        "zh-CN": {
-          "meta.title": "面向 Intel 掌机的 SteamOS 支持层",
-          "meta.description": "让 SteamOS 在 Intel 掌机上正常工作：游戏时更省电、可设电池充电上限、传感器能读到真实数值。通过签名的 pacman 软件源安装。",
-          "brand.name": "steamos-intel-handheld",
-          "status.repositoryNotActivated": "软件源尚未发布",
-          "status.installChannelClosed": "目前请从源代码安装",
-          "status.candidateHidden": "候选版本隐藏",
-          "nav.install": "安装",
-          "usage.title": "怎么用。",
-          "usage.lead": "两个面板都在 Steam 快捷菜单里，Decky 那个插头图标底下。",
-          "usage.power.title": "游戏电力",
-          "usage.power.text": "选一个电力模式，想要的话再选一个帧数目标。「自动」会依照你在用电池还是插着电切换。帧数目标留在「自动」，它就会跟随你原本在 Steam 里设置的限制。",
-          "usage.charge.title": "充电上限",
-          "usage.charge.text": "选 60%、80%，或充满。这个设置存在硬件里，所以重启之后、甚至关机期间都持续有效。",
-          "usage.hud.title": "想看到数字",
-          "usage.hud.text": "打开 Steam 的性能叠加层，就能在游戏中看到处理器和显卡功耗。两个面板也各有一个「显示技术细节」开关，默认关闭。",
-          "nav.usage": "怎么用",
-          "nav.github": "GitHub",
-          "hero.title": "面向 Intel 掌机的 SteamOS 支持层",
-          "hero.lead": "SteamOS 是围绕 AMD 掌机设计的，有些部分在 Intel 硬件上根本不工作。这个项目补上缺失的东西：Steam 菜单里的两个面板，一个在你游戏时管理功耗、一个保护电池，加上让 MangoHud 能读到真实数值所需的传感器管线。",
-          "hero.primaryCta": "安装",
-          "hero.secondaryCta": "看源代码",
-          "preview.title": "安装预览",
-          "flow.ui.title": "1. 你选一个帧数",
-          "flow.ui.text": "或让它自己判断",
-          "flow.manager.title": "2. 它看实际的帧时间",
-          "flow.manager.text": "不只看平均值",
-          "flow.remote.title": "3. 一级一级降低功耗",
-          "flow.remote.text": "显卡频率和功耗预算一起收，一发现节奏变差就立刻退回",
-          "flow.power.title": "4. 帧数保持住",
-          "flow.power.text": "但功耗更低",
-          "flow.hud.title": "5. MangoHud 看得到",
-          "flow.hud.text": "真实的处理器与显卡瓦数",
-          "code.shell": "Shell",
-          "code.preview": "从源代码安装",
-          "code.target": "SteamOS 目标机",
-          "code.planned": "尚未发布",
-          "answers.title": "用大白话讲，这是什么。",
-          "answers.lead": "在你往掌机里装任何东西之前，这四个问题值得先有答案。",
-          "answers.what.title": "它是什么？",
-          "answers.what.text": "一个软件包，加上 Steam 快捷菜单里的两个面板：「游戏电力」在游戏运行时管理功耗，「充电上限」让电池不要充到满。",
-          "answers.can.title": "它能做什么？",
-          "answers.can.text": "用更低的功耗维持你要的帧数；你没在操作的时候自动降帧；充到 60% 或 80% 就停止充电以减缓电池老化；让 MangoHud 读得到真实的处理器与显卡功耗。",
-          "answers.why.title": "为什么需要它？",
-          "answers.why.text": "SteamOS 默认你用的是 AMD 硬件。在 Intel 掌机上，内置的功耗控制够不到正确的旋钮，MangoHud 也读不到传感器 —— 结果就是数值一片空白，功耗也管得不好。",
-          "answers.install.title": "如何安装？",
-          "answers.install.text": "一行命令导入签名密钥、加入软件源并完成安装。然后在 Decky Loader 里打开那两个面板。详细步骤在下面。",
-          "capabilities.title": "你会得到什么。",
-          "capabilities.lead": "这里的每一项都在真实硬件上测过才发布，而支撑这些说法的测量数据都公开在源代码库里。",
-          "capability.tdp.title": "游戏电力",
-          "capability.tdp.text": "用这个场景真正需要的最低功耗，维持你要求的帧数 —— 而不是把芯片催到底然后祈祷。一旦帧节奏变差就立刻退回。",
-          "capability.rapl.title": "放着不动时自动省电",
-          "capability.rapl.text": "游戏开着但没人在操作时会降到 30 帧，实测约省 26% 功耗；你一按下按键就立刻恢复。",
-          "capability.mangohud.title": "充电上限",
-          "capability.mangohud.text": "充到 60% 或 80% 就停。不让电池长期处于满电可以减缓老化速度 —— 如果你的机器大部分时间都插着电，这点很有感。",
-          "capability.repo.title": "传感器能用了",
-          "capability.repo.text": "MangoHud 读得到真实的处理器封装功耗和 Intel 核显功耗，叠加层上显示的是实际瓦数，不再是空白。",
-          "capability.qemu.title": "签名更新",
-          "capability.qemu.text": "通过签名的 pacman 软件源发布，更新用系统原本的方式送达，而且 pacman 会用固定的密钥验证。",
-          "capability.verify.title": "在真机上测过",
-          "capability.verify.text": "在 MSI Claw 8 AI+ 上开发与测量。关于功耗和帧节奏的说法都来自真机测量，不是估算。",
-          "install.title": "安装方式。",
-          "install.lead": "签名软件源还没发布，所以下面那行一键安装目前还不能用。在那之前，请对一台你能用 SSH 连上的掌机从源代码安装。",
-          "install.bootstrap.title": "从源代码安装（现在就能用）",
-          "install.bootstrap.note": "在你的电脑上克隆这个仓库，然后对掌机运行安装脚本。它会复制服务、命令行工具和两个 Decky 面板，并启用后台服务。掌机上必须已经装好 Decky Loader。",
-          "install.pacman.title": "一键安装（软件源发布之后）",
-          "install.pacman.item1": "这行命令目前还不能用：签名密钥和软件包数据库都还不在服务器上，第一步下载就会失败。",
-          "install.pacman.item2": "等它可用之后，会导入固定的 Rivoreo 签名密钥、加入 pacman 软件源并安装软件包。",
-          "install.pacman.item3": "软件包与软件源元数据会由 Rivoreo 发布密钥签名，pacman 会加以验证。",
-          "release.title": "发布状态",
-          "release.stable": "目前还没有任何稳定版本发布到软件源。",
-          "release.candidate": "候选版本会构建并验证签名产物，但不会部署。",
-          "release.users": "在软件源上线之前，请从源代码安装。",
-          "release.maintainers": "维护者可在 GitHub Actions 查看候选产物。",
-          "footer.status": "rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos"
-        },
-        "zh-TW": {
-          "meta.title": "針對 Intel 掌機的 SteamOS 支援層",
-          "meta.description": "讓 SteamOS 在 Intel 掌機上正常運作：遊戲時更省電、可設電池充電上限、感測器讀得到真實數值。透過簽章的 pacman 套件庫安裝。",
-          "brand.name": "steamos-intel-handheld",
-          "status.repositoryNotActivated": "套件庫尚未發佈",
-          "status.installChannelClosed": "目前請從原始碼安裝",
-          "status.candidateHidden": "候選版本隱藏",
-          "nav.install": "安裝",
-          "usage.title": "怎麼用。",
-          "usage.lead": "兩個面板都在 Steam 快速選單裡，Decky 那個插頭圖示底下。",
-          "usage.power.title": "遊戲電力",
-          "usage.power.text": "選一個電力模式，想要的話再選一個張數目標。「自動」會依照你在用電池還是插著電切換。張數目標留在「自動」，它就會跟隨你原本在 Steam 裡設定的限制。",
-          "usage.charge.title": "充電上限",
-          "usage.charge.text": "選 60%、80%，或充飽。這個設定存在硬體裡，所以重開機之後、甚至裝置關機期間都持續有效。",
-          "usage.hud.title": "想看到數字",
-          "usage.hud.text": "打開 Steam 的效能疊加層，就能在遊戲中看到處理器和繪圖功耗。兩個面板也各有一個「顯示技術細節」開關，預設關閉。",
-          "nav.usage": "怎麼用",
-          "nav.github": "GitHub",
-          "hero.title": "針對 Intel 掌機的 SteamOS 支援層",
-          "hero.lead": "SteamOS 是圍繞 AMD 掌機設計的，有些部分在 Intel 硬體上根本不會動。這個專案補上缺的東西：Steam 選單裡的兩個面板，一個在你玩的時候管理功耗、一個保護電池，加上讓 MangoHud 能讀到真實數值所需的感測器管線。",
-          "hero.primaryCta": "安裝",
-          "hero.secondaryCta": "看原始碼",
-          "preview.title": "安裝預覽",
-          "flow.ui.title": "1. 你選一個張數",
-          "flow.ui.text": "或讓它自己判斷",
-          "flow.manager.title": "2. 它看實際的影格時間",
-          "flow.manager.text": "不只看平均值",
-          "flow.remote.title": "3. 一階一階降低功耗",
-          "flow.remote.text": "繪圖頻率和功耗預算一起收，一發現節奏變差就立刻退回",
-          "flow.power.title": "4. 張數維持住",
-          "flow.power.text": "但功耗更低",
-          "flow.hud.title": "5. MangoHud 看得到",
-          "flow.hud.text": "真實的處理器與繪圖瓦數",
-          "code.shell": "Shell",
-          "code.preview": "從原始碼安裝",
-          "code.target": "SteamOS 目標機",
-          "code.planned": "尚未發佈",
-          "answers.title": "用白話講，這是什麼。",
-          "answers.lead": "在你往掌機裡裝任何東西之前，這四個問題值得先有答案。",
-          "answers.what.title": "它是什麼？",
-          "answers.what.text": "一個套件，加上 Steam 快速選單裡的兩個面板：「遊戲電力」在遊戲執行時管理功耗，「充電上限」讓電池不要充到滿。",
-          "answers.can.title": "它能做什麼？",
-          "answers.can.text": "用更低的功耗維持你要的張數；你沒在操作的時候自動降張數；充到 60% 或 80% 就停止充電以減緩電池老化；讓 MangoHud 讀得到真實的處理器與繪圖功耗。",
-          "answers.why.title": "為什麼需要它？",
-          "answers.why.text": "SteamOS 預設你用的是 AMD 硬體。在 Intel 掌機上，內建的功耗控制碰不到正確的旋鈕，MangoHud 也讀不到感測器 —— 結果就是數值一片空白，功耗也管得不好。",
-          "answers.install.title": "如何安裝？",
-          "answers.install.text": "一行指令匯入簽章金鑰、加入套件庫並完成安裝。接著在 Decky Loader 裡打開那兩個面板。詳細步驟在下面。",
-          "capabilities.title": "你會得到什麼。",
-          "capabilities.lead": "這裡的每一項都在真實硬體上測過才發佈，而支撐這些說法的量測數據都公開在原始碼庫裡。",
-          "capability.tdp.title": "遊戲電力",
-          "capability.tdp.text": "用這個場景真正需要的最低功耗，維持你要求的張數 —— 而不是把晶片催到底然後祈禱。一旦影格節奏變差就立刻退回。",
-          "capability.rapl.title": "放著不動時自動省電",
-          "capability.rapl.text": "遊戲開著但沒人在操作時會降到 30 張，實測約省 26% 功耗；你一按下按鍵就立刻恢復。",
-          "capability.mangohud.title": "充電上限",
-          "capability.mangohud.text": "充到 60% 或 80% 就停。不讓電池長期處於滿電可以減緩老化速度 —— 如果你的機器大部分時間都插著電，這點很有感。",
-          "capability.repo.title": "感測器能用了",
-          "capability.repo.text": "MangoHud 讀得到真實的處理器封裝功耗和 Intel 內顯功耗，疊加層上顯示的是實際瓦數，不再是空白。",
-          "capability.qemu.title": "簽章更新",
-          "capability.qemu.text": "透過簽章的 pacman 套件庫發佈，更新用系統原本的方式送達，而且 pacman 會用釘選的金鑰驗證。",
-          "capability.verify.title": "在真機上測過",
-          "capability.verify.text": "在 MSI Claw 8 AI+ 上開發與量測。關於功耗和影格節奏的說法都來自實機量測，不是估算。",
-          "install.title": "安裝方式。",
-          "install.lead": "簽名套件庫還沒發佈，所以下面那行一鍵安裝目前還不能用。在那之前，請對一台你能用 SSH 連上的掌機從原始碼安裝。",
-          "install.bootstrap.title": "從原始碼安裝（現在就能用）",
-          "install.bootstrap.note": "在你的電腦上複製這個原始碼庫，然後對掌機執行安裝腳本。它會複製服務、命令列工具和兩個 Decky 面板，並啟用背景服務。掌機上必須先裝好 Decky Loader。",
-          "install.pacman.title": "一鍵安裝（套件庫發佈之後）",
-          "install.pacman.item1": "這行指令目前還不能用：簽章金鑰和套件資料庫都還不在伺服器上，第一步下載就會失敗。",
-          "install.pacman.item2": "等它可用之後，會匯入釘選的 Rivoreo 簽章金鑰、加入 pacman 套件庫並安裝套件。",
-          "install.pacman.item3": "套件與套件庫中繼資料會由 Rivoreo 發佈金鑰簽名，pacman 會加以驗證。",
-          "release.title": "發佈狀態",
-          "release.stable": "目前還沒有任何穩定版本發佈到套件庫。",
-          "release.candidate": "候選版本會建置並驗證簽名產物，但不會部署。",
-          "release.users": "在套件庫上線之前，請從原始碼安裝。",
-          "release.maintainers": "維護者可在 GitHub Actions 檢視候選產物。",
-          "footer.status": "rivoreo.github.io/steamos-intel-handheld / rivoreo-steamos"
-        }
-      };
+  "en": {
+    "meta.title": "steamos-intel-handheld",
+    "meta.description": "Longer battery and steadier frame rates on Intel handhelds running SteamOS. Two panels in the Steam menu: Game Power and Charge Limit.",
+    "brand.name": "steamos-intel-handheld",
+    "nav.features": "Features",
+    "nav.install": "Install",
+    "nav.faq": "FAQ",
+    "nav.github": "GitHub",
+    "hero.eyebrow": "Built for the MSI Claw 8 AI+",
+    "hero.title": "Longer battery. Steadier frame rates.",
+    "hero.lead": "SteamOS was built for AMD handhelds. On Intel hardware its power controls reach for knobs that are not there, and the performance overlay reads nothing at all. This project supplies the missing layer, and puts two panels in the Steam menu to drive it.",
+    "hero.primaryCta": "Install it",
+    "hero.secondaryCta": "Read the source",
+    "hero.note": "Free and open source. No account, no telemetry.",
+    "mock.menu": "Steam quick access menu",
+    "mock.details": "Show technical details",
+    "mock.power.name": "Game Power",
+    "mock.power.status": "Holding steady at 60 FPS",
+    "mock.power.sub": "59 FPS now, 21.3 W",
+    "mock.power.status2": "Steady, and using less power",
+    "mock.power.sub2": "60 FPS now, 20.1 W",
+    "mock.power.profile": "Power profile",
+    "mock.power.profileValue": "Automatic",
+    "mock.power.profileValue2": "Save battery",
+    "mock.power.target": "Frame rate target",
+    "mock.power.targetValue": "Automatic (60)",
+    "mock.power.targetValue2": "60 FPS",
+    "mock.charge.name": "Charge Limit",
+    "mock.charge.status": "Charging stops at 80%",
+    "mock.charge.sub": "Starts charging again once it falls below 75%",
+    "mock.charge.limit": "Charge limit",
+    "mock.charge.limitValue": "Stop at 80%",
+    "mock.hud.name": "Performance overlay",
+    "mock.hud.gpu": "Graphics",
+    "mock.hud.total": "Whole machine",
+    "stat.idle": "power while you are not touching it",
+    "stat.load": "power at the same frame rate",
+    "stat.suspend": "draw in suspend",
+    "stat.note": "Measured on an MSI Claw 8 AI+ during real play. The readings behind each figure are published in the repository.",
+    "features.title": "What it does",
+    "features.lead": "Two panels, and the layer underneath that makes them possible.",
+    "features.power.title": "Game Power",
+    "features.power.text": "Most handheld power tools hand you a wattage slider and leave the guessing to you. This one starts from the frame rate instead: it finds the least power that still holds your target, and gives the power straight back the moment frame pacing suffers.",
+    "features.power.b1": "Put the device down and it settles to 30 FPS, then comes back on the first button press",
+    "features.power.b2": "Judges frame times rather than averages, so a stutter registers before you feel it",
+    "features.power.b3": "Never goes above the wattage or frame limit you set yourself",
+    "features.charge.title": "Charge Limit",
+    "features.charge.text": "A lithium battery held at full charge ages faster. If your handheld spends most of its life plugged in, stopping short of full is the easiest thing you can do for it.",
+    "features.charge.b1": "Stop at 60%, stop at 80%, or charge all the way",
+    "features.charge.b2": "Held in the hardware, so it still applies while the machine is off",
+    "features.charge.b3": "Survives reboots and SteamOS updates",
+    "features.sensors.title": "Working power sensors",
+    "features.sensors.text": "On an untouched Intel handheld the performance overlay leaves the processor and graphics power fields blank, because the counters it looks for are never exposed. This connects them, so the overlay reports real watts and you can finally see what each of your settings costs.",
+    "features.sensors.b1": "Real processor package power and Intel integrated graphics power",
+    "features.sensors.b2": "Built on the standard Intel interfaces, not a private telemetry stack",
+    "features.sensors.b3": "Works with the overlay you already use",
+    "install.title": "Installing it",
+    "install.lead": "You need an Intel handheld you can reach over SSH, with Decky Loader already installed on it.",
+    "install.source.tag": "Available now",
+    "install.source.title": "Install from source",
+    "install.source.text": "Run this on your computer, not on the handheld. It installs the background service, the command line tool and both Steam panels, then starts the service.",
+    "install.package.tag": "Not published yet",
+    "install.package.title": "Install from the package repository",
+    "install.package.text": "The signed pacman repository is not live yet, so this configuration has nothing to download from today. Once it is published, updates will arrive through pacman like any other package, and the pinned signing key is what makes that safe.",
+    "install.after.title": "Where it shows up",
+    "install.after.text": "Everything lives in the Steam quick access menu, the one behind the button with three dots.",
+    "install.after.b1": "Open the quick access menu and pick the Decky plug icon",
+    "install.after.b2": "Game Power and Charge Limit are both listed there",
+    "install.after.b3": "Sensible defaults are already applied, so there is nothing you must configure",
+    "code.shell": "Shell",
+    "code.on": "on your computer",
+    "code.pacman": "pacman.conf",
+    "faq.title": "Questions worth asking",
+    "faq.q1": "Which handhelds does this support?",
+    "faq.a1": "It is developed and measured on an MSI Claw 8 AI+. Other Intel handhelds may well work, but none have been tested, and the charge limit in particular speaks to MSI hardware directly. When it cannot recognise your machine it says so rather than guessing.",
+    "faq.q2": "Can it damage my handheld?",
+    "faq.a2": "It only ever lowers power below the limits you have already set, never raises them, and it records the original state before touching anything so it can put everything back. If a write fails it stops rather than carrying on blind. The charge limit uses the same controller setting the factory firmware uses.",
+    "faq.q3": "Will a SteamOS update undo it?",
+    "faq.a3": "A SteamOS update replaces the system partition, which is why the installed files are restored at boot and every setting that matters is kept outside that partition. The charge limit lives in the hardware, so updates cannot reach it at all.",
+    "faq.q4": "Does it send any data anywhere?",
+    "faq.a4": "No. There is no account, no telemetry and no network access while it runs. Measurements stay on the device, and the figures quoted on this page were taken by hand and published in the repository.",
+    "faq.q5": "Do I have to use the panels?",
+    "faq.a5": "No. Every setting is reachable from a command line tool, and the whole thing can be set to watch without acting, or switched off entirely, from either the panel or the command line.",
+    "footer.source": "Source on GitHub",
+    "footer.issues": "Report a problem",
+    "footer.license": "MIT licensed"
+  },
+  "zh-CN": {
+    "meta.title": "steamos-intel-handheld",
+    "meta.description": "让 Intel 掌机在 SteamOS 上更耐用、帧数更稳。Steam 菜单里的两个面板：游戏电力与充电上限。",
+    "brand.name": "steamos-intel-handheld",
+    "nav.features": "功能",
+    "nav.install": "安装",
+    "nav.faq": "常见问题",
+    "nav.github": "GitHub",
+    "hero.eyebrow": "为 MSI Claw 8 AI+ 打造",
+    "hero.title": "电池更耐用，帧数更稳",
+    "hero.lead": "SteamOS 是给 AMD 掌机做的。换到 Intel 硬件上，它的功耗控制去拧一些根本不存在的旋钮，性能浮层也读不出任何数值。这个项目把缺的那一层补上，并在 Steam 菜单里放了两个面板给你操作。",
+    "hero.primaryCta": "安装",
+    "hero.secondaryCta": "看源码",
+    "hero.note": "自由开源，不用注册，不收集任何数据。",
+    "mock.menu": "Steam 快捷菜单",
+    "mock.details": "显示技术细节",
+    "mock.power.name": "游戏电力",
+    "mock.power.status": "稳定维持 60 FPS",
+    "mock.power.sub": "当前 59 FPS，21.3 W",
+    "mock.power.status2": "一样稳，但更省电",
+    "mock.power.sub2": "当前 60 FPS，20.1 W",
+    "mock.power.profile": "电力模式",
+    "mock.power.profileValue": "自动",
+    "mock.power.profileValue2": "省电",
+    "mock.power.target": "帧数目标",
+    "mock.power.targetValue": "自动（60）",
+    "mock.power.targetValue2": "60 FPS",
+    "mock.charge.name": "充电上限",
+    "mock.charge.status": "充到 80% 就停",
+    "mock.charge.sub": "掉到 75% 以下才会再充",
+    "mock.charge.limit": "充电上限",
+    "mock.charge.limitValue": "充到 80% 就停",
+    "mock.hud.name": "性能浮层",
+    "mock.hud.gpu": "显卡",
+    "mock.hud.total": "整机",
+    "stat.idle": "放着不动时省下的功耗",
+    "stat.load": "同样帧数下省下的功耗",
+    "stat.suspend": "休眠时的功耗",
+    "stat.note": "在 MSI Claw 8 AI+ 上实机游戏中测得。每个数字背后的读数都公开在源码库里。",
+    "features.title": "它能做什么",
+    "features.lead": "两个面板，以及底下把它们撑起来的那一层。",
+    "features.power.title": "游戏电力",
+    "features.power.text": "多数掌机功耗工具给你一根瓦数滑杆，剩下的靠你猜。这个反过来，从帧数出发：找到还守得住你要的帧数的最低功耗，一旦帧节奏变差，立刻把功耗还回去。",
+    "features.power.b1": "把机器放下就降到 30 帧，按一下键马上回来",
+    "features.power.b2": "看的是帧时间而不是平均值，卡顿在你感觉到之前就被逮到",
+    "features.power.b3": "绝不超过你自己设的瓦数上限和帧数限制",
+    "features.charge.title": "充电上限",
+    "features.charge.text": "锂电池长期满电会老得更快。如果你的掌机大半时间都插着电，不充满是你能为它做的最省事的一件事。",
+    "features.charge.b1": "充到 60%、充到 80%，或者一路充满",
+    "features.charge.b2": "存在硬件里，关机期间照样有效",
+    "features.charge.b3": "重启和 SteamOS 更新都冲不掉",
+    "features.sensors.title": "能读出数的功耗传感器",
+    "features.sensors.text": "没动过的 Intel 掌机上，性能浮层里处理器和显卡功耗那两栏是空的，因为它要找的计数器压根没暴露出来。这个项目把它们接上，浮层就能报出真实瓦数，你也才看得到自己每一项设置到底花了多少电。",
+    "features.sensors.b1": "真实的处理器封装功耗与 Intel 核显功耗",
+    "features.sensors.b2": "走 Intel 标准接口，不是自己搭一套私有遥测",
+    "features.sensors.b3": "配合你本来就在用的浮层",
+    "install.title": "安装",
+    "install.lead": "你需要一台能用 SSH 连上的 Intel 掌机，上面已经装好 Decky Loader。",
+    "install.source.tag": "现在可用",
+    "install.source.title": "从源码安装",
+    "install.source.text": "在你的电脑上跑，不是在掌机上。它会装好后台服务、命令行工具和两个 Steam 面板，然后把服务启动起来。",
+    "install.package.tag": "尚未发布",
+    "install.package.title": "从软件源安装",
+    "install.package.text": "签名软件源还没上线，所以这段配置现在还没有东西可下。等它上线之后，更新就跟其他软件包一样通过 pacman 送达，而固定的签名密钥就是这件事安全的前提。",
+    "install.after.title": "装完在哪里找",
+    "install.after.text": "全都在 Steam 快捷菜单里，就是那个三个点按钮后面的菜单。",
+    "install.after.b1": "打开快捷菜单，选 Decky 的插头图标",
+    "install.after.b2": "游戏电力和充电上限都列在那里",
+    "install.after.b3": "默认值已经调好，你不需要先配置什么才能用",
+    "code.shell": "Shell",
+    "code.on": "在你的电脑上",
+    "code.pacman": "pacman.conf",
+    "faq.title": "你可能想问",
+    "faq.q1": "支持哪些掌机？",
+    "faq.a1": "在 MSI Claw 8 AI+ 上开发和实测。其他 Intel 掌机大概也能用，但都没测过，尤其充电上限是直接跟 MSI 的硬件打交道。认不出你的机器时，它会照实说，而不是猜。",
+    "faq.q2": "会不会把机器弄坏？",
+    "faq.a2": "它只会在你已经设好的上限之下往下调，绝不会往上抬；动任何东西之前都先记下原始状态，好还原回去。写入一旦失败就停手，不会蒙着继续。充电上限用的是原厂固件本来就在用的那个控制器设置。",
+    "faq.q3": "SteamOS 更新会不会把它冲掉？",
+    "faq.a3": "SteamOS 更新会整个换掉系统分区，所以装进去的文件会在开机时还原，重要的设置也都放在那个分区之外。充电上限本身存在硬件里，更新根本碰不到。",
+    "faq.q4": "会不会上传数据？",
+    "faq.a4": "不会。没有账号、没有遥测，运行时也不联网。测量数据都留在机器上，这个页面引用的数字是手动测的，原始读数公开在源码库里。",
+    "faq.q5": "一定要用那两个面板吗？",
+    "faq.a5": "不用。每一项设置都能从命令行操作，整套也可以设成只看不动，或者干脆关掉 —— 面板和命令行都做得到。",
+    "footer.source": "GitHub 源码",
+    "footer.issues": "反馈问题",
+    "footer.license": "MIT 授权"
+  },
+  "zh-TW": {
+    "meta.title": "steamos-intel-handheld",
+    "meta.description": "讓 Intel 掌機在 SteamOS 上更耐用、張數更穩。Steam 選單裡的兩個面板：遊戲電力與充電上限。",
+    "brand.name": "steamos-intel-handheld",
+    "nav.features": "功能",
+    "nav.install": "安裝",
+    "nav.faq": "常見問題",
+    "nav.github": "GitHub",
+    "hero.eyebrow": "為 MSI Claw 8 AI+ 打造",
+    "hero.title": "電池更耐用，張數更穩",
+    "hero.lead": "SteamOS 是給 AMD 掌機做的。換到 Intel 硬體上，它的功耗控制去轉一些根本不存在的旋鈕，效能疊加層也讀不出任何數值。這個專案把缺的那一層補上，並在 Steam 選單裡放了兩個面板給你操作。",
+    "hero.primaryCta": "安裝",
+    "hero.secondaryCta": "看原始碼",
+    "hero.note": "自由開源，不用註冊，不蒐集任何資料。",
+    "mock.menu": "Steam 快捷選單",
+    "mock.details": "顯示技術細節",
+    "mock.power.name": "遊戲電力",
+    "mock.power.status": "穩定維持 60 FPS",
+    "mock.power.sub": "目前 59 FPS，21.3 W",
+    "mock.power.status2": "一樣穩，但更省電",
+    "mock.power.sub2": "目前 60 FPS，20.1 W",
+    "mock.power.profile": "電力模式",
+    "mock.power.profileValue": "自動",
+    "mock.power.profileValue2": "省電",
+    "mock.power.target": "張數目標",
+    "mock.power.targetValue": "自動（60）",
+    "mock.power.targetValue2": "60 FPS",
+    "mock.charge.name": "充電上限",
+    "mock.charge.status": "充到 80% 就停",
+    "mock.charge.sub": "掉到 75% 以下才會再充",
+    "mock.charge.limit": "充電上限",
+    "mock.charge.limitValue": "充到 80% 就停",
+    "mock.hud.name": "效能疊加層",
+    "mock.hud.gpu": "繪圖",
+    "mock.hud.total": "整機",
+    "stat.idle": "放著不動時省下的功耗",
+    "stat.load": "同樣張數下省下的功耗",
+    "stat.suspend": "休眠時的功耗",
+    "stat.note": "在 MSI Claw 8 AI+ 上實機遊玩中量得。每個數字背後的讀數都公開在原始碼庫裡。",
+    "features.title": "它能做什麼",
+    "features.lead": "兩個面板，以及底下把它們撐起來的那一層。",
+    "features.power.title": "遊戲電力",
+    "features.power.text": "多數掌機功耗工具給你一根瓦數滑桿，剩下的靠你猜。這個反過來，從張數出發：找到還守得住你要的張數的最低功耗，一旦影格節奏變差，立刻把功耗還回去。",
+    "features.power.b1": "把機器放下就降到 30 張，按一下鍵馬上回來",
+    "features.power.b2": "看的是影格時間而不是平均值，卡頓在你感覺到之前就被逮到",
+    "features.power.b3": "絕不超過你自己設的瓦數上限和張數限制",
+    "features.charge.title": "充電上限",
+    "features.charge.text": "鋰電池長期滿電會老得更快。如果你的掌機大半時間都插著電，不充到滿是你能為它做的最省事的一件事。",
+    "features.charge.b1": "充到 60%、充到 80%，或者一路充飽",
+    "features.charge.b2": "存在硬體裡，關機期間照樣有效",
+    "features.charge.b3": "重開機和 SteamOS 更新都洗不掉",
+    "features.sensors.title": "讀得出數字的功耗感測器",
+    "features.sensors.text": "沒動過的 Intel 掌機上，效能疊加層裡處理器和繪圖功耗那兩欄是空的，因為它要找的計數器根本沒被暴露出來。這個專案把它們接上，疊加層就能報出真實瓦數，你也才看得到自己每一項設定到底花了多少電。",
+    "features.sensors.b1": "真實的處理器封裝功耗與 Intel 內顯功耗",
+    "features.sensors.b2": "走 Intel 標準介面，不是自己搭一套私有遙測",
+    "features.sensors.b3": "搭配你本來就在用的疊加層",
+    "install.title": "安裝",
+    "install.lead": "你需要一台能用 SSH 連上的 Intel 掌機，上面已經裝好 Decky Loader。",
+    "install.source.tag": "現在可用",
+    "install.source.title": "從原始碼安裝",
+    "install.source.text": "在你的電腦上跑，不是在掌機上。它會裝好背景服務、命令列工具和兩個 Steam 面板，然後把服務啟動起來。",
+    "install.package.tag": "尚未發佈",
+    "install.package.title": "從套件庫安裝",
+    "install.package.text": "簽名套件庫還沒上線，所以這段設定現在還沒有東西可下載。等它上線之後，更新就跟其他套件一樣透過 pacman 送達，而釘選的簽章金鑰就是這件事安全的前提。",
+    "install.after.title": "裝完在哪裡找",
+    "install.after.text": "全都在 Steam 快捷選單裡，就是那個三個點按鈕後面的選單。",
+    "install.after.b1": "打開快捷選單，選 Decky 的插頭圖示",
+    "install.after.b2": "遊戲電力和充電上限都列在那裡",
+    "install.after.b3": "預設值已經調好，你不需要先設定什麼才能用",
+    "code.shell": "Shell",
+    "code.on": "在你的電腦上",
+    "code.pacman": "pacman.conf",
+    "faq.title": "你可能想問",
+    "faq.q1": "支援哪些掌機？",
+    "faq.a1": "在 MSI Claw 8 AI+ 上開發和實測。其他 Intel 掌機大概也能用，但都沒測過，尤其充電上限是直接跟 MSI 的硬體打交道。認不出你的機器時，它會照實說，而不是用猜的。",
+    "faq.q2": "會不會把機器弄壞？",
+    "faq.a2": "它只會在你已經設好的上限之下往下調，絕不會往上抬；動任何東西之前都先記下原始狀態，好還原回去。寫入一旦失敗就停手，不會矇著繼續。充電上限用的是原廠韌體本來就在用的那個控制器設定。",
+    "faq.q3": "SteamOS 更新會不會把它洗掉？",
+    "faq.a3": "SteamOS 更新會整個換掉系統分割區，所以裝進去的檔案會在開機時還原，重要的設定也都放在那個分割區之外。充電上限本身存在硬體裡，更新根本碰不到。",
+    "faq.q4": "會不會上傳資料？",
+    "faq.a4": "不會。沒有帳號、沒有遙測，執行時也不連網。量測資料都留在機器上，這個頁面引用的數字是手動量的，原始讀數公開在原始碼庫裡。",
+    "faq.q5": "一定要用那兩個面板嗎？",
+    "faq.a5": "不用。每一項設定都能從命令列操作，整套也可以設成只看不動，或者乾脆關掉 —— 面板和命令列都做得到。",
+    "footer.source": "GitHub 原始碼",
+    "footer.issues": "回報問題",
+    "footer.license": "MIT 授權"
+  }
+};
 
       const STORAGE_KEY = "steamos-intel-handheld-language";
       const SUPPORTED_LOCALES = Object.keys(TRANSLATIONS);
