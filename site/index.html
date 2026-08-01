@@ -632,17 +632,17 @@
         <section class="section" id="features">
           <div class="section-head">
             <h2 data-i18n="features.title">What it does</h2>
-            <p data-i18n="features.lead">Two panels, and the layer underneath that makes them possible.</p>
+            <p data-i18n="features.lead">Two panels you use, and a service you never see.</p>
           </div>
 
           <article class="feature wide">
             <div>
               <h3 data-i18n="features.power.title">Game Power</h3>
-              <p data-i18n="features.power.text">Most handheld power tools hand you a wattage slider and leave the guessing to you. This one starts from the frame rate instead: it finds the least power that still holds your target, and gives the power straight back the moment frame pacing suffers. Two controls, shown above — everything else is a technical readout you can leave switched off.</p>
+              <p data-i18n="features.power.text">You say how many frames you want; it works out the rest.</p>
               <ul class="ticks">
-                <li data-i18n="features.power.b1">Put the device down and it settles to 30 FPS, then comes back on the first button press</li>
-                <li data-i18n="features.power.b2">Judges frame times rather than averages, so a stutter registers before you feel it</li>
-                <li data-i18n="features.power.b3">Never goes above the wattage or frame limit you set yourself</li>
+                <li data-i18n="features.power.b1">Put it down and it drops to 30 FPS. Touch a button and it is back.</li>
+                <li data-i18n="features.power.b2">The moment it stutters, it lets go. Battery life never costs you smoothness.</li>
+                <li data-i18n="features.power.b3">It only ever turns things down, and never past a limit you set yourself.</li>
               </ul>
             </div>
           </article>
@@ -650,11 +650,11 @@
           <article class="feature flipped">
             <div>
               <h3 data-i18n="features.charge.title">Charge Limit</h3>
-              <p data-i18n="features.charge.text">A lithium battery held at full charge ages faster. If your handheld spends most of its life plugged in, stopping short of full is the easiest thing you can do for it.</p>
+              <p data-i18n="features.charge.text">Batteries age fastest when they are charged to full and then left sitting there.</p>
               <ul class="ticks">
-                <li data-i18n="features.charge.b1">Stop at 60%, stop at 80%, or charge all the way</li>
-                <li data-i18n="features.charge.b2">Held in the hardware, so it still applies while the machine is off</li>
-                <li data-i18n="features.charge.b3">Survives reboots and SteamOS updates</li>
+                <li data-i18n="features.charge.b1">60%, 80%, or all the way to full — your call.</li>
+                <li data-i18n="features.charge.b2">The hardware remembers, so it survives shutdowns, reboots and SteamOS updates.</li>
+                <li data-i18n="features.charge.b3">Tops itself back up when it drifts too far down. Nothing for you to manage.</li>
               </ul>
             </div>
             <div class="feature-visual">
@@ -665,17 +665,23 @@
             </div>
           </article>
 
-          <article class="feature wide">
-            <div>
-              <h3 data-i18n="features.sensors.title">Working power sensors</h3>
-              <p data-i18n="features.sensors.text">On an untouched Intel handheld the performance overlay leaves the processor and graphics power fields blank, because the counters it looks for are never exposed. This connects them, so the overlay reports real watts and you can finally see what each of your settings costs.</p>
-              <ul class="ticks">
-                <li data-i18n="features.sensors.b1">Real processor package power and Intel integrated graphics power</li>
-                <li data-i18n="features.sensors.b2">Built on the standard Intel interfaces, not a private telemetry stack</li>
-                <li data-i18n="features.sensors.b3">Works with the overlay you already use</li>
-              </ul>
+          <div class="section-head" style="margin-top:2.5rem">
+            <h2 data-i18n="more.title">And a few things you will never think about again</h2>
+          </div>
+          <div class="cards">
+            <div class="card">
+              <h3 data-i18n="features.sensors.title">See what your settings actually cost</h3>
+              <p data-i18n="features.sensors.text">Want to know how much that setting you just changed really saved? On a stock Intel handheld you cannot: the processor and graphics wattage in the performance overlay stay blank forever. Install this and the numbers turn up.</p>
             </div>
-          </article>
+            <div class="card">
+              <h3 data-i18n="more.display.title">The screen at its real specification</h3>
+              <p data-i18n="more.display.text">Full 1920×1200, every refresh rate from 48 to 120 Hz, and the colour glitch that Intel handhelds hit under gamescope taken care of. Steam's refresh rate slider covers the whole range instead of a couple of safe guesses.</p>
+            </div>
+            <div class="card">
+              <h3 data-i18n="more.updates.title">A SteamOS update will not undo it</h3>
+              <p data-i18n="more.updates.text">SteamOS updates swap out the system partition, which is normally how additions like this quietly disappear. Everything is put back at the next boot, without you noticing it happened.</p>
+            </div>
+          </div>
         </section>
 
         <section class="section" id="install">
@@ -692,7 +698,7 @@
                 <div class="code-label"><span data-i18n="code.shell">Shell</span><span data-i18n="code.on">on your computer</span></div>
                 <pre><code>git clone https://github.com/rivoreo/steamos-intel-handheld
 cd steamos-intel-handheld
-scripts/install-on-device.sh deck@YOUR-HANDHELD</code></pre>
+scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
               </div>
             </div>
             <div class="card">
@@ -771,7 +777,7 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "nav.github": "GitHub",
     "hero.eyebrow": "Built for the MSI Claw 8 AI+",
     "hero.title": "Longer battery. Steadier frame rates.",
-    "hero.lead": "SteamOS was built for AMD handhelds. On Intel hardware its power controls reach for knobs that are not there, and the performance overlay reads nothing at all. This project supplies the missing layer, and puts two panels in the Steam menu to drive it.",
+    "hero.lead": "SteamOS was built for AMD handhelds. On an Intel one most of the power saving quietly does nothing: the settings you change have no effect, and the performance overlay leaves the wattage blank. This project hooks it back up, and gives you two panels in the Steam menu — one for how many frames you want and what they cost, one for how full the battery gets.",
     "hero.primaryCta": "Install it",
     "hero.secondaryCta": "Read the source",
     "hero.note": "Free and open source. No account, no telemetry.",
@@ -780,24 +786,21 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "stat.suspend": "draw in suspend",
     "stat.note": "Measured on an MSI Claw 8 AI+ during real play. The readings behind each figure are published in the repository.",
     "features.title": "What it does",
-    "features.lead": "Two panels, and the layer underneath that makes them possible.",
+    "features.lead": "Two panels you use, and a service you never see.",
     "features.power.title": "Game Power",
-    "features.power.text": "Most handheld power tools hand you a wattage slider and leave the guessing to you. This one starts from the frame rate instead: it finds the least power that still holds your target, and gives the power straight back the moment frame pacing suffers. Two controls, shown above — everything else is a technical readout you can leave switched off.",
-    "features.power.b1": "Put the device down and it settles to 30 FPS, then comes back on the first button press",
-    "features.power.b2": "Judges frame times rather than averages, so a stutter registers before you feel it",
-    "features.power.b3": "Never goes above the wattage or frame limit you set yourself",
+    "features.power.text": "You say how many frames you want; it works out the rest.",
+    "features.power.b1": "Put it down and it drops to 30 FPS. Touch a button and it is back.",
+    "features.power.b2": "The moment it stutters, it lets go. Battery life never costs you smoothness.",
+    "features.power.b3": "It only ever turns things down, and never past a limit you set yourself.",
     "features.charge.title": "Charge Limit",
-    "features.charge.text": "A lithium battery held at full charge ages faster. If your handheld spends most of its life plugged in, stopping short of full is the easiest thing you can do for it.",
-    "features.charge.b1": "Stop at 60%, stop at 80%, or charge all the way",
-    "features.charge.b2": "Held in the hardware, so it still applies while the machine is off",
-    "features.charge.b3": "Survives reboots and SteamOS updates",
-    "features.sensors.title": "Working power sensors",
-    "features.sensors.text": "On an untouched Intel handheld the performance overlay leaves the processor and graphics power fields blank, because the counters it looks for are never exposed. This connects them, so the overlay reports real watts and you can finally see what each of your settings costs.",
-    "features.sensors.b1": "Real processor package power and Intel integrated graphics power",
-    "features.sensors.b2": "Built on the standard Intel interfaces, not a private telemetry stack",
-    "features.sensors.b3": "Works with the overlay you already use",
+    "features.charge.text": "Batteries age fastest when they are charged to full and then left sitting there.",
+    "features.charge.b1": "60%, 80%, or all the way to full — your call.",
+    "features.charge.b2": "The hardware remembers, so it survives shutdowns, reboots and SteamOS updates.",
+    "features.charge.b3": "Tops itself back up when it drifts too far down. Nothing for you to manage.",
+    "features.sensors.title": "See what your settings actually cost",
+    "features.sensors.text": "Want to know how much that setting you just changed really saved? On a stock Intel handheld you cannot: the processor and graphics wattage in the performance overlay stay blank forever. Install this and the numbers turn up.",
     "install.title": "Installing it",
-    "install.lead": "You need an Intel handheld you can reach over SSH, with Decky Loader already installed on it.",
+    "install.lead": "You need an Intel handheld you can reach over SSH as root, with Decky Loader already installed on it.",
     "install.source.tag": "Available now",
     "install.source.title": "Install from source",
     "install.source.text": "Run this on your computer, not on the handheld. It installs the background service, the command line tool and both Steam panels, then starts the service.",
@@ -806,9 +809,9 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "install.package.text": "The signed pacman repository is not live yet, so this configuration has nothing to download from today. Once it is published, updates will arrive through pacman like any other package, and the pinned signing key is what makes that safe.",
     "install.after.title": "Where it shows up",
     "install.after.text": "Everything lives in the Steam quick access menu, the one behind the button with three dots.",
-    "install.after.b1": "Open the quick access menu and pick the Decky plug icon",
-    "install.after.b2": "Game Power and Charge Limit are both listed there",
-    "install.after.b3": "Sensible defaults are already applied, so there is nothing you must configure",
+    "install.after.b1": "Open the quick access menu and pick the Decky plug icon.",
+    "install.after.b2": "Game Power and Charge Limit are both listed there.",
+    "install.after.b3": "Sensible defaults are already applied, so there is nothing you must configure.",
     "code.shell": "Shell",
     "code.on": "on your computer",
     "code.pacman": "pacman.conf",
@@ -829,7 +832,12 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "shot.power.alt": "The Game Power panel open in the Steam quick access menu",
     "shot.power.caption": "The Game Power panel, captured on an MSI Claw 8 AI+",
     "shot.charge.alt": "The Charge Limit panel set to stop charging at 80 percent",
-    "shot.charge.caption": "The Charge Limit panel, captured on an MSI Claw 8 AI+"
+    "shot.charge.caption": "The Charge Limit panel, captured on an MSI Claw 8 AI+",
+    "more.title": "And a few things you will never think about again",
+    "more.display.title": "The screen at its real specification",
+    "more.display.text": "Full 1920×1200, every refresh rate from 48 to 120 Hz, and the colour glitch that Intel handhelds hit under gamescope taken care of. Steam's refresh rate slider covers the whole range instead of a couple of safe guesses.",
+    "more.updates.title": "A SteamOS update will not undo it",
+    "more.updates.text": "SteamOS updates swap out the system partition, which is normally how additions like this quietly disappear. Everything is put back at the next boot, without you noticing it happened."
   },
   "zh-CN": {
     "meta.title": "steamos-intel-handheld",
@@ -841,7 +849,7 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "nav.github": "GitHub",
     "hero.eyebrow": "为 MSI Claw 8 AI+ 打造",
     "hero.title": "电池更耐用，帧数更稳",
-    "hero.lead": "SteamOS 是给 AMD 掌机做的。换到 Intel 硬件上，它的功耗控制去拧一些根本不存在的旋钮，性能浮层也读不出任何数值。这个项目把缺的那一层补上，并在 Steam 菜单里放了两个面板给你操作。",
+    "hero.lead": "SteamOS 本来是给 AMD 掌机做的，换到 Intel 掌机上，省电的部分基本都失效：功耗设置调了没反应，性能监控里的瓦数一片空白。这个项目把它们接回去，并在 Steam 菜单里给你两个面板 —— 一个管游戏时要多少帧、花多少电，一个管电池充到几成就停。",
     "hero.primaryCta": "安装",
     "hero.secondaryCta": "看源码",
     "hero.note": "自由开源，不用注册，不收集任何数据。",
@@ -850,24 +858,21 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "stat.suspend": "休眠时的功耗",
     "stat.note": "在 MSI Claw 8 AI+ 上实机游戏中测得。每个数字背后的读数都公开在源码库里。",
     "features.title": "它能做什么",
-    "features.lead": "两个面板，以及底下把它们撑起来的那一层。",
+    "features.lead": "两个你会用到的面板，和一个你永远看不到的后台服务。",
     "features.power.title": "游戏电力",
-    "features.power.text": "多数掌机功耗工具给你一根瓦数滑杆，剩下的靠你猜。这个反过来，从帧数出发：找到还守得住你要的帧数的最低功耗，一旦帧节奏变差，立刻把功耗还回去。上面那张图里就两个选项，其余都是技术读数，不想看就关着。",
-    "features.power.b1": "把机器放下就降到 30 帧，按一下键马上回来",
-    "features.power.b2": "看的是帧时间而不是平均值，卡顿在你感觉到之前就被逮到",
-    "features.power.b3": "绝不超过你自己设的瓦数上限和帧数限制",
+    "features.power.text": "你只要说想要几帧，剩下的它来想办法。",
+    "features.power.b1": "放着不动会自己降到 30 帧，手一碰马上就回来。",
+    "features.power.b2": "一卡就放手，不会为了省电让你玩得难受。",
+    "features.power.b3": "只会往下调，绝不会超过你自己设的上限。",
     "features.charge.title": "充电上限",
-    "features.charge.text": "锂电池长期满电会老得更快。如果你的掌机大半时间都插着电，不充满是你能为它做的最省事的一件事。",
-    "features.charge.b1": "充到 60%、充到 80%，或者一路充满",
-    "features.charge.b2": "存在硬件里，关机期间照样有效",
-    "features.charge.b3": "重启和 SteamOS 更新都冲不掉",
-    "features.sensors.title": "能读出数的功耗传感器",
-    "features.sensors.text": "没动过的 Intel 掌机上，性能浮层里处理器和显卡功耗那两栏是空的，因为它要找的计数器压根没暴露出来。这个项目把它们接上，浮层就能报出真实瓦数，你也才看得到自己每一项设置到底花了多少电。",
-    "features.sensors.b1": "真实的处理器封装功耗与 Intel 核显功耗",
-    "features.sensors.b2": "走 Intel 标准接口，不是自己搭一套私有遥测",
-    "features.sensors.b3": "配合你本来就在用的浮层",
+    "features.charge.text": "电池一直充到满、又一直泡在满电，老得最快。",
+    "features.charge.b1": "60%、80%，或者就让它充满 —— 你决定。",
+    "features.charge.b2": "设置记在硬件里，关机、重启、系统更新都跑不掉。",
+    "features.charge.b3": "掉太多会自己补回来，你不用管它。",
+    "features.sensors.title": "终于看得到自己花了多少电",
+    "features.sensors.text": "想知道你刚才调的那个设置到底省了多少电？原厂的 Intel 掌机上你看不到 —— 性能监控里处理器和显卡的瓦数永远是空白。装上之后，数字就出来了。",
     "install.title": "安装",
-    "install.lead": "你需要一台能用 SSH 连上的 Intel 掌机，上面已经装好 Decky Loader。",
+    "install.lead": "你需要一台能用 SSH 以 root 连上的 Intel 掌机，上面已经装好 Decky Loader。",
     "install.source.tag": "现在可用",
     "install.source.title": "从源码安装",
     "install.source.text": "在你的电脑上跑，不是在掌机上。它会装好后台服务、命令行工具和两个 Steam 面板，然后把服务启动起来。",
@@ -876,9 +881,9 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "install.package.text": "签名软件源还没上线，所以这段配置现在还没有东西可下。等它上线之后，更新就跟其他软件包一样通过 pacman 送达，而固定的签名密钥就是这件事安全的前提。",
     "install.after.title": "装完在哪里找",
     "install.after.text": "全都在 Steam 快捷菜单里，就是那个三个点按钮后面的菜单。",
-    "install.after.b1": "打开快捷菜单，选 Decky 的插头图标",
-    "install.after.b2": "游戏电力和充电上限都列在那里",
-    "install.after.b3": "默认值已经调好，你不需要先配置什么才能用",
+    "install.after.b1": "打开快捷菜单，选 Decky 的插头图标。",
+    "install.after.b2": "游戏电力和充电上限都列在那里。",
+    "install.after.b3": "默认值已经调好，你不需要先配置什么才能用。",
     "code.shell": "Shell",
     "code.on": "在你的电脑上",
     "code.pacman": "pacman.conf",
@@ -899,7 +904,12 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "shot.power.alt": "Steam 快捷菜单里打开的游戏电力面板",
     "shot.power.caption": "游戏电力面板，摄于 MSI Claw 8 AI+ 实机",
     "shot.charge.alt": "设为充到 80% 就停的充电上限面板",
-    "shot.charge.caption": "充电上限面板，摄于 MSI Claw 8 AI+ 实机"
+    "shot.charge.caption": "充电上限面板，摄于 MSI Claw 8 AI+ 实机",
+    "more.title": "还有几件你以后不用再操心的事",
+    "more.display.title": "屏幕跑在它该有的规格上",
+    "more.display.text": "完整的 1920×1200，48 到 120 Hz 每一档刷新率，以及 Intel 掌机在 gamescope 下会遇到的那个颜色异常，都处理掉了。Steam 的刷新率滑杆终于是整个范围可选，而不是保守地给你两三档。",
+    "more.updates.title": "系统更新不会把它冲掉",
+    "more.updates.text": "SteamOS 更新会整个换掉系统分区 —— 这类外挂的东西通常就是这么无声无息消失的。这里所有东西都会在下次开机时放回去，你不会察觉发生过。"
   },
   "zh-TW": {
     "meta.title": "steamos-intel-handheld",
@@ -911,7 +921,7 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "nav.github": "GitHub",
     "hero.eyebrow": "為 MSI Claw 8 AI+ 打造",
     "hero.title": "電池更耐用，張數更穩",
-    "hero.lead": "SteamOS 是給 AMD 掌機做的。換到 Intel 硬體上，它的功耗控制去轉一些根本不存在的旋鈕，效能疊加層也讀不出任何數值。這個專案把缺的那一層補上，並在 Steam 選單裡放了兩個面板給你操作。",
+    "hero.lead": "SteamOS 本來是給 AMD 掌機做的，換到 Intel 掌機上，省電的部分幾乎都失效：功耗設定調了沒反應，效能監控裡的瓦數一片空白。這個專案把它們接回去，並在 Steam 選單裡給你兩個面板 —— 一個管遊戲時要多少張數、花多少電，一個管電池充到幾成就停。",
     "hero.primaryCta": "安裝",
     "hero.secondaryCta": "看原始碼",
     "hero.note": "自由開源，不用註冊，不蒐集任何資料。",
@@ -920,24 +930,21 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "stat.suspend": "休眠時的功耗",
     "stat.note": "在 MSI Claw 8 AI+ 上實機遊玩中量得。每個數字背後的讀數都公開在原始碼庫裡。",
     "features.title": "它能做什麼",
-    "features.lead": "兩個面板，以及底下把它們撐起來的那一層。",
+    "features.lead": "兩個你會用到的面板，和一個你永遠看不到的背景服務。",
     "features.power.title": "遊戲電力",
-    "features.power.text": "多數掌機功耗工具給你一根瓦數滑桿，剩下的靠你猜。這個反過來，從張數出發：找到還守得住你要的張數的最低功耗，一旦影格節奏變差，立刻把功耗還回去。上面那張圖裡就兩個選項，其餘都是技術讀數，不想看就關著。",
-    "features.power.b1": "把機器放下就降到 30 張，按一下鍵馬上回來",
-    "features.power.b2": "看的是影格時間而不是平均值，卡頓在你感覺到之前就被逮到",
-    "features.power.b3": "絕不超過你自己設的瓦數上限和張數限制",
+    "features.power.text": "你只要說想要幾張，剩下的它來想辦法。",
+    "features.power.b1": "放著不動會自己降到 30 張，手一碰馬上就回來。",
+    "features.power.b2": "一卡就放手，不會為了省電讓你玩得難受。",
+    "features.power.b3": "只會往下調，絕不會超過你自己設的上限。",
     "features.charge.title": "充電上限",
-    "features.charge.text": "鋰電池長期滿電會老得更快。如果你的掌機大半時間都插著電，不充到滿是你能為它做的最省事的一件事。",
-    "features.charge.b1": "充到 60%、充到 80%，或者一路充飽",
-    "features.charge.b2": "存在硬體裡，關機期間照樣有效",
-    "features.charge.b3": "重開機和 SteamOS 更新都洗不掉",
-    "features.sensors.title": "讀得出數字的功耗感測器",
-    "features.sensors.text": "沒動過的 Intel 掌機上，效能疊加層裡處理器和繪圖功耗那兩欄是空的，因為它要找的計數器根本沒被暴露出來。這個專案把它們接上，疊加層就能報出真實瓦數，你也才看得到自己每一項設定到底花了多少電。",
-    "features.sensors.b1": "真實的處理器封裝功耗與 Intel 內顯功耗",
-    "features.sensors.b2": "走 Intel 標準介面，不是自己搭一套私有遙測",
-    "features.sensors.b3": "搭配你本來就在用的疊加層",
+    "features.charge.text": "電池一直充到滿、又一直泡在滿電，老得最快。",
+    "features.charge.b1": "60%、80%，或者就讓它充飽 —— 你決定。",
+    "features.charge.b2": "設定記在硬體裡，關機、重開機、系統更新都跑不掉。",
+    "features.charge.b3": "掉太多會自己補回來，你不用管它。",
+    "features.sensors.title": "終於看得到自己花了多少電",
+    "features.sensors.text": "想知道你剛才調的那個設定到底省了多少電？原廠的 Intel 掌機上你看不到 —— 效能監控裡處理器和繪圖的瓦數永遠是空白。裝上之後，數字就出來了。",
     "install.title": "安裝",
-    "install.lead": "你需要一台能用 SSH 連上的 Intel 掌機，上面已經裝好 Decky Loader。",
+    "install.lead": "你需要一台能用 SSH 以 root 連上的 Intel 掌機，上面已經裝好 Decky Loader。",
     "install.source.tag": "現在可用",
     "install.source.title": "從原始碼安裝",
     "install.source.text": "在你的電腦上跑，不是在掌機上。它會裝好背景服務、命令列工具和兩個 Steam 面板，然後把服務啟動起來。",
@@ -946,9 +953,9 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "install.package.text": "簽名套件庫還沒上線，所以這段設定現在還沒有東西可下載。等它上線之後，更新就跟其他套件一樣透過 pacman 送達，而釘選的簽章金鑰就是這件事安全的前提。",
     "install.after.title": "裝完在哪裡找",
     "install.after.text": "全都在 Steam 快捷選單裡，就是那個三個點按鈕後面的選單。",
-    "install.after.b1": "打開快捷選單，選 Decky 的插頭圖示",
-    "install.after.b2": "遊戲電力和充電上限都列在那裡",
-    "install.after.b3": "預設值已經調好，你不需要先設定什麼才能用",
+    "install.after.b1": "打開快捷選單，選 Decky 的插頭圖示。",
+    "install.after.b2": "遊戲電力和充電上限都列在那裡。",
+    "install.after.b3": "預設值已經調好，你不需要先設定什麼才能用。",
     "code.shell": "Shell",
     "code.on": "在你的電腦上",
     "code.pacman": "pacman.conf",
@@ -969,7 +976,12 @@ Server = https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos/os/$ar
     "shot.power.alt": "Steam 快捷選單裡打開的遊戲電力面板",
     "shot.power.caption": "遊戲電力面板，攝於 MSI Claw 8 AI+ 實機",
     "shot.charge.alt": "設為充到 80% 就停的充電上限面板",
-    "shot.charge.caption": "充電上限面板，攝於 MSI Claw 8 AI+ 實機"
+    "shot.charge.caption": "充電上限面板，攝於 MSI Claw 8 AI+ 實機",
+    "more.title": "還有幾件你以後不用再操心的事",
+    "more.display.title": "螢幕跑在它該有的規格上",
+    "more.display.text": "完整的 1920×1200，48 到 120 Hz 每一檔更新率，以及 Intel 掌機在 gamescope 下會遇到的那個顏色異常，都處理掉了。Steam 的更新率滑桿終於是整個範圍可選，而不是保守地給你兩三檔。",
+    "more.updates.title": "系統更新不會把它洗掉",
+    "more.updates.text": "SteamOS 更新會整個換掉系統分割區 —— 這類外掛的東西通常就是這麼無聲無息消失的。這裡所有東西都會在下次開機時放回去，你不會察覺發生過。"
   }
 };
 

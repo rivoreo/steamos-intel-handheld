@@ -164,13 +164,16 @@ const COPY = {
             activityFullPower: "Full power - the target is not being met",
             activityLoading: "Full power - the game is loading",
             activityCapped: (fps) => `Holding a ${fps} FPS cap`,
+            activityNoGame: "Nothing - no game is running",
             power: "Power draw",
             core: "CPU",
             graphics: "graphics",
-            pacing: "Frame time p95 / allowed",
+            slowestFrames: "Slowest frames",
+            slowestFramesValue: (ms, fps) => `${ms} (about ${fps} FPS)`,
             gpuLoad: "Graphics load",
             service: "Background service",
-            game: "App ID",
+            serviceOk: "Running normally",
+            serviceProblem: (raw) => `Not running normally (${raw})`,
             learning: "Learning",
             restore: "Restore defaults",
             refresh: "Refresh now",
@@ -300,13 +303,16 @@ const COPY = {
             activityFullPower: "全力輸出 —— 目標未達成",
             activityLoading: "全力輸出 —— 遊戲載入中",
             activityCapped: (fps) => `限制在 ${fps} FPS`,
+            activityNoGame: "沒有介入 —— 目前沒有遊戲在跑",
             power: "功耗",
             core: "處理器",
             graphics: "繪圖",
-            pacing: "影格時間 p95 / 容許值",
+            slowestFrames: "最慢的那些影格",
+            slowestFramesValue: (ms, fps) => `${ms}（約 ${fps} FPS）`,
             gpuLoad: "繪圖負載",
             service: "背景服務",
-            game: "App ID",
+            serviceOk: "正常運作中",
+            serviceProblem: (raw) => `沒有正常運作（${raw}）`,
             learning: "學習",
             restore: "還原預設",
             refresh: "立即重新整理",
@@ -556,25 +562,43 @@ const Diagnostics = ({ t, status, runtime }) => {
         t.diag.power,
         `${fmtWatts(runtime.package_w)} (${t.diag.core} ${fmtWatts(runtime.core_w)} / ${t.diag.graphics} ${fmtWatts(runtime.uncore_w)})`,
     ]);
-    rows.push([
-        t.diag.pacing,
-        `${fmtMs(runtime.frame_source.p95_ms)} / ${fmtMs(runtime.p95_budget_ms)}`,
-    ]);
+    // Frame timing only means anything while a game is drawing. With the machine
+    // sitting at the library the compositor idles, which drags the pacing budget
+    // up to values like 6463 ms - a real number that reads as a broken one.
+    const p95 = runtime.appid ? runtime.frame_source.p95_ms : null;
+    if (p95) {
+        rows.push([
+            t.diag.slowestFrames,
+            t.diag.slowestFramesValue(fmtMs(p95), String(Math.round(1000 / p95))),
+        ]);
+    }
     const gpu = runtime.auto_target?.gpu;
     if (gpu && gpu.render_busy !== null && gpu.render_busy !== undefined) {
         rows.push([t.diag.gpuLoad, fmtPercent(gpu.render_busy)]);
     }
     if (status) {
-        rows.push([t.diag.service, `${status.active_state}/${status.sub_state}`]);
-    }
-    if (runtime.appid) {
-        rows.push([t.diag.game, runtime.appid]);
+        rows.push([t.diag.service, describeService(t, status)]);
     }
     return (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: blockStyle, children: rows.map(([label, value]) => (SP_JSX.jsxs("div", { style: detailStyle, children: [label, ": ", value] }, label))) }) }));
 };
+/**
+ * systemd's own vocabulary ("active/running") is not something a Steam Deck
+ * user should have to learn. Say it plainly, and keep the raw pair only when
+ * something is wrong, where it is the thing worth pasting into a bug report.
+ */
+function describeService(t, status) {
+    const raw = `${status.active_state}/${status.sub_state}`;
+    if (status.active_state === "active" && status.sub_state === "running") {
+        return t.diag.serviceOk;
+    }
+    return t.diag.serviceProblem(raw);
+}
 function describeActivity(t, runtime) {
     const trims = runtime.trim_rungs_active?.length ?? 0;
     const cap = runtime.auto_target?.cap_applied_fps ?? null;
+    if (!runtime.appid) {
+        return t.diag.activityNoGame;
+    }
     if (cap) {
         return t.diag.activityCapped(String(cap));
     }

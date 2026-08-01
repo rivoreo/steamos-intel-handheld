@@ -60,7 +60,23 @@ def test_pages_site_leads_with_the_user_facing_promise() -> None:
     # The two things a visitor installs, named as the panels name themselves.
     assert "Game Power" in index
     assert "Charge Limit" in index
-    assert "Working power sensors" in index
+
+
+def test_pages_site_credits_the_whole_package_not_only_the_two_panels() -> None:
+    """The two panels are the visible part, but a visitor also inherits the
+    display fixes and the update survival without asking for them. A page that
+    lists only the panels undersells what actually gets installed.
+
+    Deliberately absent: the Steam performance-menu TDP slider. The bridge for
+    it ships, but Valve's own device profile for this board declares no TDP
+    method, so nothing activates it and the claim would be false."""
+    index = SITE_INDEX.read_text()
+    assert "Steam's own performance menu" not in index
+    # The rest of the payload a visitor inherits without asking for it.
+    assert "1920×1200" in index
+    assert "48 to 120 Hz" in index
+    assert "See what your settings actually cost" in index
+    assert "A SteamOS update will not undo it" in index
 
 
 def test_pages_site_shows_the_real_panels_and_never_a_mock_up() -> None:
@@ -204,18 +220,37 @@ def test_pages_site_uses_taiwan_zh_tw_wording() -> None:
     assert "菜單" not in zh_tw_text
 
 
+def _is_heading_or_label(key: str) -> bool:
+    """Headings, buttons, tags and nav items - anything that is a name for
+    something rather than a sentence about it."""
+    return (
+        key.endswith((".title", ".tag", ".alt", ".name"))
+        or key.startswith(("nav.", "code.", "footer.", "stat."))
+        or key in {"hero.eyebrow", "hero.primaryCta", "hero.secondaryCta"}
+    ) and not key.endswith((".note",))
+
+
 def test_pages_site_chinese_punctuation_follows_chinese_convention() -> None:
-    # Prose sentences close with a full stop; headings, labels, buttons and list
-    # items do not. Punctuating them like English sentences is the tell that the
-    # copy was translated clause by clause instead of written.
-    prose_suffixes = (".description", ".lead", ".note", ".text", ".sub")
+    # A Latin full stop never closes a Chinese sentence, and a Chinese heading
+    # never takes a full stop at all. Both are the signature of copy translated
+    # clause by clause rather than written.
     translations = read_site_translations()
     for locale in ("zh-CN", "zh-TW"):
         for key, value in translations[locale].items():
             assert not value.endswith("."), (locale, key)
-            if key.endswith(prose_suffixes) or re.fullmatch(r"faq\.a\d+", key):
-                continue
-            assert not value.endswith("。"), (locale, key)
+            if _is_heading_or_label(key):
+                assert not value.endswith("。"), (locale, key)
+
+
+def test_pages_site_bullets_are_punctuated_the_same_way_throughout() -> None:
+    """Half the list items ending in a full stop and half not is the kind of
+    thing a reader registers as sloppy without being able to name."""
+    translations = read_site_translations()
+    for locale, close in (("en", "."), ("zh-CN", "。"), ("zh-TW", "。")):
+        bullets = {k: v for k, v in translations[locale].items() if re.search(r"\.b\d+$", k)}
+        assert len(bullets) >= 9, locale
+        closed = {k for k, v in bullets.items() if v.endswith(close)}
+        assert closed == set(bullets), (locale, sorted(set(bullets) - closed))
 
 
 def test_pages_site_does_not_treat_hong_kong_or_macau_as_zh_tw() -> None:
@@ -238,3 +273,18 @@ def test_active_bootstrap_configures_signed_repo() -> None:
     assert "signed package database has not been published" not in bootstrap
     assert "exit 1" not in bootstrap
     assert "SigLevel = Required TrustedOnly" in bootstrap
+
+
+def test_pages_site_install_command_matches_what_the_script_actually_needs() -> None:
+    """The installer writes to /opt and /etc/systemd/system, so it needs root.
+    A homepage that prints the wrong SSH user hands every first-time visitor a
+    permission error on the very first command."""
+    script = (ROOT / "scripts/install-on-device.sh").read_text()
+    usage = re.search(r"Usage: \$0 (\w+)@", script)
+    assert usage, "install-on-device.sh no longer documents its own usage"
+    user = usage.group(1)
+    index = SITE_INDEX.read_text()
+    assert f"scripts/install-on-device.sh {user}@" in index
+    # And the prerequisite has to be stated, not just implied by the command.
+    for locale in ("en", "zh-CN", "zh-TW"):
+        assert user in read_site_translations()[locale]["install.lead"], locale

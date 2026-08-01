@@ -340,3 +340,65 @@ def test_dropdown_values_are_not_truncated_by_an_inline_layout():
         assert blocks, name
         for block in blocks:
             assert 'layout="below"' in block, (name, block[:120])
+
+
+def _game_power_copy_block() -> str:
+    """The COPY object holds every string the panel can put on screen."""
+    source = (GAME_POWER_PLUGIN / "src" / "index.tsx").read_text()
+    start = source.index("const COPY: Record<LocaleKey, Copy> = {")
+    depth = 0
+    for i in range(source.index("{", start), len(source)):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start : i + 1]
+    raise AssertionError("COPY object is not brace-balanced")
+
+
+def test_panel_copy_uses_a_players_vocabulary_not_an_engineers():
+    """A SteamOS user knows frame rates, watts and battery percentages. They do
+    not know percentile notation, systemd unit states or Steam app IDs, and a
+    readout they cannot parse is worse than no readout."""
+    copy = _game_power_copy_block()
+    for jargon in (
+        "p95",
+        "P95",
+        "percentile",
+        "active/running",
+        "systemd",
+        "App ID",
+        "appid",
+        "RAPL",
+        "PL1",
+        "PL2",
+        "EPP",
+        "sysfs",
+        "cgroup",
+    ):
+        assert jargon not in copy, jargon
+
+
+def test_panel_never_prints_a_raw_app_id_or_unit_state():
+    """Both are identifiers for us, not information for the player."""
+    frontend, bundled = _game_power_frontend()
+    for source in (frontend, bundled):
+        # No row may be the app id, and no row may be the unit state pair.
+        assert "t.diag.game" not in source
+        assert "rows.push([t.diag.service, `${status.active_state}" not in source
+    assert "rows.push([t.diag.service, describeService(t, status)]);" in frontend
+    # The raw unit state survives only inside the "something is wrong" message,
+    # where it is the part worth pasting into a bug report.
+    assert "serviceProblem" in frontend
+
+
+def test_frame_timing_is_hidden_when_no_game_is_drawing():
+    """With the machine sitting at the library the compositor idles, so the
+    pacing budget climbs into the thousands of milliseconds. It is a real
+    number that reads as a broken one."""
+    frontend, _ = _game_power_frontend()
+    assert "const p95 = runtime.appid ? runtime.frame_source.p95_ms : null;" in frontend
+    diagnostics = frontend.split("const Diagnostics")[1].split("const PluginTitle")[0]
+    # The scheduler's internal threshold is not a number anyone can act on.
+    assert "p95_budget_ms" not in diagnostics
