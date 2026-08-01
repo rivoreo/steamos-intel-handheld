@@ -19,6 +19,23 @@ import tomllib
 
 DEFAULT_ARTIFACT_ROOT = Path("/opt/steamos-intel-handheld/share/etc-artifacts")
 DEFAULT_ETC_ROOT = Path("/etc")
+DEFAULT_SYSTEM_ROOT = Path("/")
+
+# Directories outside /etc that this project is allowed to place a file in.
+# SteamOS keeps these on the read-only system partition and replaces them
+# wholesale on update, so anything here has to be written back afterwards and
+# the write needs the partition temporarily unlocked.
+#
+# steamos-manager reads device profiles only from /usr/share/steamos-manager/
+# devices, with no /etc override. Valve's profile for this board matches it but
+# declares no TDP method, so TDP limiting is never set up and Steam's own
+# performance-menu slider does nothing. A file of our own next to theirs
+# supplies the missing section without editing a file we do not own.
+#
+# Deliberately an exact directory list rather than a prefix like /usr: a
+# manifest typo should fail to parse, not hand this service the system
+# partition.
+IMMUTABLE_DESTINATION_DIRS = ("/usr/share/steamos-manager/devices",)
 
 SUPPORTED_TYPES = {"file", "symlink"}
 SUPPORTED_POLICIES = {"managed", "health-check"}
@@ -280,10 +297,23 @@ def _required_str(raw: dict[str, object], key: str, manifest_path: Path) -> str:
 
 def _validate_destination(destination: str) -> None:
     path = PurePosixPath(destination)
-    if not path.is_absolute() or len(path.parts) < 3 or path.parts[1] != "etc":
-        raise ManifestError(f"destination must be under /etc: {destination}")
+    if not path.is_absolute():
+        raise ManifestError(f"destination must be absolute: {destination}")
     if ".." in path.parts:
         raise ManifestError(f"destination must not contain parent references: {destination}")
+    if len(path.parts) >= 3 and path.parts[1] == "etc":
+        return
+    if str(path.parent) in IMMUTABLE_DESTINATION_DIRS:
+        return
+    allowed = ", ".join(IMMUTABLE_DESTINATION_DIRS)
+    raise ManifestError(
+        f"destination must be under /etc or directly in one of [{allowed}]: {destination}"
+    )
+
+
+def is_immutable_destination(destination: str) -> bool:
+    """True for destinations on the read-only system partition."""
+    return str(PurePosixPath(destination).parent) in IMMUTABLE_DESTINATION_DIRS
 
 
 def _validate_source(source: str, artifact_root: Path, destination: str) -> None:
@@ -341,6 +371,7 @@ def restore(
     apply: bool,
     runner: CommandRunner | None = None,
     run_actions: bool = True,
+    system_root: Path = DEFAULT_SYSTEM_ROOT,
 ) -> RestoreResult:
     runner = runner or SubprocessRunner()
     artifacts = load_manifest(artifact_root)
@@ -348,8 +379,74 @@ def restore(
     planned_actions: list[str] = []
     planned_restarts: list[str] = []
 
+    # Writing to the system partition means unlocking it, which is not something
+    # to do on every boot. Find out first whether anything there is actually
+    # missing or drifted, and leave steamos-readonly alone when it is not.
+    unlocked = False
+    if apply and _needs_system_partition_write(
+        artifacts, Path(etc_root), Path(artifact_root), Path(system_root)
+    ):
+        unlock = runner.run(["steamos-readonly", "disable"])
+        if unlock.ok:
+            unlocked = True
+        else:
+            result.warnings.append(
+                "could not unlock the system partition; "
+                f"files under {IMMUTABLE_DESTINATION_DIRS[0]} may stay stale"
+            )
+
+    try:
+        _restore_artifacts(
+            artifacts,
+            Path(etc_root),
+            Path(artifact_root),
+            Path(system_root),
+            apply=apply,
+            runner=runner,
+            result=result,
+            planned_actions=planned_actions,
+            planned_restarts=planned_restarts,
+        )
+    finally:
+        if unlocked:
+            runner.run(["steamos-readonly", "enable"])
+
+    result.actions = _ordered_unique_actions(planned_actions)
+    if apply and run_actions and not result.failures:
+        _run_actions(result.actions, _ordered_unique(planned_restarts), runner, result)
+    result.commands = [command_to_string(command) for command in runner.commands]
+    return result
+
+
+def _needs_system_partition_write(
+    artifacts: list[Artifact],
+    etc_root: Path,
+    artifact_root: Path,
+    system_root: Path,
+) -> bool:
     for artifact in artifacts:
-        status = _process_artifact(artifact, Path(etc_root), Path(artifact_root), apply)
+        if not is_immutable_destination(artifact.destination):
+            continue
+        status = _process_artifact(artifact, etc_root, artifact_root, False, system_root)
+        if status.state in {"missing", "drifted"}:
+            return True
+    return False
+
+
+def _restore_artifacts(
+    artifacts: list[Artifact],
+    etc_root: Path,
+    artifact_root: Path,
+    system_root: Path,
+    *,
+    apply: bool,
+    runner: CommandRunner,
+    result: RestoreResult,
+    planned_actions: list[str],
+    planned_restarts: list[str],
+) -> None:
+    for artifact in artifacts:
+        status = _process_artifact(artifact, etc_root, artifact_root, apply, system_root)
         result.artifacts.append(status)
         if status.changed:
             result.changed = True
@@ -361,21 +458,16 @@ def restore(
             planned_actions.extend(artifact.actions)
             planned_restarts.extend(artifact.service_restarts)
 
-    result.actions = _ordered_unique_actions(planned_actions)
-    if apply and run_actions and not result.failures:
-        _run_actions(result.actions, _ordered_unique(planned_restarts), runner, result)
-    result.commands = [command_to_string(command) for command in runner.commands]
-    return result
-
 
 def _process_artifact(
     artifact: Artifact,
     etc_root: Path,
     artifact_root: Path,
     apply: bool,
+    system_root: Path = DEFAULT_SYSTEM_ROOT,
 ) -> ArtifactStatus:
     if artifact.policy == "health-check":
-        destination = _destination_path(etc_root, artifact.destination)
+        destination = _destination_path(etc_root, artifact.destination, system_root)
         if destination.exists() or destination.is_symlink():
             return ArtifactStatus(
                 destination=artifact.destination,
@@ -391,9 +483,9 @@ def _process_artifact(
             message=f"health-check file is missing: {artifact.destination}",
         )
     if artifact.artifact_type == "file":
-        return _process_file_artifact(artifact, etc_root, artifact_root, apply)
+        return _process_file_artifact(artifact, etc_root, artifact_root, apply, system_root)
     if artifact.artifact_type == "symlink":
-        return _process_symlink_artifact(artifact, etc_root, apply)
+        return _process_symlink_artifact(artifact, etc_root, apply, system_root)
     raise RestoreFailure(f"unsupported artifact type: {artifact.artifact_type}")
 
 
@@ -402,8 +494,9 @@ def _process_file_artifact(
     etc_root: Path,
     artifact_root: Path,
     apply: bool,
+    system_root: Path = DEFAULT_SYSTEM_ROOT,
 ) -> ArtifactStatus:
-    destination = _destination_path(etc_root, artifact.destination)
+    destination = _destination_path(etc_root, artifact.destination, system_root)
     source = artifact_root / str(artifact.source)
     if not source.exists():
         return ArtifactStatus(
@@ -464,8 +557,9 @@ def _process_symlink_artifact(
     artifact: Artifact,
     etc_root: Path,
     apply: bool,
+    system_root: Path = DEFAULT_SYSTEM_ROOT,
 ) -> ArtifactStatus:
-    destination = _destination_path(etc_root, artifact.destination)
+    destination = _destination_path(etc_root, artifact.destination, system_root)
     expected_target = artifact.symlink_target or ""
     if destination.is_symlink() and os.readlink(destination) == expected_target:
         return ArtifactStatus(
@@ -507,7 +601,14 @@ def _process_symlink_artifact(
     )
 
 
-def _destination_path(etc_root: Path, destination: str) -> Path:
+def _destination_path(
+    etc_root: Path,
+    destination: str,
+    system_root: Path = DEFAULT_SYSTEM_ROOT,
+) -> Path:
+    if is_immutable_destination(destination):
+        relative = PurePosixPath(destination).relative_to("/")
+        return Path(system_root).joinpath(*relative.parts)
     relative = PurePosixPath(destination).relative_to("/etc")
     return etc_root.joinpath(*relative.parts)
 

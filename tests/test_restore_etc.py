@@ -381,3 +381,142 @@ service_restarts = ["example.service"]
         "example.service",
     ] in runner.commands
     assert all(timeout is not None for timeout in runner.command_timeouts[-2:])
+
+
+SYSTEM_ARTIFACT = """
+[[artifact]]
+destination = "/usr/share/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
+source = "steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
+type = "file"
+policy = "managed"
+mode = "0644"
+owner = "root"
+group = "root"
+actions = []
+"""
+
+
+def _system_manifest(tmp_path: Path) -> tuple[Path, Path]:
+    root = artifact_root(tmp_path)
+    write_file(root / "steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml", "profile\n")
+    write_manifest(root, SYSTEM_ARTIFACT)
+    system_root = tmp_path / "system"
+    (system_root / "usr/share/steamos-manager/devices").mkdir(parents=True)
+    return root, system_root
+
+
+def test_destination_allowlist_is_exact_directories_not_a_usr_prefix():
+    """A manifest typo must fail to parse rather than hand the restore service
+    write access to the system partition."""
+    restore_etc._validate_destination("/etc/systemd/system/x.service")
+    restore_etc._validate_destination("/usr/share/steamos-manager/devices/x.toml")
+
+    for rejected in (
+        "/usr/bin/gamescope",
+        "/usr/share/steamos-manager/config.toml",
+        "/usr/share/steamos-manager/devices/nested/x.toml",
+        "/usr/share/steamos-manager/devices/../../bin/x",
+        "/usr",
+        "relative/path.toml",
+    ):
+        with pytest.raises(restore_etc.ManifestError):
+            restore_etc._validate_destination(rejected)
+
+
+def test_missing_system_partition_file_is_restored_with_the_partition_unlocked(tmp_path):
+    root, system_root = _system_manifest(tmp_path)
+    runner = restore_etc.RecordingRunner()
+
+    result = restore_etc.restore(
+        etc_root=tmp_path / "etc",
+        artifact_root=root,
+        apply=True,
+        runner=runner,
+        run_actions=False,
+        system_root=system_root,
+    )
+
+    live = system_root / "usr/share/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
+    assert live.read_text() == "profile\n"
+    assert result.changed
+    # Unlocked before the write and locked again afterwards, in that order.
+    commands = [restore_etc.command_to_string(c) for c in runner.commands]
+    assert "steamos-readonly disable" in commands
+    assert "steamos-readonly enable" in commands
+    assert commands.index("steamos-readonly disable") < commands.index("steamos-readonly enable")
+
+
+def test_unchanged_system_partition_file_never_touches_steamos_readonly(tmp_path):
+    """Unlocking the system partition on every boot would be a real cost for a
+    file that is almost always already correct."""
+    root, system_root = _system_manifest(tmp_path)
+    live = system_root / "usr/share/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
+    write_file(live, "profile\n")
+    runner = restore_etc.RecordingRunner()
+
+    result = restore_etc.restore(
+        etc_root=tmp_path / "etc",
+        artifact_root=root,
+        apply=True,
+        runner=runner,
+        run_actions=False,
+        system_root=system_root,
+    )
+
+    assert not result.changed
+    assert not any("steamos-readonly" in restore_etc.command_to_string(c) for c in runner.commands)
+
+
+def test_the_partition_is_locked_again_even_when_the_restore_fails(tmp_path):
+    root, system_root = _system_manifest(tmp_path)
+    (root / "steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml").unlink()
+    runner = restore_etc.RecordingRunner()
+
+    result = restore_etc.restore(
+        etc_root=tmp_path / "etc",
+        artifact_root=root,
+        apply=True,
+        runner=runner,
+        run_actions=False,
+        system_root=system_root,
+    )
+
+    assert result.failures
+    commands = [restore_etc.command_to_string(c) for c in runner.commands]
+    if "steamos-readonly disable" in commands:
+        assert "steamos-readonly enable" in commands
+
+
+def test_a_locked_partition_warns_instead_of_failing_the_whole_restore(tmp_path):
+    """Everything under /etc still has to be repaired even if the system
+    partition will not unlock."""
+    root, system_root = _system_manifest(tmp_path)
+    write_file(root / "payload.conf", "canonical\n")
+    write_manifest(
+        root,
+        SYSTEM_ARTIFACT
+        + """
+[[artifact]]
+destination = "/etc/example.conf"
+source = "payload.conf"
+type = "file"
+policy = "managed"
+mode = "0644"
+owner = "root"
+group = "root"
+actions = []
+""",
+    )
+    runner = restore_etc.RecordingRunner(fail_commands={"steamos-readonly disable"})
+
+    result = restore_etc.restore(
+        etc_root=tmp_path / "etc",
+        artifact_root=root,
+        apply=True,
+        runner=runner,
+        run_actions=False,
+        system_root=system_root,
+    )
+
+    assert (tmp_path / "etc/example.conf").read_text() == "canonical\n"
+    assert any("could not unlock" in warning for warning in result.warnings)

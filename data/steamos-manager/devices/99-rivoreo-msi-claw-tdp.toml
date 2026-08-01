@@ -1,0 +1,34 @@
+# Supplies the [tdp_limit] section Valve's msi-claw-intel.toml leaves out.
+#
+# steamos-manager only sets up TDP limiting for a device whose profile declares
+# a method. Valve's profile matches this board by DMI but declares none, so the
+# TdpLimit1 interface is never exported, Steam's performance-menu slider does
+# nothing, and SetTdpLimit answers "No remote TDP manager".
+#
+# method = "remote" points it at whichever provider is registered through
+# remotes.d, which is this project's own D-Bus service in
+# 99-rivoreo-power-control.toml. Together they make the slider Steam already
+# ships drive real RAPL limits on this hardware.
+#
+# This is a separate file rather than an edit to Valve's, so a SteamOS update
+# replacing theirs cannot conflict with ours, and removing this file restores
+# stock behaviour exactly. It lives on the read-only system partition because
+# device profiles are read only from /usr/share/steamos-manager/devices; the
+# restore service puts it back after an update rotates that partition.
+#
+# The range matches the Core Ultra 7 258V sustained window this project already
+# clamps to in power_control.
+
+[[device]]
+dmi.sys_vendor = "Micro-Star International Co., Ltd."
+dmi.board_name = "MS-1T52"
+device = "claw"
+variant = "Claw 8 AI+ A2VM"
+friendly_name = "MSI Claw"
+
+[tdp_limit]
+method = "remote"
+
+[tdp_limit.range]
+min = 8
+max = 30

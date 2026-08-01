@@ -118,6 +118,7 @@ artifact_root=/opt/steamos-intel-handheld/share/etc-artifacts
 install -d -m 0755 \
   "$artifact_root/dbus-1/system.d" \
   "$artifact_root/steamos-manager/remotes.d" \
+  "$artifact_root/steamos-manager/devices" \
   "$artifact_root/systemd/system" \
   "$artifact_root/systemd/user/gamescope-session.service.d" \
   "$artifact_root/systemd/user" \
@@ -143,6 +144,11 @@ install_managed 0644 dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.con
   /etc/dbus-1/system.d/org.rivoreo.SteamOSManager.PowerControl.conf
 install -m 0644 "$src/data/steamos-manager/remotes.d/99-rivoreo-power-control.toml" \
   "$artifact_root/steamos-manager/remotes.d/99-rivoreo-power-control.toml"
+# Device profile for steamos-manager. Only the artifact copy is installed here;
+# the restore service places the live copy, because writing it means unlocking
+# the read-only system partition and that belongs in one place.
+install -m 0644 "$src/data/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml" \
+  "$artifact_root/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
 install_managed 0644 systemd/steamos-intel-handheld-restore.service \
   /etc/systemd/system/steamos-intel-handheld-restore.service
 install_managed 0644 systemd/steamos-intel-handheld-power-control.service \
