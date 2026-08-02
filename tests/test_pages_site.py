@@ -97,7 +97,7 @@ def test_pages_site_shows_the_real_panels_and_never_a_mock_up() -> None:
     index = SITE_INDEX.read_text()
     # This is a product whose entire surface is two Steam panels. A page that
     # never shows one leaves the visitor guessing what they are installing.
-    for shot in ("panel-game-power.png", "panel-charge-limit.png"):
+    for shot in ("panel-game-power.png", "panel-charge-limit.png", "panel-steam-tdp.png"):
         asset = ROOT / "site/assets" / shot
         assert asset.is_file(), shot
         assert asset.stat().st_size > 20_000, shot
@@ -118,16 +118,20 @@ def test_pages_site_screenshots_carry_translated_alt_text_and_captions() -> None
     translations = read_site_translations()
     # A screenshot with no alt text is invisible to a screen reader, and an
     # untranslated caption undoes the point of shipping three locales.
-    assert index.count("data-i18n-alt=") == 2
-    for key in ("shot.power.alt", "shot.power.caption", "shot.charge.alt", "shot.charge.caption"):
+    assert index.count("data-i18n-alt=") == 3
+    for key in (
+        "shot.power.alt", "shot.power.caption",
+        "shot.charge.alt", "shot.charge.caption",
+        "shot.steam.alt", "shot.steam.caption",
+    ):
         for locale in ("en", "zh-CN", "zh-TW"):
             assert translations[locale][key].strip(), (locale, key)
         assert translations["zh-TW"][key] != translations["en"][key], key
         assert translations["zh-CN"][key] != translations["en"][key], key
     # Both captions must name the device the capture came from, so a reader can
     # tell a real screenshot from an illustration.
-    assert translations["en"]["shot.power.caption"].count("MSI Claw 8 AI+") == 1
-    assert translations["en"]["shot.charge.caption"].count("MSI Claw 8 AI+") == 1
+    for key in ("shot.power.caption", "shot.charge.caption", "shot.steam.caption"):
+        assert translations["en"][key].count("MSI Claw 8 AI+") == 1, key
 
 
 def test_pages_site_quotes_only_measurements_that_were_actually_taken() -> None:
