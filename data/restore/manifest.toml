@@ -102,4 +102,14 @@ mode = "0644"
 owner = "root"
 group = "root"
 actions = []
-service_restarts = ["steamos-manager.service"]
+# Deliberately no service_restarts. Restarting steamos-manager.service here
+# deadlocks it: the user unit cannot finish starting while our provider already
+# owns org.rivoreo.SteamOSManager.PowerControl, which is the whole reason the
+# provider uses wait-and-serve. Measured - the restart left the user manager
+# stuck in "activating" and steamosctl answering NameHasNoOwner until the
+# provider was stopped and the manager started without it.
+#
+# Nothing is lost by leaving it out. This file is only read when
+# steamos-manager starts, and the case it exists for is a SteamOS update, which
+# reboots. Boot ordering then does the right thing for free.
+service_restarts = []

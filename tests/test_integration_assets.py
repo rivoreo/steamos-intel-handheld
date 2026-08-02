@@ -1202,3 +1202,20 @@ def test_device_profile_declares_the_remote_tdp_method_valve_omits():
     # Matched to this board only; a wrong DMI match would apply Claw power
     # behaviour to somebody else's hardware.
     assert [d["dmi"]["board_name"] for d in parsed["device"]] == ["MS-1T52"]
+
+
+def test_no_restore_artifact_restarts_steamos_manager():
+    """The provider uses wait-and-serve because the user steamos-manager cannot
+    finish starting while org.rivoreo.SteamOSManager.PowerControl is already
+    owned. A restore-triggered restart puts it straight back into that deadlock:
+    measured, the user unit hung in "activating" and steamosctl answered
+    NameHasNoOwner until the provider was stopped."""
+    manifests = [ROOT / "data/restore/manifest.toml"]
+    manifests.extend(sorted((ROOT / "data/restore/manifest.d").glob("*.toml")))
+
+    for path in manifests:
+        payload = tomllib.loads(path.read_text())
+        for artifact in payload.get("artifact", []):
+            restarts = artifact.get("service_restarts", [])
+            assert "steamos-manager.service" not in restarts, (path.name, artifact["destination"])
+            assert "steamos-manager" not in restarts, (path.name, artifact["destination"])
