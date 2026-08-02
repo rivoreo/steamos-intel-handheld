@@ -199,16 +199,15 @@ The framework's device-facing surfaces owned by this slice:
 
 The V10 probe capture modes (`PROFILE_GAME_POWER_PROBE=pin-baseline` /
 `gpu-cap-sweep` / `soft-pl1-sweep`) and candidate policies (`v10-battery`,
-`v10-gpu-cap`, `v10-soft-pl1`) reuse the existing `game-power-profile-device`
-harness check, which already runs `scripts/profile-game-power-on-device.sh`
-(the probe modes are env-selected inputs to that same command), so no new
-guarded check is added.
+`v10-gpu-cap`, `v10-soft-pl1`) run through
+`scripts/profile-game-power-on-device.sh --allow-device` (the probe modes are
+env-selected inputs to that command).
 
 ## Boundaries
 
 - Hardware access is isolated in `TdpBackend`.
 - D-Bus code is loaded only inside `serve()` so unit tests do not need D-Bus.
-- Device install and verification are shell harnesses under `scripts/`.
+- Device install and verification are shell scripts under `scripts/`.
 - Packaging files are drafts until the service layout is validated on more
   devices.
 

@@ -3,21 +3,73 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "我要派一個子代理去把 docs/ 目錄下 40 個 markdown 檔的 frontmatter 統一成新 schema（加 updated 欄位、把 tags 從逗號字串改成陣列）。為了省錢我想用最便宜的模型跑。幫我把派工 prompt 寫好。",
-      "expected_output": "產出的派工 prompt 應為經濟層過程式風格：含編號步驟、輸入→輸出範例（frontmatter before/after）、前置分支判斷（缺 frontmatter / tags 已是陣列怎麼辦）、明確停止條件、輸出契約（處理數/跳過清單/驗證輸出）。不應是三句話意圖式派工。",
-      "files": []
+      "prompt": "把兩年前的 coding-agent prompt 遷移到 Mysterious 5、Fable 5、Opus 5 或 GPT-5.6 Soul。舊版要求逐步展示推理、每三個檔案回報、五輪 reviewer、所有修改先做 TDD。",
+      "expected_output": "刪除固定推理、進度節拍、無條件多輪 reviewer 與 universal TDD；保留意圖、repo 和安全邊界、驗收證據與真正暫停條件。",
+      "files": [],
+      "expectations": [
+        "提示詞明顯精簡。",
+        "安全與授權邊界仍然存在。"
+      ]
     },
     {
       "id": 2,
-      "prompt": "這是我們兩年前為舊模型寫的 code review system prompt（附下），現在要遷到新一代旗艦模型。裡面有 'think step by step and show your reasoning first'、'only report high-severity issues, be conservative'、'after every 3 files summarize your progress'。幫我改。",
-      "expected_output": "應識別並移除三個反模式：推理復述（refusal 風險）、召回率殺手（改成覆蓋率+下游過濾或操作性標準）、強制進度節拍（直接刪）。應補充意圖/邊界類內容，並建議用真實案例或 eval 驗證改動（召回率/精確率），不憑感覺。",
-      "files": []
+      "prompt": "幫我寫給 GPT-5.6 Soul 的短 code review prompt。",
+      "expected_output": "使用 Fable 5 class 的薄提示政策，不因模型名稱自動套 XML、操作員式步驟或舊模型分類。",
+      "files": [],
+      "expectations": [
+        "交付可直接使用的短 prompt。",
+        "不使用沒有實測依據的供應商刻板格式。"
+      ]
     },
     {
       "id": 3,
-      "prompt": "我們產品同一個摘要功能會在設定裡讓用戶選模型：頂級旗艦、主力檔、還有一個開源便宜模型。現在三個模型共用同一段 system prompt，便宜模型輸出格式常跑飛，旗艦又囉嗦。怎麼辦？",
-      "expected_output": "應指出「一份提示服務所有模型」反模式，建議骨架共用+厚度分層：經濟層加格式契約與範例（必要時結構化輸出），frontier 層刪腳手架加簡潔的正面範例；並建議每層配回歸驗證。不應只給一份「折衷」的單一 prompt。",
-      "files": []
+      "prompt": "我要讓便宜的小模型批次遷移 40 個 frontmatter；格式常跑掉。",
+      "expected_output": "為已觀察到的格式缺口加入必要範例、驗證與停止條件，而不是把 frontier 的薄 prompt 原樣套用。",
+      "files": [],
+      "expectations": [
+        "根據實測能力缺口增加腳手架。",
+        "避免加入與格式可靠性無關的流程。"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "我只改了一個低頻 skill 的一句觸發描述，語義很明確。需要跑 20 題、每題 3 次、5 輪 A/B 嗎？",
+      "expected_output": "建議靜態驗證和少量正負案例；只有高影響、重用或行為不確定時才擴大跨模型 A/B。",
+      "files": [],
+      "expectations": [
+        "驗證成本與風險成比例。",
+        "不啟動外部 benchmark。"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "這段程式裡有一個名為 prompt 的字串變數，請修正它的 escaping bug。",
+      "expected_output": "視為普通程式修正，不觸發 model-tier prompt 設計流程。",
+      "files": [],
+      "expectations": [
+        "辨識附近但不相關的非觸發案例。",
+        "不把變數名稱誤判為提示工程任務。"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "診斷為什麼這份 system prompt 讓模型過度囉嗦；只做靜態分析，不要呼叫外部模型。",
+      "expected_output": "交付根因、最小調整與驗證缺口，且不啟動外部 CLI 或 eval。",
+      "files": [],
+      "expectations": [
+        "輸出符合診斷而非強制整份改寫。",
+        "遵守不呼叫外部模型的邊界。"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Mysterious 5、Fable 5、Opus 5、GPT-5.6 Soul 要分成四套 system prompt 嗎？",
+      "expected_output": "不需要。四者都歸入 Fable 5 class，使用相同的意圖、邊界、驗收證據與真正暫停條件，不按供應商增加不同腳手架。",
+      "files": [],
+      "expectations": [
+        "四個模型被明確歸為同一檔。",
+        "不為單一供應商增加厚提示。"
+      ]
     }
   ]
 }

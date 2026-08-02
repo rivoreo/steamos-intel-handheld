@@ -8,7 +8,7 @@ PAGES_WORKFLOW = ROOT / ".github/workflows/pages.yml"
 SITE_INDEX = ROOT / "site/index.html"
 BOOTSTRAP = ROOT / "site/rivoreo-steamos/bootstrap.sh"
 BOOTSTRAP_INSTALL_COMMAND = (
-    "pacman -S --needed rivoreo-keyring rivoreo-steamos-repo "
+    "rivoreo-keyring rivoreo-steamos-repo "
     "steamos-intel-handheld steamos-intel-handheld-mangoapp"
 )
 
@@ -279,6 +279,11 @@ def test_pages_site_uses_https_project_pages_domain_not_custom_domain() -> None:
 def test_active_bootstrap_configures_signed_repo() -> None:
     bootstrap = BOOTSTRAP.read_text()
     assert BOOTSTRAP_INSTALL_COMMAND in bootstrap
+    # The documented invocation pipes this script into bash, so bash is reading
+    # it from stdin and any interactive pacman prompt would be answered with the
+    # next lines of the script itself.
+    assert "pacman -Sy --noconfirm" in bootstrap
+    assert "--needed --noconfirm" in bootstrap
     assert f"REPO_BASE_URL:-{PUBLIC_REPO_BASE}" in bootstrap
     assert "https://holo.libz.so" not in bootstrap
     assert "http://" not in bootstrap
@@ -381,3 +386,103 @@ def test_inline_html_matches_the_english_dictionary() -> None:
         assert html_mod.unescape(inner) == english[key], key
         checked += 1
     assert checked >= 40, checked
+
+
+def test_bootstrap_initialises_a_keyring_that_exists_but_does_not_work() -> None:
+    """SteamOS ships /etc/pacman.d/gnupg without a usable keyring inside it.
+    Testing for the directory skips the init that is actually needed, and every
+    later pacman-key call fails - on the exact command the homepage recommends
+    first. Measured on a stock device: the directory was present and
+    `pacman-key --list-keys` failed."""
+    bootstrap = BOOTSTRAP.read_text()
+    assert "pacman-key --init" in bootstrap
+    assert "if [ ! -d /etc/pacman.d/gnupg ]" not in bootstrap
+    assert "pacman-key --list-keys" in bootstrap
+
+
+def test_rendered_bootstrap_gets_past_its_own_fingerprint_guard() -> None:
+    """The renderer substitutes the placeholder globally, so a guard written in
+    terms of that placeholder is rewritten along with the value and compares the
+    fingerprint against itself. Every published copy exited immediately with
+    "bootstrap was not rendered with a Rivoreo signing key fingerprint" - on the
+    command the homepage recommends first. Render it the way the release does
+    and prove it reaches the next check."""
+    import re as _re
+    import subprocess
+    import tempfile
+
+    assembler = (ROOT / "scripts/assemble-arch-release-pages.sh").read_text()
+    substitution = _re.search(r'sed "s/(__RIVOREO_KEY_FINGERPRINT__)/\$(\w+)/g"', assembler)
+    assert substitution, "release renderer no longer substitutes the placeholder as expected"
+
+    fingerprint = "1234567890ABCDEF1234567890ABCDEF12345678"
+    rendered = BOOTSTRAP.read_text().replace("__RIVOREO_KEY_FINGERPRINT__", fingerprint)
+    assert fingerprint in rendered
+
+    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as handle:
+        handle.write(rendered)
+        path = handle.name
+
+    # Run as the current (non-root) user: it must fail on the root check, which
+    # comes first, and never on the fingerprint guard.
+    result = subprocess.run(["bash", path], capture_output=True, text=True, check=False)
+    assert "not rendered with a Rivoreo signing key" not in result.stderr, result.stderr
+    assert "run as root" in result.stderr, result.stderr
+
+
+def test_bootstrap_rejects_an_unrendered_or_malformed_fingerprint() -> None:
+    """The guard still has to catch a release that forgot to render it."""
+    import subprocess
+    import tempfile
+
+    unrendered = "__RIVOREO_KEY_FINGERPRINT__"
+    not_hex = "ZZZZ567890ABCDEF1234567890ABCDEF12345678"
+    for bad in (unrendered, "", "DEADBEEF", not_hex):
+        rendered = BOOTSTRAP.read_text().replace("__RIVOREO_KEY_FINGERPRINT__", bad)
+        with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as handle:
+            handle.write(rendered)
+            path = handle.name
+        result = subprocess.run(
+            ["bash", path], capture_output=True, text=True, check=False,
+            env={"PATH": "/usr/bin:/bin", "EUID": "0"},
+        )
+        assert "not rendered with a Rivoreo signing key" in result.stderr, (bad, result.stderr)
+
+
+def test_bootstrap_overwrite_is_scoped_to_paths_this_project_owns() -> None:
+    """A machine set up with scripts/install.sh has unowned files exactly where
+    the packages want to write, so pacman aborts the whole transaction. Allowing
+    the overwrite is right, but only for our own paths: a blanket --overwrite
+    would let pacman silently take over files belonging to someone else."""
+    bootstrap = BOOTSTRAP.read_text()
+    overwrites = re.findall(r"--overwrite '([^']+)'", bootstrap)
+    assert overwrites, "no overwrite scope declared"
+    for glob in overwrites:
+        assert glob.startswith((
+            "/opt/steamos-intel-handheld/",
+            "/home/deck/homebrew/plugins/steamos-intel-handheld-",
+            "/etc/systemd/system/steamos-intel-handheld-",
+            "/etc/systemd/user/steamos-intel-handheld-",
+            "/etc/systemd/user/gamescope-session.service.d/20-native-panel-resolution.conf",
+            "/etc/systemd/user/gamescope-session.service.wants/steamos-intel-handheld-",
+            "/etc/systemd/user/gamescope-mangoapp.service.d/10-rivoreo-mangoapp.conf",
+            "/etc/dbus-1/system.d/org.rivoreo.",
+            "/etc/gamescope/scripts/00-steamos-intel-handheld/",
+            "/etc/NetworkManager/dispatcher.d/90-rncn-steamdeck-wg",
+        )), glob
+    # Every path the packages actually install must be covered, or a source
+    # install still cannot move to packages.
+    pkgbuild = (ROOT / "packaging/arch/PKGBUILD").read_text()
+    # Directories are created, not written over, so they never conflict.
+    etc_targets = {
+        target
+        for target in re.findall(r'"\$pkgdir(/etc/[^"]+)"', pkgbuild)
+        if f'install -d -m 0755 "$pkgdir{target}"' not in pkgbuild
+    }
+    assert etc_targets
+    import fnmatch
+    for target in etc_targets:
+        assert any(fnmatch.fnmatch(target, glob) for glob in overwrites), target
+    # The catch-all forms that would defeat the point.
+    for reckless in ("*", "/*", "/usr/*", "/etc/*"):
+        assert reckless not in overwrites, reckless

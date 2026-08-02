@@ -1,114 +1,47 @@
 ---
 name: arch-release-publisher
-description: Repo-specific workflow for publishing or validating this project's Arch/SteamOS package repository. Use when working on hidden release candidates, stable vX.Y.Z releases, GitHub Actions arch-release.yml, signed pacman repository artifacts, GitHub Pages deployment, release signing secrets, package repository docs, or user install instructions for rivoreo-steamos.
+description: Publish or validate this project's Arch/SteamOS package repository. Use for release candidates, stable vX.Y.Z releases, arch-release.yml, signed pacman repository artifacts, GitHub Pages deployment, signing secrets, repository docs, or rivoreo-steamos install instructions.
 ---
 
-# Arch Release Publisher
+# Arch release publisher
 
-## Overview
+Use `docs/release-process.md` as the operational source of truth. This skill
+keeps the channel and evidence boundaries visible without duplicating that
+runbook.
 
-Use this skill to keep the release workflow consistent across humans, CI, and
-future agent runs. The authoritative human runbook is
-`docs/release-process.md`.
+## Classify the action
 
-## Core Rule
+- An ordinary branch push is not a package publication.
+- A hidden release candidate validates build/repository shape but is not a
+  stable user channel.
+- A stable `vX.Y.Z` release requires the documented signing, artifact
+  verification, and Pages deployment path.
 
-Read `docs/release-process.md` before changing release behavior, tagging a
-release, reporting release status, or editing user install instructions.
+Never present a candidate signature, locally assembled repository, or
+development artifact as a stable signed release.
 
-## Release Decision
+## Contracts to preserve
 
-Choose the channel before running commands:
+- `arch-release.yml` validates before building and makes `deploy-pages` depend
+  on `verify-repo-artifact`.
+- Stable publishing uses the configured signing secrets and produces the signed
+  pacman database/package shape described by the runbook.
+- User bootstrap instructions use the stable HTTPS repository and do not expose
+  hidden candidate URLs, local paths, private hosts, or unsigned shortcuts.
+- MangoHud/mangoapp release artifacts must come from the documented SteamOS
+  rootfs path; a generic host build is not release-parity evidence.
 
-- Stable release: use `vX.Y.Z` only when protected signing secrets are configured
-  and a hidden release candidate has already validated the path.
-- Hidden release candidate: use `vX.Y.Z-rc.N` to validate package builds,
-  repository metadata, signing, and artifact upload without publishing Pages.
-- Ordinary push or pull request: treat as validation only. It cannot publish the
-  signed pacman repository.
+## Work from evidence
 
-Do not tag or push a stable release when the only available signing path is the
-candidate signing fallback.
+Inspect the actual workflow, release docs, tags, and artifacts relevant to the
+request. Run focused local checks while editing. Use the repo closure suite for
+release readiness, and run guarded artifact/signing/publishing checks only when
+the task reaches those boundaries and the user has authorized the side effect.
 
-## Release Facts To Preserve
+A write request must identify the channel and target. After publishing or
+editing release state, read back the tag/release, artifact verification, and
+deployment result before claiming success.
 
-- Stable `vX.Y.Z` releases deploy GitHub Pages through `deploy-pages`.
-- Hidden `vX.Y.Z-rc.N` releases upload `signed-pacman-repository` and skip
-  `deploy-pages`.
-- Release builds include `steamos-intel-handheld`, `steamos-intel-handheld-mangoapp`,
-  `steamos-intel-handheld-mangoapp-debug`, `rivoreo-keyring`, and
-  `rivoreo-steamos-repo`.
-- Release CI must run `verify-repo-artifact` after `build-repo` and before
-  `deploy-pages`. That gate validates package contents, repository metadata,
-  HTTPS repo configuration, public key fingerprint, and detached signatures.
-- Release CI builds patched `mangoapp` on Linux x86_64 with a SteamOS rootfs
-  chroot; do not use the local QEMU/SSH VM path for GitHub release publishing.
-- Hidden release candidates may generate a short-lived candidate signing key.
-- Stable releases require `ARCH_REPO_GPG_PRIVATE_KEY`,
-  `ARCH_REPO_GPG_PASSPHRASE`, and `ARCH_REPO_GPG_KEY_ID`.
-- Users install only from the public stable bootstrap URL, not from hidden
-  release-candidate artifacts.
-- Public install and pacman URLs must stay HTTPS-only. Use the GitHub Pages
-  project URL unless a custom domain has a valid HTTPS certificate.
-
-## Files To Inspect
-
-For release behavior changes, inspect:
-
-- `.github/workflows/arch-release.yml`
-- `scripts/build-arch-release-repo.sh`
-- `scripts/assemble-arch-release-pages.sh`
-- `packaging/arch/`
-- `site/rivoreo-steamos/bootstrap.sh`
-- `docs/package-repository.md`
-- `docs/release-process.md`
-- `tests/test_arch_release_workflow.py`
-- `tests/test_release_documentation.py`
-
-## Operator Workflow
-
-1. Read `docs/release-process.md`.
-2. Verify the intended tag matches the version in `pyproject.toml`.
-3. Run the local harness before tagging.
-4. Prefer a hidden release candidate after any release workflow change.
-5. Watch the GitHub Actions run until it reaches a final state.
-6. Confirm `verify-repo-artifact` succeeded.
-7. For candidates, verify the `signed-pacman-repository` artifact exists and
-   `deploy-pages` was skipped.
-8. For stable releases, verify `deploy-pages` succeeded and report the public
-   repository URL.
-
-## Verification
-
-Use the targeted release/documentation tests while editing this workflow:
-
-```bash
-.venv/bin/python -m pytest tests/test_arch_release_workflow.py tests/test_release_documentation.py
-```
-
-Before reporting completion, run the repository harness when feasible:
-
-```bash
-PYTHON=.venv/bin/python scripts/check-local.sh
-```
-
-Validate this skill after editing it:
-
-```bash
-python3 .codex/skills/skill-creator/scripts/quick_validate.py .codex/skills/arch-release-publisher
-```
-
-That validator imports PyYAML. If the active environment does not provide it,
-report the dependency gap and run an equivalent frontmatter/name/description
-structure check instead of editing unrelated project dependencies.
-
-## Report Shape
-
-When reporting a release or release-documentation change, include:
-
-- tag and commit SHA, if a tag was pushed
-- GitHub Actions run ID and URL, if a run was observed
-- `validate`, `build-mangoapp`, `build-repo`, `verify-repo-artifact`, and
-  `deploy-pages` results
-- artifact name for candidates, or public repo URL for stable releases
-- tests and validation commands actually run
+Report local, candidate, stable, signing, artifact, and Pages evidence as
+separate layers. Missing secrets, network access, or deployment authority are
+blockers to the corresponding claim, not reasons to simulate success.

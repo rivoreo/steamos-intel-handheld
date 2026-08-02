@@ -1,176 +1,52 @@
 ---
 name: opening-pull-requests
-description: Use when preparing, opening, updating, or marking ready a pull request or merge request, especially for upstream/open-source repos, forks, submodules, GitHub gh CLI workflows, PR titles/bodies, verification evidence, reviewer-facing summaries, draft-to-ready checks, or avoiding private/local context leaks.
+description: Prepare, open, update, or mark ready a pull or merge request, especially for upstream repos, forks, submodules, GitHub gh workflows, reviewer-facing evidence, or avoiding private/local context leaks.
 ---
 
-# Opening Pull Requests
+# Opening pull requests
 
-Prepare PRs for reviewers who do not share your chat history, local machine,
-private integration repo, deployment scripts, or target hardware access.
+Prepare a self-contained change for reviewers who cannot see the conversation,
+private integration repositories, local paths, deployment scripts, credentials,
+or target hardware.
 
-## Core Rule
+## Authority
 
-Write the PR from the maintainer's point of view. Every claim, command, path,
-and log line must be understandable from the repository receiving the PR.
-
-If a reviewer cannot run a command, inspect a path, or know what a local project
-means, rewrite it as portable evidence or remove it.
-
-## Baseline Failure This Skill Prevents
-
-Bad verification text:
-
-```markdown
-- PYTHON=.venv/bin/python scripts/check-local.sh in the private integration
-  repo: 54 tests passed
-- deployed that binary to the target through our drop-in; running process uses
-  /opt/<local-project>/bin/mangoapp
-```
-
-Why it fails:
-- It references another repo the reviewer may not know.
-- It gives a command that does not exist in the PR repo.
-- It exposes a private install path that is not part of upstream.
-- It makes the evidence look stronger than what upstream can reproduce.
-
-Better:
-
-```markdown
-- built the standalone `mangoapp` target from this branch in a SteamOS x86_64
-  build environment; produced BuildID `...`
-- smoke-tested that rebuilt `mangoapp` on SteamOS hardware by temporarily
-  overriding the stock `gamescope-mangoapp.service`; verified the running
-  process BuildID matched `...`
-```
+Preparing a PR does not authorize staging, committing, pushing, changing
+branches, or editing remote state. Perform those writes only when the user asks
+for the corresponding action. Write through `gh` or another forge only when the
+user asks to open, update, or mark the PR ready.
 
 ## Workflow
 
-1. Identify the audience and repo boundary.
-   - Upstream PR: write only with upstream repo concepts unless local evidence is
-     clearly labeled as smoke testing.
-   - Internal PR: use project-specific paths only if the reviewer can access them.
-   - Submodule PR: do not mention the parent integration repo unless it is needed
-     to explain real-device validation.
+1. Confirm the receiving repository, base, head, fork/submodule relationship,
+   and whether the PR should be draft.
+2. Inspect the complete base-to-head diff and commits. Exclude unrelated or
+   private integration changes.
+3. Run verification proportionate to the changed behavior and repository
+   guidance. Do not paste commands that were not run.
+4. Write a maintainer-facing title and body:
+   - problem and user-visible impact;
+   - concise implementation;
+   - exact verification and outcomes;
+   - compatibility, migration, device, or release limitations.
+5. Remove private paths, IPs, credentials, production data, hidden workflow
+   details, and references that exist only in another repository. Translate
+   useful private evidence into reproducible public facts.
+6. When authorized, create or update the PR and read back the remote title,
+   body, base/head, draft state, and URL.
 
-2. Inspect the actual PR surface.
+## Evidence boundaries
 
-   For a new PR, use only repository and branch facts that exist before the PR
-   is created:
-   ```bash
-   git status --short --branch
-   git remote -v
-   git branch -vv
-   git diff --stat <base>..HEAD
-   git log --oneline <base>..HEAD
-   ```
+Local tests are local evidence. Device, QEMU, release, CI, and production claims
+need their matching results. If a check could not run, say so plainly and
+explain the impact on review readiness.
 
-   For an existing PR, read the current reviewer-facing state before editing:
-   ```bash
-   gh pr view <number> --json title,body,isDraft,comments,reviews,headRefOid
-   ```
+Do not expose raw transcripts or private identifiers. Do not mark a PR ready
+while known merge blockers, missing required evidence, or unintended diff
+content remain.
 
-3. Run or collect evidence before claiming readiness.
-   Prefer upstream-reproducible commands:
-   ```bash
-   git diff --check <base>..HEAD
-   meson test -C build
-   ninja -C build
-   npm test
-   pytest
-   ```
-   Use repo-appropriate commands. If no upstream test was run, say what was run
-   instead and why.
+## Output
 
-4. Translate private or local evidence.
-   - Keep: public target OS/version, hardware model, binary BuildID, relevant
-     sensor paths, short logs proving the changed behavior.
-   - Rewrite: parent-repo scripts, private paths, local cache dirs, hostnames,
-     SSH targets, organization-only service names.
-   - Drop: unrelated checks, secrets, IPs, usernames, one-off helper commands,
-     "it works on my machine" prose.
-
-5. Write the PR body using this shape:
-   ```markdown
-   ## Summary
-   - user-visible or maintainer-visible change
-   - compatibility or fallback behavior
-   - docs/tests updated, if relevant
-
-   ## Why
-   Problem, affected environment, and why this approach preserves existing paths.
-
-   ## Compatibility
-   Existing behavior intentionally preserved, known limitations, not supported.
-
-   ## Verification
-   - command or build the reviewer understands
-   - portable smoke test description
-   - concise relevant output
-   ```
-
-6. Gate before opening or marking ready.
-   - No TODOs, "previously", "should", "probably", or stale draft language.
-   - No commands from another repo unless explicitly labeled as external evidence.
-   - No private paths, IPs, local usernames, or org-only deployment assumptions.
-   - No claim that upstream tests passed unless they ran in the upstream repo.
-   - Body explains why existing supported platforms are not broken.
-   - For existing PRs, comments/reviews have been read before editing or pushing.
-   - For new PRs, branch facts are checked before create; after create, `gh pr
-     view` confirms the intended head commit.
-
-## Command Guardrails
-
-Before `gh pr create`, `gh pr edit`, or `gh pr ready`:
-
-For a new PR:
-```bash
-git diff --check <base>..HEAD
-git status --short --branch
-git log --oneline <base>..HEAD
-git remote -v
-git branch -vv
-```
-
-For an existing PR:
-```bash
-git diff --check <base>..HEAD
-git status --short --branch
-gh pr view <number> --json title,body,isDraft,comments,reviews,headRefOid
-```
-
-When updating an existing PR:
-- Read the current body first; do not overwrite reviewer-requested details.
-- Remove stale TODOs after verification.
-- Keep draft if verification is incomplete or the body depends on private context.
-- Mark ready only after the body is self-contained and evidence is current.
-
-## Review The Body Like A Maintainer
-
-Ask these questions before publishing:
-
-| PR text mentions | Reviewer question | Fix |
-| --- | --- | --- |
-| Another repo's script | "Where is this script?" | Replace with upstream command or describe as external smoke test. |
-| Local path under `/opt`, `/tmp`, `.cache` | "Is this part of the project?" | Use a generic install/deploy description or omit. |
-| Private host/IP/user | "Can I access this?" | Remove it; keep only hardware/OS facts. |
-| Integration test count | "What does this test?" | Name the relevant behavior or omit unrelated count. |
-| Hardware proof | "What exactly was observed?" | Include short sensor path/log output tied to the change. |
-| Unsupported metric | "Is this faked?" | Say it is not synthesized and how unavailable data is shown. |
-
-## Red Flags
-
-Stop and revise when the PR body says:
-- "in my integration repo"
-- "using our script"
-- "deployed to `/opt/<org-or-project>/...`"
-- "tests passed" without naming the repo and command
-- "verified before" or "previously tested"
-- "TODO before marking ready"
-- "safe placeholder"
-- logs longer than needed to prove the behavior
-
-## Final Check
-
-The final answer to the user should include the PR URL, pushed branch/commit,
-verification commands actually run, and any remaining dirty worktree files that
-were intentionally not included.
+For preparation-only requests, return a copy-ready title and body plus exact
+verification and blockers. After an authorized remote mutation, also report the
+read-back URL, base/head, and draft state.

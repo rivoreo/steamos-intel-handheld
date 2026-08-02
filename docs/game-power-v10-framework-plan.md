@@ -154,8 +154,8 @@ Replay equivalence extends to rung/boost sequences.
 
 1.2 GPU actuator + 1.3 soft-PL1 overlay + 1.4 TrimLadder generalization
 + 1.5 fast boost lane + personas + telemetry v3 emission + FrameFeedReader
-(1.1 reader side). Full TDD; fake sysfs trees for GT freq; existing 640
-tests stay green; gpu-priority replay byte-identical.
+(1.1 reader side). Use fake sysfs trees for GT freq; existing tests stay
+green; gpu-priority replay remains byte-identical.
 
 ### Slice B (frame feed producer — external/MangoHud fork)
 
@@ -182,7 +182,7 @@ limiter helper CLI (1.6) + its tests.
 Persona selector + limiter consent toggle + live power/demand row in the
 Decky panel (additive, degrade gracefully); README + docs/design.md V10
 section (honest: framework shipped, constants provisional, tuning
-pending device probes); engineering-policy/harness compliance.
+pending device probes).
 
 Slices A then (B, C in parallel — disjoint files) then D.
 
@@ -196,6 +196,6 @@ Slices A then (B, C in parallel — disjoint files) then D.
 4. gpu-priority byte-identical; V9 target-balance tests still green
    (V9 CPU-cap rungs now verdict-gated on battery — existing tests
    updated deliberately, not accidentally).
-5. Local gates: full pytest, ruff, bash -n, harness required sweep,
-   replay equivalence (v1+v2+v3).
+5. Local checks: full pytest, ruff, bash -n, and replay equivalence
+   (v1+v2+v3).
 6. Honest reporting of anything unbuildable locally (mangoapp C++).

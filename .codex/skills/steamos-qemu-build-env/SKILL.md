@@ -1,98 +1,51 @@
 ---
 name: steamos-qemu-build-env
-description: Build, maintain, and verify the SteamOS QEMU build environment for this Intel handheld repo. Use whenever the user asks about compiling MangoHud/mangoapp for SteamOS, using Valve recovery images, QEMU/KVM/x86 Docker alternatives, cross-compilation/build VMs, deploying a mangoapp systemd drop-in, or validating MangoHud CPU/GPU sensor support on the target handheld. Prefer this skill even when the user says only "build env", "SteamOS image", "QEMU", "mangoapp", "MangoHud sensor", or "local compile".
+description: Build, maintain, or verify the SteamOS QEMU/rootfs environment for compiling MangoHud or mangoapp in this Intel handheld repo. Use for Valve recovery images, QEMU/KVM build alternatives, SteamOS-compatible binaries, mangoapp drop-ins, or separating build evidence from real sensor validation.
 ---
 
-# SteamOS MangoHud Build Env
+# SteamOS QEMU build environment
 
-Use the repo's existing build harness instead of rediscovering the SteamOS setup.
-Read `references/build-workflow.md` when the task needs command details,
-debugging steps, deployment, or real-device validation.
+Use the repository's existing scripts. Read
+`docs/steamos-qemu-build-env.md` for commands, troubleshooting, deployment, and
+device validation; it is the operational source of truth.
 
-## Working Rules
+## Choose the evidence layer
 
-- Treat the QEMU VM as a SteamOS userland compatibility build box, not as proof
-  that MangoHud sensors work on the handheld.
-- Use the Linux x86_64 SteamOS rootfs chroot path for release CI builds; reserve
-  the QEMU VM path for local macOS, ARM, non-Linux, or boot-level debugging.
-- Keep final sensor, gamescope, systemd, and D-Bus claims grounded in a real
-  device run with `scripts/verify-on-device.sh`.
-- Keep generated images, VM overlays, SSH keys, and mangoapp binaries under
-  `.cache/steamos-qemu/`; they are local build artifacts.
-- Preserve the MangoHud submodule branch unless the user asks to rebase or
-  retarget it. Check `external/MangoHud` status before editing upstream code.
-- Install replacement mangoapp binaries with
-  `scripts/configure-mangoapp-dropin.sh`, which places them under
-  `/opt/steamos-intel-handheld/bin/`.
-- Avoid faking telemetry. The project goal is to make MangoHud see existing
-  Linux sensor files, especially RAPL `package-0` for CPU power and RAPL
-  `uncore` for Intel GPU power.
+- **Local/static**: source, submodule, patches, and deterministic tests.
+- **QEMU VM**: SteamOS userland compatibility and exploratory builds.
+- **SteamOS rootfs**: the release-parity mangoapp build path.
+- **Real handheld**: MangoHud CPU/GPU power, DRM hwmon temperature, RAPL,
+  gamescope, and runtime behavior.
 
-## Standard Workflow
+Success in one layer never proves a later layer.
 
-1. Inspect the current repo state:
-   ```bash
-   git status --short --branch
-   git submodule status --recursive
-   git -C external/MangoHud status --short --branch
-   ```
+## Boundaries
 
-2. Prepare or refresh the build VM:
+- Do not substitute generic macOS/Linux or x86 Docker output for a SteamOS
+  release artifact.
+- Do not treat QEMU as hardware sensor evidence.
+- Preserve the `external/MangoHud` submodule state unless the task explicitly
+  updates it.
+- Keep generated images, rootfs trees, and binaries under the documented cache
+  paths; do not commit them.
+- RAPL `package-0` and `uncore` can support CPU/package and integrated GPU power
+  claims. Do not invent a GPU temperature when the target exposes no valid
+  DRM hwmon sensor, and preserve existing Intel discrete temperature behavior.
+- Deployment or device verification requires explicit device authority and the
+  current target from repository configuration, not a stale hard-coded host.
 
-   For release CI or Linux x86_64 hosts:
-   ```bash
-   scripts/steamos-qemu-build-env.sh fetch-raw
-   scripts/steamos-qemu-build-env.sh prepare-rootfs
-   scripts/steamos-qemu-build-env.sh build-mangoapp-rootfs
-   ```
+## Execution
 
-   For local VM-based development:
-   ```bash
-   scripts/steamos-qemu-build-env.sh fetch
-   scripts/steamos-qemu-build-env.sh provision
-   ```
+Inspect the current source and cache state, then select only the stages needed
+from `scripts/steamos-qemu-build-env.sh --allow-qemu`. Use
+`build-mangoapp-rootfs` for
+release-parity output. If deployment is requested, follow the drop-in and
+restore procedure in `docs/steamos-qemu-build-env.md`; do not improvise power
+or service restoration.
 
-3. Boot the provisioned build VM in one terminal only for the VM path:
-   ```bash
-   STEAMOS_QEMU_MEMORY=4G \
-   STEAMOS_QEMU_SSH_PORT=2224 \
-   scripts/steamos-qemu-build-env.sh run-build
-   ```
+Run the matching focused local tests for changed code. QEMU, downloads,
+privileged rootfs work, deployment, and on-device verification are heavy or
+external checks and require the request to reach that layer.
 
-4. Build mangoapp from the MangoHud submodule while the VM is running:
-   ```bash
-   STEAMOS_QEMU_SSH_PORT=2224 \
-   STEAMOS_QEMU_BUILD_JOBS=3 \
-   scripts/steamos-qemu-build-env.sh build-mangoapp
-   ```
-
-5. After the first successful dependency install, speed up later builds with:
-   ```bash
-   STEAMOS_QEMU_SKIP_DEPS=1 \
-   STEAMOS_QEMU_SSH_PORT=2224 \
-   STEAMOS_QEMU_BUILD_JOBS=3 \
-   scripts/steamos-qemu-build-env.sh build-mangoapp
-   ```
-
-6. Deploy and verify on the handheld only when the target is online:
-   ```bash
-   scripts/configure-mangoapp-dropin.sh enable root@<host> .cache/steamos-qemu/mangoapp
-   scripts/verify-on-device.sh root@<host>
-   ```
-
-## Validation
-
-- Run `scripts/check-local.sh` for repo-level Python and shell checks.
-- Run the official skill validator for this skill after edits:
-  ```bash
-  python3 .codex/skills/skill-creator/scripts/quick_validate.py .codex/skills/steamos-qemu-build-env
-  ```
-- If a command needs network, root SSH, or writes outside the workspace, explain
-  why before requesting permission.
-
-## When Reporting Results
-
-- Say exactly which image or cache was used when known.
-- Separate "compiled successfully in SteamOS VM" from "verified on hardware".
-- If the handheld is offline, report the remaining hardware validation step
-  instead of implying sensor support is proven.
+Report the exact artifact path and command outcome, then state separately what
+still requires real-device evidence.

@@ -2,7 +2,7 @@
 
 Date: 2026-07-05
 Status: approved design for implementation. Designer/acceptor: Fable 5.
-Implementer: Opus 4.8 slices with TDD and the required harness sweep.
+Implementer: Opus 4.8 slices with focused verification.
 
 ## 1. Objective
 
@@ -383,10 +383,10 @@ Summarize/aggregate additions:
 - No cpuset partitioning, no HFI/ITMT dependence, no sched_ext daemon
   integration in V9.
 
-## 12. Implementation slices (Opus 4.8, TDD each slice)
+## 12. Implementation slices (Opus 4.8)
 
-Every slice: focused pytest first, then
-`scripts/harness.py sweep required --report .cache/harness/required.json`.
+Every slice uses focused pytest while iterating. Run
+`PYTHON=.venv/bin/python scripts/check-local.sh` for integration closure.
 
 - S1 Phase machine + per-class EPP + `target-balance` mode + `LOADING`
   handling + telemetry additions. Acceptance: all existing tests green;
@@ -410,7 +410,7 @@ Every slice: focused pytest first, then
 - S6 Decky additive fields + README/design doc updates + engineering-policy
   compliance (guarded checks for new device lanes, `safe_for_agents=false`).
 - S7 Device evidence (guarded, root@10.100.0.19, game must be running):
-  `scripts/verify-game-power-on-device.sh`, then controlled A/B
+  `scripts/verify-game-power-on-device.sh --allow-device`, then controlled A/B
   `off target-balance off`, 3 repeats, manual FPS target 30, at 17 W
   (primary) and 12 W (secondary), aggregate + verdicts. Success criteria:
   restore exact in every run; telemetry contract v2 valid; ladder engages

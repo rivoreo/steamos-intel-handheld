@@ -201,4 +201,4 @@ first starts; a single early send was observed to leave the active DRM state on
 an `XB24` plane after reboot, while a later send returned it to a single `XR30`
 plane. It does not use `drm_single_plane_optimizations`; disabling that runtime
 setting also stabilized the format during one experiment, but it produced a UI
-freeze and is not safe enough for the harness.
+freeze and is not safe enough for automated use.

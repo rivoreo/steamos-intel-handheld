@@ -50,7 +50,7 @@ Release flow:
 
 1. Push a stable version tag such as `v0.1.0`, or a hidden validation tag such
    as `v0.1.0-rc.1`.
-2. The `validate` job runs the local harness with recursive submodules.
+2. The `validate` job runs the local check suite with recursive submodules.
 3. The `build-mangoapp` job builds the patched MangoHud `mangoapp` binary on
    Linux x86_64 in a SteamOS rootfs chroot extracted from Valve's recovery
    image.
@@ -91,7 +91,7 @@ not fail package installation.
 
 GitLab CI remains the build path for validation artifacts:
 
-- `python:test` runs the repository's local harness.
+- `python:test` runs the repository's local check suite.
 - `arch:package` runs in `archlinux:base-devel`, builds a source snapshot from
   the current commit, refreshes package checksums with `updpkgsums`, and
   produces `.pkg.tar.zst` artifacts with `makepkg`.

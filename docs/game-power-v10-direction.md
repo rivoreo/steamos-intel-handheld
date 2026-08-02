@@ -278,7 +278,7 @@ S6 Controlled device evidence at 12/17 W across two scenes (low-load and
   ladder policies; persona-aware aggregates.
 - Decky plugin: persona selector (battery/quiet/performance), limiter
   consent toggle, live package-power vs demand display.
-- docs/design.md, README, harness guarded checks for the new lanes.
+- docs/design.md, README, and explicit device verification for the new lanes.
 
 ## 9. Open questions (to answer with P1-P6 data, not opinion)
 

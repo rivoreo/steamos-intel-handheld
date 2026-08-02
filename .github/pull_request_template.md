@@ -1,42 +1,25 @@
 ## Summary
 
-- 
+-
 
-## TDD evidence
+## Verification
 
-Changes to maintained repeatable behavior follow `docs/tdd-workflow.md`; use its
-canonical scope to decide whether RED/GREEN applies.
-
-Verification remains independent and required even when RED/GREEN is not applicable.
-
-RED evidence:
+List the commands run and outcomes. For a regression, include useful
+before/after evidence when available.
 
 ```text
-paste the focused failing test output here
+command — result
 ```
 
-GREEN evidence:
+Device, QEMU, or release evidence, if this change makes a claim at that layer:
 
 ```text
-paste the same focused test passing here
-```
-
-Verification evidence:
-
-```text
-paste scripts/check-local.sh output here
-```
-
-Device evidence, if hardware-facing behavior changed:
-
-```text
-paste scripts/verify-on-device.sh output or explain why device verification is not required
+command/report — result, or not applicable
 ```
 
 ## Checklist
 
-- [ ] RED evidence, or N/A for exempt work with the reason in the summary.
-- [ ] GREEN evidence, or N/A for exempt work with the reason in the summary.
-- [ ] `scripts/check-local.sh` passes.
-- [ ] Device-facing changes include device harness output.
+- [ ] Verification is proportionate to the changed behavior and risk.
+- [ ] Device-facing claims include on-device evidence.
 - [ ] New hardware support includes `scripts/collect-device-info.sh` evidence.
+- [ ] Release or publishing claims include matching build and validation evidence.

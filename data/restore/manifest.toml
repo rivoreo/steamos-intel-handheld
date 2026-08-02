@@ -87,29 +87,3 @@ owner = "root"
 group = "root"
 actions = []
 health_services = ["wg-quick@rncn-steamdeck.service"]
-
-# The only managed file outside /etc. steamos-manager reads device profiles
-# solely from /usr/share/steamos-manager/devices, and Valve's profile for this
-# board declares no TDP method, so without this fragment Steam's own TDP slider
-# does nothing. Restoring it needs the system partition unlocked, so the restore
-# service only touches steamos-readonly when this file is missing or drifted.
-[[artifact]]
-destination = "/usr/share/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
-source = "steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
-type = "file"
-policy = "managed"
-mode = "0644"
-owner = "root"
-group = "root"
-actions = []
-# Deliberately no service_restarts. Restarting steamos-manager.service here
-# deadlocks it: the user unit cannot finish starting while our provider already
-# owns org.rivoreo.SteamOSManager.PowerControl, which is the whole reason the
-# provider uses wait-and-serve. Measured - the restart left the user manager
-# stuck in "activating" and steamosctl answering NameHasNoOwner until the
-# provider was stopped and the manager started without it.
-#
-# Nothing is lost by leaving it out. This file is only read when
-# steamos-manager starts, and the case it exists for is a SteamOS update, which
-# reboots. Boot ordering then does the right thing for free.
-service_restarts = []

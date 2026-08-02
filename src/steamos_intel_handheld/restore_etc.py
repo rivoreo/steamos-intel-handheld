@@ -17,6 +17,8 @@ from typing import Any
 
 import tomllib
 
+from . import steamos_manager_profile
+
 DEFAULT_ARTIFACT_ROOT = Path("/opt/steamos-intel-handheld/share/etc-artifacts")
 DEFAULT_ETC_ROOT = Path("/etc")
 DEFAULT_SYSTEM_ROOT = Path("/")
@@ -379,12 +381,21 @@ def restore(
     planned_actions: list[str] = []
     planned_restarts: list[str] = []
 
+    # The steamos-manager device profile is composed from Valve's rather than
+    # copied, so work out what it should say before deciding to unlock anything.
+    profile_decision = steamos_manager_profile.compose(Path(system_root))
+    profile_current = steamos_manager_profile.current_content(Path(system_root))
+    profile_drifted = profile_decision.content != profile_current
+
     # Writing to the system partition means unlocking it, which is not something
     # to do on every boot. Find out first whether anything there is actually
     # missing or drifted, and leave steamos-readonly alone when it is not.
     unlocked = False
-    if apply and _needs_system_partition_write(
-        artifacts, Path(etc_root), Path(artifact_root), Path(system_root)
+    if apply and (
+        profile_drifted
+        or _needs_system_partition_write(
+            artifacts, Path(etc_root), Path(artifact_root), Path(system_root)
+        )
     ):
         unlock = runner.run(["steamos-readonly", "disable"])
         if unlock.ok:
@@ -396,6 +407,10 @@ def restore(
             )
 
     try:
+        if profile_drifted:
+            _apply_device_profile(
+                profile_decision, Path(system_root), apply=apply, result=result
+            )
         _restore_artifacts(
             artifacts,
             Path(etc_root),
@@ -416,6 +431,68 @@ def restore(
         _run_actions(result.actions, _ordered_unique(planned_restarts), runner, result)
     result.commands = [command_to_string(command) for command in runner.commands]
     return result
+
+
+def _apply_device_profile(
+    decision: steamos_manager_profile.ProfileDecision,
+    system_root: Path,
+    *,
+    apply: bool,
+    result: RestoreResult,
+) -> None:
+    """Write, or remove, the composed steamos-manager device profile."""
+    path = steamos_manager_profile.composed_path(system_root)
+    destination = "/" + steamos_manager_profile.COMPOSED_PROFILE
+    state = "drifted" if path.exists() else "missing"
+    if not decision.should_exist:
+        state = "stale" if path.exists() else "absent"
+
+    if not apply:
+        result.artifacts.append(
+            ArtifactStatus(
+                destination=destination,
+                artifact_type="file",
+                policy="composed",
+                state=state,
+                message=decision.reason,
+            )
+        )
+        return
+
+    try:
+        if decision.should_exist:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(decision.content))
+            path.chmod(0o644)
+            _chown_if_root(path, "root", "root")
+            new_state = "restored"
+        else:
+            path.unlink(missing_ok=True)
+            new_state = "removed"
+    except OSError as exc:
+        result.failures.append(f"could not write {destination}: {exc}")
+        result.artifacts.append(
+            ArtifactStatus(
+                destination=destination,
+                artifact_type="file",
+                policy="composed",
+                state="restore-failed",
+                message=str(exc),
+            )
+        )
+        return
+
+    result.changed = True
+    result.artifacts.append(
+        ArtifactStatus(
+            destination=destination,
+            artifact_type="file",
+            policy="composed",
+            state=new_state,
+            changed=True,
+            message=decision.reason,
+        )
+    )
 
 
 def _needs_system_partition_write(

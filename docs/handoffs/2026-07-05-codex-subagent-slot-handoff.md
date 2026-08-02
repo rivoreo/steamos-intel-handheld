@@ -5,7 +5,7 @@
 Use this prompt to continue in a fresh Codex session:
 
 ```text
-請接手 /Users/bmy001/Work/steamos-intel-handheld 這個 repo。先讀 AGENTS.md 和 harness.toml。
+請接手 /Users/bmy001/Work/steamos-intel-handheld 這個 repo。先讀 AGENTS.md。
 
 上一個 session 的主要問題不是 repo 代碼，而是 Codex multi-agent slot 卡住：
 - 不要再直接調 multi_agent_v1.close_agent；它曾經在這個 session 上卡住。
@@ -27,7 +27,7 @@ Use this prompt to continue in a fresh Codex session:
 3. 注意目前 app-server 0.142.5 可能不是 codex app-server daemon 管理，上一個 session 跑 codex app-server daemon restart 回報：app server is running but is not managed by codex app-server daemon。
 4. 真正會刷新內存態的下一步可能是重啟 Codex Desktop / app-server，但這會中斷當前會話；不要靜默 kill，先明確告知風險。
 
-恢復 sub-agent 後，回到原本工程任務：Game Power governor / Decky 插件 / V6 後續優化。需要按 Harness 流程做，涉及方案前做 plan review，涉及 bug 用 systematic debugging，涉及功能設計先 brainstorm，涉及代碼改動按 AGENTS.md 跑驗證。
+恢復 sub-agent 後，回到原本工程任務：Game Power governor / Decky 插件 / V6 後續優化。涉及代碼改動按 AGENTS.md 選擇驗證。
 ```
 
 ## Current State
@@ -248,7 +248,7 @@ The socket owner for `/Users/bmy001/.codex/app-server-control/app-server-control
 ## Recommended Next Steps
 
 1. Start a fresh session.
-2. Read this document, `AGENTS.md`, and `harness.toml`.
+2. Read this document and `AGENTS.md`.
 3. Test `spawn_agent` once with a minimal probe.
 4. If the probe succeeds, immediately close/clean that probe agent and proceed with the original project work.
 5. If the probe still fails, verify DB open count and app-server state; then consider a deliberate app-server/Desktop restart only after warning the user it may interrupt the active session.
@@ -256,12 +256,11 @@ The socket owner for `/Users/bmy001/.codex/app-server-control/app-server-control
 
 ## Verification Run For This Handoff
 
-This was documentation-only, not code or policy. No harness sweep was run.
+This was documentation-only, not code or policy. No repository checks were run.
 
 Commands run to verify the handoff facts:
 
 ```bash
-sed -n '1,220p' harness.toml
 find docs -maxdepth 3 -type d | sort
 git status --short
 sqlite3 -header -column /Users/bmy001/.codex/state_5.sqlite "SELECT status, COUNT(*) AS count FROM thread_spawn_edges WHERE parent_thread_id='019f28b0-e782-76a0-9c4a-33b7878899be' GROUP BY status;"

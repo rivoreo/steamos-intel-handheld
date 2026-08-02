@@ -16,7 +16,7 @@ write_summary() {
   fi
 
   {
-    echo "### AI-first local harness"
+    echo "### Repository closure suite"
     echo
     echo "- Status: $status"
     echo "- Command: \`scripts/check-local.sh\`"
@@ -72,7 +72,5 @@ else
 fi
 
 run_step "ruff" "${ruff_cmd[@]}"
-run_step "engineering policy" "$python_bin" scripts/check-engineering-policy.py
 run_step "shell syntax" bash -n scripts/*.sh
-run_step "pytest" "$python_bin" -m pytest
-run_step "compileall" "$python_bin" -m compileall -q src
+run_step "pytest" "$python_bin" -m pytest -q

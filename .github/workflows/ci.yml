@@ -16,5 +16,5 @@ jobs:
           python-version: "3.12"
       - name: Install test dependencies
         run: python -m pip install -e ".[dev]"
-      - name: Run local harness
+      - name: Run local checks
         run: scripts/check-local.sh

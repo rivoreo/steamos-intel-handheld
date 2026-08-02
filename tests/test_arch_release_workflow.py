@@ -3,8 +3,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_REPO_BASE = "https://rivoreo.github.io/steamos-intel-handheld/rivoreo-steamos"
+# The flags between "pacman -S" and the package list change (--noconfirm and a
+# scoped --overwrite), so pin the package set rather than the whole line.
 BOOTSTRAP_INSTALL_COMMAND = (
-    "pacman -S --needed rivoreo-keyring rivoreo-steamos-repo "
+    "rivoreo-keyring rivoreo-steamos-repo "
     "steamos-intel-handheld steamos-intel-handheld-mangoapp"
 )
 WORKFLOW = ROOT / ".github/workflows/arch-release.yml"

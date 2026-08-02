@@ -97,7 +97,7 @@ the artifact public key and runs `gpg --batch --verify` for every generated
 
 1. Confirm the version in `pyproject.toml` matches the intended stable base.
    For example, `0.1.0` permits `v0.1.0` and `v0.1.0-rc.N`.
-2. Run the local harness:
+2. Run the local check suite:
 
    ```bash
    PYTHON=.venv/bin/python scripts/check-local.sh

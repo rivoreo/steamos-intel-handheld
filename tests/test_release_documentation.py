@@ -101,17 +101,18 @@ def test_release_process_runbook_captures_first_rc_failure_modes() -> None:
 
 def test_arch_release_publisher_skill_exists_and_points_to_runbook() -> None:
     skill = RELEASE_SKILL.read_text()
+    prose = " ".join(skill.split())
 
     assert "name: arch-release-publisher" in skill
     assert "docs/release-process.md" in skill
-    assert "Read `docs/release-process.md` before changing release behavior" in skill
-    assert "stable release" in skill
+    assert "operational source of truth" in prose
+    assert "stable `vX.Y.Z` release" in prose
     assert "hidden release candidate" in skill
     assert "`vX.Y.Z`" in skill
-    assert "`vX.Y.Z-rc.N`" in skill
-    assert "signed-pacman-repository" in skill
+    assert "candidate signature" in skill
     assert "deploy-pages" in skill
-    assert "ARCH_REPO_GPG_PRIVATE_KEY" in skill
+    assert "signing secrets" in skill
+    assert "SteamOS rootfs" in prose
 
 
 def test_arch_release_publisher_skill_metadata_is_discoverable() -> None:

@@ -1,77 +1,37 @@
 # AGENTS.md
 
-## Subagent Delegation
+Work from the repository and current evidence. State the intent and important
+constraints, then choose the implementation path that best fits what you find.
+Do not turn examples or historical plans into mandatory procedure.
 
-- Agents have standing authorization to delegate within the user's original task;
-  the user does not need to request subagents or approve each delegation.
-- Use is optional, not required for every task, and does not expand task scope or
-  authority; destructive actions, device access, and external side effects keep
-  existing approval boundaries.
-- The main agent owns decomposition and integration and must personally verify results.
-- After deciding to delegate, consult `model-tier-prompting`; it is advisory, not a
-  permission gate.
+## Verification
 
-## Start Here
-
-- Read `harness.toml`, the machine-readable map of local, device, release, and
-  QEMU checks. List checks with:
-
-  ```bash
-  scripts/harness.py list --json
-  ```
-
-- Inspect trusted-suite state with:
-
-  ```bash
-  scripts/harness.py status --json
-  ```
-
-  Before trusting a report, check `freshness`, `pending_verification`, `gate_matrix`,
-  each `evidence_state`, and `evidence_artifact_results`.
-- `scripts/harness-hook.py` does not run checks and does not change repository state.
-  It reminds or blocks on pending verification; it
-  denies `git commit` while required verification is pending.
-
-## Local Loop
-
-- After code or policy changes, run:
-
-  ```bash
-  scripts/harness.py sweep required --report .cache/harness/required.json
-  ```
-
-- Prefer the repo venv:
+- Use the smallest check that can falsify the current change while iterating.
+- Run the full local closure suite for broad integration changes, PR/CI
+  readiness, releases, or when explicitly requested:
 
   ```bash
   PYTHON=.venv/bin/python scripts/check-local.sh
   ```
 
-- If `.venv` is missing, install dev dependencies with
-  `python -m pip install -e ".[dev]"`.
-- TDD: maintained repeatable behavior requires RED/GREEN; read-only exploration does
-  not. See `docs/tdd-workflow.md`. Verification remains independent and required;
-  completion still ends with the required sweep.
+## Boundaries
 
-## Repo Skills
+- Do not run device, QEMU, release, signing, publishing, or network-heavy checks
+  unless the task or requested claim reaches that boundary.
+- Device scripts require `--allow-device`, QEMU/rootfs actions require
+  `--allow-qemu`, and signed repository assembly requires `--allow-release`.
+- Current device target: `root@10.100.0.19`. Device claims require actual
+  on-device evidence; local success is not device, QEMU, or release evidence.
 
-Local Codex skills live in `.codex/skills/`:
+## Delegation and skills
 
-- `model-tier-prompting`: model-aware prompt and tier guidance.
-- `refine`: turn rough ideas into confirmable task briefs.
-
-## Heavy Checks
-
-- Do not run device, QEMU, release, or network-heavy checks unless the user
-  asked for that validation or the task specifically requires it.
-- When explicitly needed, use `scripts/harness.py run <id>` with required
-  `--allow-*` flags; `--report` captures output and
-  validates declared `evidence_artifacts`.
-- Current target: `root@10.100.0.19`. Device claims require
-  `scripts/verify-on-device.sh root@10.100.0.19` evidence.
+- Delegate independent work when it reduces latency or adds useful independent
+  scrutiny. Delegation does not expand scope or side-effect authority, and the
+  main agent integrates and verifies the result.
+- Repo-local skills live in `.codex/skills/`. Use them when their domain is
+  actually in scope; skill routing is advisory.
 
 ## Reporting
 
-- Report exact commands and outcomes; separate local evidence from device, QEMU,
-  and release evidence.
-- Do not claim MangoHud sensor, gamescope, SteamOS Manager, EC, or package
-  release behavior is verified unless the matching harness layer was run.
+Report exact commands and outcomes. Separate local evidence from device, QEMU,
+release, and production claims, and name any layer that was not run.

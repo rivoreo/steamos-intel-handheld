@@ -385,8 +385,8 @@ service_restarts = ["example.service"]
 
 SYSTEM_ARTIFACT = """
 [[artifact]]
-destination = "/usr/share/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
-source = "steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
+destination = "/usr/share/steamos-manager/devices/98-rivoreo-test-fixture.toml"
+source = "steamos-manager/devices/98-rivoreo-test-fixture.toml"
 type = "file"
 policy = "managed"
 mode = "0644"
@@ -398,7 +398,7 @@ actions = []
 
 def _system_manifest(tmp_path: Path) -> tuple[Path, Path]:
     root = artifact_root(tmp_path)
-    write_file(root / "steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml", "profile\n")
+    write_file(root / "steamos-manager/devices/98-rivoreo-test-fixture.toml", "profile\n")
     write_manifest(root, SYSTEM_ARTIFACT)
     system_root = tmp_path / "system"
     (system_root / "usr/share/steamos-manager/devices").mkdir(parents=True)
@@ -436,7 +436,7 @@ def test_missing_system_partition_file_is_restored_with_the_partition_unlocked(t
         system_root=system_root,
     )
 
-    live = system_root / "usr/share/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
+    live = system_root / "usr/share/steamos-manager/devices/98-rivoreo-test-fixture.toml"
     assert live.read_text() == "profile\n"
     assert result.changed
     # Unlocked before the write and locked again afterwards, in that order.
@@ -450,7 +450,7 @@ def test_unchanged_system_partition_file_never_touches_steamos_readonly(tmp_path
     """Unlocking the system partition on every boot would be a real cost for a
     file that is almost always already correct."""
     root, system_root = _system_manifest(tmp_path)
-    live = system_root / "usr/share/steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml"
+    live = system_root / "usr/share/steamos-manager/devices/98-rivoreo-test-fixture.toml"
     write_file(live, "profile\n")
     runner = restore_etc.RecordingRunner()
 
@@ -469,7 +469,7 @@ def test_unchanged_system_partition_file_never_touches_steamos_readonly(tmp_path
 
 def test_the_partition_is_locked_again_even_when_the_restore_fails(tmp_path):
     root, system_root = _system_manifest(tmp_path)
-    (root / "steamos-manager/devices/99-rivoreo-msi-claw-tdp.toml").unlink()
+    (root / "steamos-manager/devices/98-rivoreo-test-fixture.toml").unlink()
     runner = restore_etc.RecordingRunner()
 
     result = restore_etc.restore(
