@@ -79,11 +79,13 @@ def test_pages_site_credits_the_whole_package_not_only_the_two_panels() -> None:
     display fixes and the update survival without asking for them. A page that
     lists only the panels undersells what actually gets installed.
 
-    Deliberately absent: the Steam performance-menu TDP slider. The bridge for
-    it ships, but Valve's own device profile for this board declares no TDP
-    method, so nothing activates it and the claim would be false."""
+    The Steam performance-menu TDP slider is claimed here only because it now
+    works: Valve's device profile for this board declares no TDP method, and the
+    restore service composes one that does."""
     index = SITE_INDEX.read_text()
-    assert "Steam's own performance menu" not in index
+    # Verified end to end on hardware before it went on the page: setting 22W
+    # through steamosctl moved RAPL PL1 from 12000000 to 22000000 and back.
+    assert "The TDP slider Steam already has" in index
     # The rest of the payload a visitor inherits without asking for it.
     assert "1920×1200" in index
     assert "48 to 120 Hz" in index
