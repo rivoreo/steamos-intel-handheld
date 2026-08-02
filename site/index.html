@@ -136,16 +136,44 @@
       .language-option {
         border: 0;
         background: transparent;
-        color: var(--dim);
-        padding: 0.24rem 0.62rem;
+        color: var(--muted);
+        /* Was 0.24rem tall, roughly a 24px target. Fingers miss those. */
+        min-height: 40px;
+        min-width: 44px;
+        padding: 0 0.7rem;
         font: inherit;
-        font-size: 0.82rem;
+        font-size: 0.85rem;
         cursor: pointer;
       }
 
       .language-option[aria-pressed="true"] {
         background: var(--accent-soft);
         color: var(--accent);
+      }
+
+      /* Keyboard users get no cursor to tell them where they are, so the
+         focus ring is the only "you are here" this page has. There was none. */
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+        border-radius: 4px;
+      }
+
+      /* Smooth scrolling is motion the visitor did not ask for, and for some
+         people it is a vestibular trigger rather than a flourish. */
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
+        }
       }
 
       /* ---------------- buttons ---------------- */
@@ -429,8 +457,9 @@
       }
 
       .tag.later {
-        background: rgba(168, 183, 196, 0.12);
-        color: var(--dim);
+        background: rgba(168, 183, 196, 0.14);
+        /* --dim here measured 4.16:1, under the 4.5 needed for text this small. */
+        color: var(--muted);
       }
 
       .code-block {
@@ -597,9 +626,9 @@
         <div class="language-switcher" aria-label="Language">
           <svg class="language-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h9"></path><path d="M9 3v2"></path><path d="M6 12c2.4-1.6 4-4 4.7-7"></path><path d="M12 12c-1.7-.8-3.2-2.1-4.4-3.8"></path><path d="M15 19l3-8 3 8"></path><path d="M16.1 16h3.8"></path></svg>
           <div class="language-options" role="group" aria-label="Language options">
-            <button class="language-option" type="button" data-language-option="en" lang="en" aria-pressed="true">EN</button>
-            <button class="language-option" type="button" data-language-option="zh-CN" lang="zh-CN" aria-pressed="false">简</button>
-            <button class="language-option" type="button" data-language-option="zh-TW" lang="zh-TW" aria-pressed="false">繁</button>
+            <button class="language-option" type="button" data-language-option="en" lang="en" aria-label="English" aria-pressed="true">EN</button>
+            <button class="language-option" type="button" data-language-option="zh-CN" lang="zh-CN" aria-label="简体中文" aria-pressed="false">简</button>
+            <button class="language-option" type="button" data-language-option="zh-TW" lang="zh-TW" aria-label="繁體中文" aria-pressed="false">繁</button>
           </div>
         </div>
       </div>
@@ -620,7 +649,7 @@
           </div>
           <div class="feature-visual">
             <figure class="shot">
-              <img src="assets/panel-game-power.png" width="643" height="900" data-i18n-alt="shot.power.alt" alt="The Game Power panel open in the Steam quick access menu">
+              <img src="assets/panel-game-power.png" width="643" height="900" data-i18n-alt="shot.power.alt" alt="A phone-shaped panel listing two settings, Power profile set to Automatic and Frame rate target set to Automatic at 60 FPS, above a switch for technical details">
               <figcaption data-i18n="shot.power.caption">The Game Power panel, captured on an MSI Claw 8 AI+</figcaption>
             </figure>
           </div>
@@ -653,14 +682,14 @@
               <h3 data-i18n="features.steam.title">The TDP slider Steam already has, finally connected</h3>
               <p data-i18n="features.steam.text">Steam's performance menu has a wattage slider built in. On an Intel handheld, dragging it does nothing at all: there is nothing on the other end listening. This connects it, so the slider moves real power limits. Nothing new to learn — the control you already know stops being decorative.</p>
               <ul class="ticks">
-                <li data-i18n="features.steam.b1">Works in Steam's own menu, not only in ours.</li>
+                <li data-i18n="features.steam.b1">Works in Steam's own menu, so there is no panel to open first.</li>
                 <li data-i18n="features.steam.b2">Per-game, the way Steam already remembers your settings.</li>
                 <li data-i18n="features.steam.b3">Game Power stays underneath it, and never asks for more power than you allowed.</li>
               </ul>
             </div>
             <div class="feature-visual">
               <figure class="shot">
-                <img src="assets/panel-steam-tdp.png" width="643" height="900" data-i18n-alt="shot.steam.alt" alt="Steam's own performance menu with the TDP limit enabled and set to 12 watts">
+                <img src="assets/panel-steam-tdp.png" width="643" height="900" data-i18n-alt="shot.steam.alt" alt="A settings list with Thermal Design Power limit switched on, a slider at 12 watts, and 8 and 30 marked at each end of its track">
                 <figcaption data-i18n="shot.steam.caption">Steam's own performance menu on an MSI Claw 8 AI+. The 8-30 watt range is reported by this project.</figcaption>
               </figure>
             </div>
@@ -690,7 +719,7 @@
             </div>
             <div class="feature-visual">
               <figure class="shot">
-                <img src="assets/panel-charge-limit.png" width="643" height="900" data-i18n-alt="shot.charge.alt" alt="The Charge Limit panel set to stop charging at 80 percent">
+                <img src="assets/panel-charge-limit.png" width="643" height="900" data-i18n-alt="shot.charge.alt" alt="A panel headed Charging stops at 80%, with a full-width dropdown reading Stop at 80%">
                 <figcaption data-i18n="shot.charge.caption">The Charge Limit panel, captured on an MSI Claw 8 AI+</figcaption>
               </figure>
             </div>
@@ -865,9 +894,9 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "footer.source": "Source on GitHub",
     "footer.issues": "Report a problem",
     "footer.license": "MIT licensed",
-    "shot.power.alt": "The Game Power panel open in the Steam quick access menu",
+    "shot.power.alt": "A phone-shaped panel listing two settings, Power profile set to Automatic and Frame rate target set to Automatic at 60 FPS, above a switch for technical details",
     "shot.power.caption": "The Game Power panel, captured on an MSI Claw 8 AI+",
-    "shot.charge.alt": "The Charge Limit panel set to stop charging at 80 percent",
+    "shot.charge.alt": "A panel headed Charging stops at 80%, with a full-width dropdown reading Stop at 80%",
     "shot.charge.caption": "The Charge Limit panel, captured on an MSI Claw 8 AI+",
     "more.title": "And a few things you will never think about again",
     "more.display.title": "The screen at its real specification",
@@ -888,10 +917,10 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "code.onDevMachine": "on your development machine",
     "features.steam.title": "The TDP slider Steam already has, finally connected",
     "features.steam.text": "Steam's performance menu has a wattage slider built in. On an Intel handheld, dragging it does nothing at all: there is nothing on the other end listening. This connects it, so the slider moves real power limits. Nothing new to learn — the control you already know stops being decorative.",
-    "features.steam.b1": "Works in Steam's own menu, not only in ours.",
+    "features.steam.b1": "Works in Steam's own menu, so there is no panel to open first.",
     "features.steam.b2": "Per-game, the way Steam already remembers your settings.",
     "features.steam.b3": "Game Power stays underneath it, and never asks for more power than you allowed.",
-    "shot.steam.alt": "Steam's own performance menu with the TDP limit enabled and set to 12 watts",
+    "shot.steam.alt": "A settings list with Thermal Design Power limit switched on, a slider at 12 watts, and 8 and 30 marked at each end of its track",
     "shot.steam.caption": "Steam's own performance menu on an MSI Claw 8 AI+. The 8-30 watt range is reported by this project."
   },
   "zh-CN": {
@@ -951,9 +980,9 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "footer.source": "GitHub 源码",
     "footer.issues": "反馈问题",
     "footer.license": "MIT 授权",
-    "shot.power.alt": "Steam 快捷菜单里打开的游戏电力面板",
+    "shot.power.alt": "一个竖长面板，列出两项设置：电力模式为自动，帧数目标为自动（当前 60 FPS），下方是一个技术细节开关",
     "shot.power.caption": "游戏电力面板，摄于 MSI Claw 8 AI+ 实机",
-    "shot.charge.alt": "设为充到 80% 就停的充电上限面板",
+    "shot.charge.alt": "面板标题为「充到 80% 就停」，下面是一个占满整行的下拉选单，显示「充到 80% 就停」",
     "shot.charge.caption": "充电上限面板，摄于 MSI Claw 8 AI+ 实机",
     "more.title": "还有几件你以后不用再操心的事",
     "more.display.title": "屏幕跑在它该有的规格上",
@@ -974,10 +1003,10 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "code.onDevMachine": "在你的开发机上",
     "features.steam.title": "Steam 自带的那根 TDP 滑杆，终于接通了",
     "features.steam.text": "Steam 的性能菜单里本来就有一根瓦数滑杆。在 Intel 掌机上，你怎么拖它都没反应 —— 另一头根本没人接。这个项目把它接上，拖滑杆是真的会改功耗上限。你不用学新东西，你本来就熟的那个控件不再只是摆设。",
-    "features.steam.b1": "在 Steam 自己的菜单里就能用，不是只在我们的面板里。",
+    "features.steam.b1": "在 Steam 自己的菜单里就能用，不必先打开别的面板。",
     "features.steam.b2": "每个游戏各自记住，Steam 本来就是这么管的。",
     "features.steam.b3": "游戏电力在它下面接着干活，绝不会要超过你允许的功耗。",
-    "shot.steam.alt": "Steam 自带的性能菜单，TDP 限制已启用并设为 12 瓦特",
+    "shot.steam.alt": "一列设置项，其中「散热设计功率（TDP）限制」已开启，滑杆停在 12 瓦特，轨道两端标着 8 和 30",
     "shot.steam.caption": "Steam 自带的性能菜单，摄于 MSI Claw 8 AI+ 实机。8–30 瓦这个范围就是本项目报上去的。"
   },
   "zh-TW": {
@@ -1037,9 +1066,9 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "footer.source": "GitHub 原始碼",
     "footer.issues": "回報問題",
     "footer.license": "MIT 授權",
-    "shot.power.alt": "Steam 快捷選單裡打開的遊戲電力面板",
+    "shot.power.alt": "一個直立面板，列出兩項設定：電力模式為自動，張數目標為自動（目前 60 FPS），下方是一個技術細節開關",
     "shot.power.caption": "遊戲電力面板，攝於 MSI Claw 8 AI+ 實機",
-    "shot.charge.alt": "設為充到 80% 就停的充電上限面板",
+    "shot.charge.alt": "面板標題為「充到 80% 就停」，下面是一個佔滿整行的下拉選單，顯示「充到 80% 就停」",
     "shot.charge.caption": "充電上限面板，攝於 MSI Claw 8 AI+ 實機",
     "more.title": "還有幾件你以後不用再操心的事",
     "more.display.title": "螢幕跑在它該有的規格上",
@@ -1060,10 +1089,10 @@ scripts/install-on-device.sh root@YOUR-HANDHELD</code></pre>
     "code.onDevMachine": "在你的開發機上",
     "features.steam.title": "Steam 內建的那根 TDP 滑桿，終於接通了",
     "features.steam.text": "Steam 的效能選單裡本來就有一根瓦數滑桿。在 Intel 掌機上，你怎麼拖它都沒反應 —— 另一頭根本沒人接。這個專案把它接上，拖滑桿是真的會改功耗上限。你不用學新東西，你本來就熟的那個控制項不再只是擺設。",
-    "features.steam.b1": "在 Steam 自己的選單裡就能用，不是只在我們的面板裡。",
+    "features.steam.b1": "在 Steam 自己的選單裡就能用，不必先打開別的面板。",
     "features.steam.b2": "每個遊戲各自記住，Steam 本來就是這麼管的。",
     "features.steam.b3": "遊戲電力在它底下繼續運作，絕不會要超過你允許的功耗。",
-    "shot.steam.alt": "Steam 內建的效能選單，TDP 限制已啟用並設為 12 瓦特",
+    "shot.steam.alt": "一列設定項，其中「散熱設計功率（TDP）限制」已開啟，滑桿停在 12 瓦特，軌道兩端標著 8 和 30",
     "shot.steam.caption": "Steam 內建的效能選單，攝於 MSI Claw 8 AI+ 實機。8–30 瓦這個範圍就是本專案報上去的。"
   }
 };

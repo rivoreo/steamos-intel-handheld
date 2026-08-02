@@ -492,3 +492,57 @@ def test_bootstrap_overwrite_is_scoped_to_paths_this_project_owns() -> None:
     # The catch-all forms that would defeat the point.
     for reckless in ("*", "/*", "/usr/*", "/etc/*"):
         assert reckless not in overwrites, reckless
+
+
+def test_page_is_usable_without_a_mouse_and_without_motion() -> None:
+    """Two things the page shipped without. A keyboard user had no focus ring
+    anywhere, so there was no way to see what was selected; and the page scrolled
+    smoothly regardless of the visitor's reduced-motion setting, which for some
+    people is a vestibular trigger rather than a flourish."""
+    index = SITE_INDEX.read_text()
+    assert ":focus-visible" in index
+    assert "outline:" in index
+    assert "@media (prefers-reduced-motion: reduce)" in index
+    # Smooth scrolling has to be switched back off, not merely declared once.
+    assert index.count("scroll-behavior") >= 2
+
+
+def test_alt_text_does_not_repeat_the_caption_beside_it() -> None:
+    """A screen reader reads the image description and then the caption. Saying
+    the same thing twice wastes the listener's time; the alt text should carry
+    what the picture shows and the caption what it means."""
+    translations = read_site_translations()["en"]
+    for key in ("shot.power", "shot.charge", "shot.steam"):
+        alt = set(re.findall(r"[a-z0-9+]+", translations[f"{key}.alt"].lower()))
+        caption = set(re.findall(r"[a-z0-9+]+", translations[f"{key}.caption"].lower()))
+        filler = {"a", "an", "the", "on", "at", "in", "of", "and", "with", "is", "to", "its"}
+        overlap = (alt & caption) - filler
+        # Some repetition is unavoidable - describing a panel needs the word
+        # "panel". What matters is that the alt is not mostly the caption again.
+        assert len(overlap) / max(len(alt - filler), 1) < 0.35, (key, sorted(overlap))
+        # And the alt has to actually describe something.
+        assert len(translations[f"{key}.alt"]) > 40, key
+
+
+def test_language_buttons_are_big_enough_to_hit() -> None:
+    """Three 24-pixel-tall buttons in a row is a target most thumbs miss."""
+    index = SITE_INDEX.read_text()
+    block = index[index.index(".language-option {") :]
+    block = block[: block.index("}")]
+    assert "min-height: 40px" in block
+    assert "min-width: 44px" in block
+
+
+def test_language_buttons_announce_what_they_switch_to() -> None:
+    """The visible labels are single glyphs, so a screen reader announces "EN",
+    "简", "繁" and nothing else. The accessible name has to say the language."""
+    index = SITE_INDEX.read_text()
+    for label in ('aria-label="English"', 'aria-label="简体中文"', 'aria-label="繁體中文"'):
+        assert label in index, label
+    # aria-pressed marks which one is active; without it there is no way to hear
+    # which language is currently selected. Count the buttons, not the CSS
+    # selector that styles them.
+    buttons = re.findall(r"<button[^>]*data-language-option[^>]*>", index)
+    assert len(buttons) == 3
+    assert all("aria-pressed=" in button for button in buttons)
+    assert all("aria-label=" in button for button in buttons)
