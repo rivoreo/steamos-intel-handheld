@@ -1,0 +1,59 @@
+{
+  "skill_name": "apple-hig",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The frame pacing readout in the Game Power panel shows 'Frame time p95 / allowed: 15.7 ms / 6463.8 ms'. Tidy it up.",
+      "expected_output": "Rewrites it in the vocabulary of someone who knows frame rates and watts rather than percentiles, and hides the row entirely when there is no game, because a real number that reads as a broken one is worse than no number.",
+      "files": [],
+      "expectations": [
+        "Removes percentile notation from anything the panel can render.",
+        "Does not keep the internal budget figure just because it is technically accurate.",
+        "Does not treat 'it is behind a technical-details toggle' as a reason to leave jargon in place."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Add a confirmation dialog before Charge Limit applies a new percentage, so people do not change it by accident.",
+      "expected_output": "Pushes back: the action is common and fully reversible, so a confirmation trains people to dismiss dialogs without reading them. Suggests making the change visibly reversible instead.",
+      "files": [],
+      "expectations": [
+        "Cites reversibility rather than adding the dialog as asked.",
+        "Does not add a confirmation to a common, recoverable action.",
+        "Offers an alternative that keeps the action one step."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "The install page marks the recommended path with a green tag and the others with a grey one. Is that enough?",
+      "expected_output": "No: colour alone carries the distinction, so it disappears for colour-blind readers and in high-contrast modes. Requires a non-colour cue as well, and checks the grey against the AA contrast floor.",
+      "files": [],
+      "expectations": [
+        "Requires a second, non-colour signal.",
+        "Checks contrast rather than accepting 'looks fine'.",
+        "Does not treat colour-blindness handling as an optional enhancement."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "The governor could not read the GPU counters this session. Show the user a modal explaining that the kernel interface was unavailable.",
+      "expected_output": "Declines the modal. The condition is informational and the user can do nothing about it, so interrupting them teaches them to dismiss every future dialog. Puts it in the technical readout instead, in plain words.",
+      "files": [],
+      "expectations": [
+        "Refuses to interrupt for something the user cannot act on.",
+        "Does not surface kernel interface names to the user.",
+        "Keeps the information available somewhere passive rather than deleting it."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Rename the Decky plugin's build output directory from dist to build.",
+      "expected_output": "Just does it. This is a build-layout change with no user-visible behaviour, so the human interface guidelines have nothing to say about it.",
+      "files": [],
+      "expectations": [
+        "Does not invoke design guidance for a change nobody sees.",
+        "Does not manufacture a user-facing concern to justify consulting the skill."
+      ]
+    }
+  ]
+}
